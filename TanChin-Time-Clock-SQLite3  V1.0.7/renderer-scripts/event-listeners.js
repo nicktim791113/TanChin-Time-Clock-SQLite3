@@ -12,7 +12,8 @@ import { showReportLogin, handleReportLogin, handleReportDateRange, exportReport
 import { saveEmployee, renderRosterModal, handleImportCsv, handleExportCsv, handleRosterAction } from './handlers/employeeHandler.js';
 import { 
     saveShifts, openGreetingsModal, saveGreetings, renderBellSchedulesInPanel, openAddBellModal, saveBellSchedule, 
-    renderCustomSoundsInModal, importNewSound, renderBellHistoryInModal, clearAllBellHistory 
+    renderCustomSoundsInModal, importNewSound, renderBellHistoryInModal, clearAllBellHistory, 
+    openChangePasswordModal, handleChangePassword 
 } from './handlers/settingsHandler.js';
 import { 
     renderSpecialEffects, resetEffectForm, saveSpecialEffect, handleSpecialEffectAction,
@@ -21,6 +22,7 @@ import {
     handleThemeScheduleAction
 } from './handlers/themeHandler.js';
 import { openAutomationModal, saveAutomationTask, clearAutomationLogs, renderAutomationLogs } from './handlers/automationHandler.js';
+import { showToast } from './utils.js';
 
 /**
  * 初始化所有事件監聽器的咒語
@@ -148,10 +150,15 @@ function setupModalButtons() {
     ui.modals.automation.querySelector('#save-automation-task-btn').addEventListener('click', saveAutomationTask);
     ui.modals.automation.querySelector('#clear-automation-log-btn').addEventListener('click', clearAutomationLogs);
 
-    // ✨ 新魔法：為所有可關閉的視窗簽訂關閉契約
+    // ------------------- ✨ 修正咒語施展處 ✨ ------------------- //
+    // 將問候語 Modal 內部的按鈕契約，都集中到這個屬於 Modal 的章節
+    ui.modals.greetings.querySelector('#save-greetings-btn').addEventListener('click', saveGreetings);
+    ui.modals.greetings.querySelector('#cancel-greetings-btn').addEventListener('click', () => hideModal('greetings-modal'));
+    // ------------------- ✨ 咒語施展完畢 ✨ ------------------- //
+
+    // 為所有可關閉的視窗簽訂關閉契約
     ui.modals.roster.querySelector('#close-roster-btn').addEventListener('click', () => hideModal('roster-modal'));
     ui.modals.specialEffects.querySelector('#close-effects-modal-btn').addEventListener('click', () => hideModal('special-effects-modal'));
-    ui.modals.greetings.querySelector('#cancel-greetings-btn').addEventListener('click', () => hideModal('greetings-modal'));
     ui.modals.addBell.querySelector('#cancel-add-bell-btn').addEventListener('click', () => hideModal('add-bell-modal'));
     ui.modals.manageSounds.querySelector('#close-manage-sounds-btn').addEventListener('click', () => hideModal('manage-sounds-modal'));
     ui.modals.bellHistory.querySelector('#close-bell-history-btn').addEventListener('click', () => hideModal('bell-history-modal'));
@@ -175,10 +182,12 @@ function setupManagementPanelListeners() {
     // 手動補登
     ui.manualPunchBtn.addEventListener('click', executeManualPunch);
 
-    // 特效與問候語按鈕
+    // ------------------- ✨ 修正咒語施展處 ✨ ------------------- //
+    // 確保開啟 Modal 的按鈕契約，被正確地記載於管理者面板的章節
     ui.editGreetingsInBtn.addEventListener('click', () => openGreetingsModal('in'));
-    ui.modals.greetings.querySelector('#save-greetings-btn').addEventListener('click', saveGreetings);
     ui.editGreetingsOutBtn.addEventListener('click', () => openGreetingsModal('out'));
+    // ------------------- ✨ 咒語施展完畢 ✨ ------------------- //
+    
     ui.editSpecialEffectsBtn.addEventListener('click', () => {
         renderSpecialEffects();
         resetEffectForm();
@@ -245,6 +254,16 @@ function setupDynamicModalListeners() {
                 await dbRequest('saveBellSchedules', state.bellSchedules);
                 showToast(`響鈴 "${schedule.title}" 已${schedule.enabled ? '啟用' : '停用'}`, 'info');
             }
+        }
+    });
+
+    // 為「新增響鈴視窗」的星期按鈕容器添加點擊監聽
+    const addBellModal = ui.modals.addBell;
+    addBellModal.querySelector('#bell-weekdays-container').addEventListener('click', e => {
+        // 確保點擊的是按鈕
+        if (e.target.classList.contains('weekday-btn')) {
+            // 切換按鈕的 active 狀態
+            e.target.classList.toggle('active');
         }
     });
     
@@ -350,66 +369,4 @@ function resetPunchInputTimeout() {
         }
     }, 10000);
     setState({ punchInputTimeout: newTimeout });
-}
-
-function openChangePasswordModal(type) {
-    setState({ currentPasswordChangeType: type });
-    const modal = ui.modals.changePassword;
-    const title = modal.querySelector('#change-password-title');
-    const currentPassLabel = modal.querySelector('#current-password-label');
-    
-    if (type === 'admin') {
-        title.textContent = '變更管理者密碼';
-        // ✨ 魔法修正 #1：根據最清晰的邏輯，提示使用者輸入「目前的管理者密碼」 ✨
-        currentPassLabel.textContent = '請輸入目前的管理者密碼';
-    } else { // system
-        title.textContent = '變更系統密碼';
-        currentPassLabel.textContent = '請輸入目前的系統密碼';
-    }
-    
-    modal.querySelector('#current-password-input').value = '';
-    modal.querySelector('#new-password-input').value = '';
-    modal.querySelector('#confirm-password-input').value = '';
-    showModal('change-password-modal');
-}
-
-async function handleChangePassword() {
-    try {
-        const modal = ui.modals.changePassword;
-        const currentPass = modal.querySelector('#current-password-input').value;
-        const newPass = modal.querySelector('#new-password-input').value;
-        const confirmPass = modal.querySelector('#confirm-password-input').value;
-
-        if (!currentPass || !newPass || !confirmPass) {
-            showToast('所有欄位皆為必填！', 'error');
-            return;
-        }
-        if (newPass !== confirmPass) {
-            showToast('新的密碼兩次輸入不相符！', 'error');
-            return;
-        }
-
-        if (state.currentPasswordChangeType === 'admin') {
-            // ✨ 魔法修正 #2：變更管理者密碼時，應該驗證「目前的管理者密碼」 ✨
-            if (currentPass !== state.adminPassword) {
-                showToast('目前的管理者密碼錯誤！', 'error');
-                return;
-            }
-            await dbRequest('setSetting', 'adminPassword', newPass);
-            setState({ adminPassword: newPass });
-            showToast('管理者密碼已成功變更！', 'success');
-        } else { // system
-            if (currentPass !== state.systemPassword) {
-                showToast('目前的系統密碼錯誤！', 'error');
-                return;
-            }
-            await dbRequest('setSetting', 'systemPassword', newPass);
-            setState({ systemPassword: newPass });
-            showToast('系統密碼已成功變更！', 'success');
-        }
-        hideModal('change-password-modal');
-    } catch (error) {
-        console.error("變更密碼時發生錯誤:", error);
-        showToast(`發生未預期的錯誤: ${error.message}`, 'error');
-    }
 }

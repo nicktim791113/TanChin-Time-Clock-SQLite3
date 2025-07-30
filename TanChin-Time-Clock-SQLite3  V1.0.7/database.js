@@ -102,16 +102,24 @@ const loadGreetings = () => {
     return greetings;
 };
 
+// ------------------- ✨ 修正咒語響鈴秒數 ✨ ------------------- //
 const saveBellSchedules = (schedules) => {
     const insert = db.prepare('INSERT OR REPLACE INTO bell_schedules (id, title, time, days, sound, duration, enabled) VALUES (@id, @title, @time, @days, @sound, @duration, @enabled)');
     db.transaction(() => {
         run('DELETE FROM bell_schedules');
         for (const schedule of schedules) {
-            const scheduleForDb = { ...schedule, enabled: schedule.enabled ? 1 : 0 };
+            // 為檔案管理員新增規則：如果秒數是空白的，就自動填上 5 秒！
+            const scheduleForDb = { 
+                ...schedule, 
+                duration: schedule.duration || 5, // 確保 duration 有一個預設值
+                enabled: schedule.enabled ? 1 : 0 
+            };
             insert.run(scheduleForDb);
         }
     })();
 };
+// ------------------- ✨ 咒語施展完畢 ✨ ------------------- //
+
 const loadBellSchedules = () => {
     const schedules = all('SELECT * FROM bell_schedules ORDER BY time');
     return schedules.map(s => ({ ...s, enabled: s.enabled === 1 }));

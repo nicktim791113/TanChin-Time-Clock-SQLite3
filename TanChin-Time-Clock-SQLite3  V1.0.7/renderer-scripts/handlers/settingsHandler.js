@@ -8,7 +8,7 @@ import { setState } from '../state.js';
 import { dbRequest, importAudioFile } from '../api.js';
 import { showToast, updateManagementPanelHeight } from '../utils.js';
 import { showModal, hideModal, showConfirm } from './modalHandler.js';
-// ✨ 魔法修正：在這裡加上被遺忘的咒語引言！ ✨
+// ✨ 魔法修正：為健忘的信使補上遺失的鑰匙 (import) ✨
 import { autoSelectShift } from './punchHandler.js';
 
 // --- 班別設定相關 ---
@@ -339,4 +339,73 @@ export async function clearAllBellHistory() {
         }
         hideModal('confirm-modal');
     });
+}
+
+// --- ✨ 密碼修改魔法的歸宿 ✨ ---
+
+/**
+ * 開啟變更密碼視窗
+ * @param {'admin' | 'system'} type - 要變更的密碼類型
+ */
+export function openChangePasswordModal(type) {
+    setState({ currentPasswordChangeType: type });
+    const modal = ui.modals.changePassword;
+    const title = modal.querySelector('#change-password-title');
+    const currentPassLabel = modal.querySelector('#current-password-label');
+    
+    if (type === 'admin') {
+        title.textContent = '變更管理者密碼';
+        currentPassLabel.textContent = '請輸入目前的管理者密碼';
+    } else { // system
+        title.textContent = '變更系統密碼';
+        currentPassLabel.textContent = '請輸入目前的系統密碼';
+    }
+    
+    modal.querySelector('#current-password-input').value = '';
+    modal.querySelector('#new-password-input').value = '';
+    modal.querySelector('#confirm-password-input').value = '';
+    showModal('change-password-modal');
+}
+
+/**
+ * 處理變更密碼的邏輯
+ */
+export async function handleChangePassword() {
+    try {
+        const modal = ui.modals.changePassword;
+        const currentPass = modal.querySelector('#current-password-input').value;
+        const newPass = modal.querySelector('#new-password-input').value;
+        const confirmPass = modal.querySelector('#confirm-password-input').value;
+
+        if (!currentPass || !newPass || !confirmPass) {
+            showToast('所有欄位皆為必填！', 'error');
+            return;
+        }
+        if (newPass !== confirmPass) {
+            showToast('新的密碼兩次輸入不相符！', 'error');
+            return;
+        }
+
+        if (state.currentPasswordChangeType === 'admin') {
+            if (currentPass !== state.adminPassword) {
+                showToast('目前的管理者密碼錯誤！', 'error');
+                return;
+            }
+            await dbRequest('setSetting', 'adminPassword', newPass);
+            setState({ adminPassword: newPass });
+            showToast('管理者密碼已成功變更！', 'success');
+        } else { // system
+            if (currentPass !== state.systemPassword) {
+                showToast('目前的系統密碼錯誤！', 'error');
+                return;
+            }
+            await dbRequest('setSetting', 'systemPassword', newPass);
+            setState({ systemPassword: newPass });
+            showToast('系統密碼已成功變更！', 'success');
+        }
+        hideModal('change-password-modal');
+    } catch (error) {
+        console.error("變更密碼時發生錯誤:", error);
+        showToast(`發生未預期的錯誤: ${error.message}`, 'error');
+    }
 }
