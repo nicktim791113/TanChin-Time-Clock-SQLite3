@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ★ 魔法字型設定：優先使用系統內建的美觀字型，作為離線時的強大後盾 */
+@layer base {
+  body {
+    font-family: 'Noto Sans TC', 'Microsoft JhengHei', 'PingFang TC', sans-serif;
+  }
+}

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TanChin Browser Portal</title>
+    <link rel="stylesheet" href="./style.css?v=20260401c">
+</head>
+<body>
+    <div class="page-shell">
+        <header class="hero-card" id="hero-card">
+            <div class="hero-header-row">
+                <p class="eyebrow" id="hero-eyebrow">您的 AI 智慧好夥伴</p>
+                <div class="hero-actions hidden" id="hero-description-actions">
+                    <button id="hero-description-edit-btn" class="mini-btn" type="button">編輯說明</button>
+                </div>
+            </div>
+            <h1 id="hero-title">震欣科技AI作息系統</h1>
+            <p id="hero-description" class="hero-copy">透過瀏覽器快速查看打卡資料、管理設定與系統狀態。</p>
+            <form id="hero-description-form" class="stack-form hero-inline-form hidden">
+                <label class="field">
+                    <span>頁首說明</span>
+                    <textarea id="hero-description-input" name="heroDescription" rows="4" maxlength="300" placeholder="輸入登入頁與工作台共用的說明文字"></textarea>
+                </label>
+                <div class="inline-actions hero-inline-actions">
+                    <button class="primary-btn" type="submit">儲存說明</button>
+                    <button id="hero-description-cancel-btn" class="outline-btn" type="button">取消</button>
+                </div>
+                <div class="inline-message" data-form-message-for="hero-description-form" aria-live="polite"></div>
+            </form>
+        </header>
+
+        <main class="main-grid">
+            <section id="login-view" class="panel panel-wide">
+                <div class="panel-header">
+                    <div>
+                        <p class="section-kicker">登入入口</p>
+                        <h2>選擇身份登入</h2>
+                    </div>
+                    <div class="live-pill">
+                        <span class="dot"></span>
+                        <span>即時連線中，Express 服務運作正常</span>
+                    </div>
+                </div>
+
+                <div class="role-selector" id="role-selector">
+                    <button type="button" class="role-chip active" data-role="employee">員工</button>
+                    <button type="button" class="role-chip" data-role="admin">管理者</button>
+                    <button type="button" class="role-chip" data-role="developer">開發人員</button>
+                </div>
+
+                <div class="role-help" id="role-help"></div>
+
+                <form id="login-form" class="login-form">
+                    <label class="field">
+                        <span>員工編號</span>
+                        <input id="employee-id-input" name="employeeId" type="text" autocomplete="username" placeholder="輸入員工編號" required>
+                    </label>
+
+                    <label class="field">
+                        <span id="secret-label">密碼</span>
+                        <input id="secret-input" name="secret" type="password" autocomplete="current-password" placeholder="輸入登入密碼" required>
+                    </label>
+
+                    <button id="login-submit-btn" class="primary-btn" type="submit">員工登入</button>
+                </form>
+
+                <div id="login-message" class="inline-message" aria-live="polite"></div>
+            </section>
+
+            <section id="dashboard-view" class="panel hidden">
+                <div class="dashboard-topbar">
+                    <div>
+                        <h2 id="dashboard-title">開發者工作台</h2>
+                    </div>
+                    <div class="dashboard-actions">
+                        <span id="dashboard-message" class="status-pill hidden" aria-live="polite"></span>
+                        <span id="dashboard-identity-pill" class="identity-pill hidden" aria-live="polite"></span>
+                        <button id="dashboard-help-btn" class="outline-btn hidden" type="button">說明</button>
+                        <button id="logout-btn" class="ghost-btn" type="button">登出</button>
+                    </div>
+                </div>
+
+                <div id="dashboard-content"></div>
+            </section>
+        </main>
+    </div>
+
+    <audio id="browser-audio-player" preload="none"></audio>
+    <div id="dashboard-help-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="dashboard-help-title">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="dashboard-help-title">工作台說明</h2>
+                <button id="dashboard-help-close-btn" class="ghost-btn" type="button" aria-label="關閉">關閉</button>
+            </div>
+            <div id="dashboard-help-content" class="modal-body"></div>
+        </div>
+    </div>
+    <div id="dashboard-insight-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="dashboard-insight-title">
+        <div class="modal-card insight-modal-card">
+            <div class="modal-header">
+                <h2 id="dashboard-insight-title">儀表板明細</h2>
+                <button id="dashboard-insight-close-btn" class="ghost-btn" type="button" aria-label="關閉">關閉</button>
+            </div>
+            <div id="dashboard-insight-content" class="modal-body"></div>
+        </div>
+    </div>
+    <script src="./app.js?v=20260401c" defer></script>
+</body>
+</html>

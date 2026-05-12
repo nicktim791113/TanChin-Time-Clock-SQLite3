@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>震欣科技AI作息系統</title>
+    <link href="./assets/css/tailwind.css" rel="stylesheet">
+    <style>
+        /* 基礎樣式與預設主題 */
+        /* ★ [2-START] 加上系統字型作為離線後盾 */
+        body { 
+            font-family: 'Noto Sans TC', 'Microsoft JhengHei', 'PingFang TC', sans-serif; 
+            background-color: #f0f4f8;
+            background-image: linear-gradient(to top, #dfe9f3 0%, white 100%);
+            transition: background-image 0.8s ease-in-out, background-color 0.8s ease-in-out;
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            overflow-y: auto; /* 允許垂直滾動 */
+        }
+        /* ★ [2-END] */
+        .magic-container { 
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 10px 10px 20px #c8cacc, -10px -10px 20px #ffffff; 
+            transition: background-color 0.8s ease-in-out;
+            position: relative;
+            z-index: 10;
+        }
+        .title-banner-shell {
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.35rem 0.9rem;
+            border-radius: 1.5rem;
+            transition: background-image 0.6s ease, background-color 0.6s ease, box-shadow 0.6s ease;
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+        }
+        
+        .btn-magic { transition: all 0.3s ease; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }
+        .btn-magic:hover { transform: translateY(-2px); box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15); }
+        .btn-magic:active { transform: translateY(1px); box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); }
+        .input-magic:focus { border-color: #4a90e2; box-shadow: 0 0 10px rgba(74, 144, 226, 0.3); }
+        .message-box { transition: all 0.5s ease-in-out; opacity: 0; transform: translateY(-20px); }
+        .message-box.show { opacity: 1; transform: translateY(0); }
+        .collapsible-panel { max-height: 0; overflow: hidden; transition: max-height 0.7s ease-in-out; }
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.6); display: flex; justify-content: center; align-items: center; z-index: 1000; opacity: 0; visibility: hidden; transition: opacity 0.3s ease, visibility 0.3s ease; }
+        .modal-overlay.show { opacity: 1; visibility: visible; }
+        .modal-content { background: white; padding: 2rem; border-radius: 1rem; box-shadow: 0 10px 25px rgba(0,0,0,0.1); transform: scale(0.95); transition: transform 0.3s ease; }
+        .modal-overlay.show .modal-content { transform: scale(1); }
+        
+        #theme-editor-modal { z-index: 1001; }
+        #confirm-modal { z-index: 1002; }
+
+        @keyframes shake-error { 0%, 100% { transform: translateX(0); } 10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); } 20%, 40%, 60%, 80% { transform: translateX(5px); } }
+        .shake-error { animation: shake-error 0.5s ease-in-out; }
+        #roster-table th, #report-table th { cursor: pointer; user-select: none; }
+        #roster-table th:hover, #report-table th:hover { background-color: #f0f4f8; }
+        .sort-indicator { display: inline-block; margin-left: 5px; opacity: 0.5; width: 1em; }
+        .weekday-btn { transition: all 0.2s ease; }
+        .weekday-btn.active { background-color: #4a90e2; color: white; }
+        .employee-form-grid {
+            width: 100%;
+            display: grid;
+            grid-template-columns: repeat(1, minmax(0, 1fr));
+            gap: 0.75rem;
+        }
+        .employee-form-grid > * {
+            min-width: 0;
+            width: 100%;
+        }
+        .roster-column-toggle-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.5rem;
+        }
+        .roster-column-chip {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.5rem;
+            min-width: 0;
+            border: 1px solid #d1d5db;
+            border-radius: 0.75rem;
+            background: #fff;
+            padding: 0.45rem 0.6rem;
+            font-size: 0.75rem;
+            line-height: 1.25;
+            color: #374151;
+        }
+        .roster-column-chip span {
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+        .roster-table-scroll {
+            height: 23.5rem;
+            max-height: 23.5rem;
+            overflow: auto;
+        }
+        @media (min-width: 768px) {
+            .employee-form-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+            .roster-column-toggle-grid {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+            }
+        }
+        @media (min-width: 1024px) {
+            .employee-form-grid {
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+            }
+            .roster-column-toggle-grid {
+                grid-template-columns: repeat(6, minmax(0, 1fr));
+            }
+        }
+        
+        #toast-container { position: fixed; bottom: 1rem; right: 1rem; z-index: 2000; display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem; }
+        .toast-bubble { padding: 0.75rem 1.25rem; border-radius: 9999px; color: white; font-weight: 500; box-shadow: 0 4px 15px rgba(0,0,0,0.1); opacity: 0; transform: translateX(100%); animation: slide-in-out 3s forwards ease-in-out; }
+        .toast-bubble.success { background-color: #28a745; }
+        .toast-bubble.error { background-color: #dc3545; }
+        .toast-bubble.info { background-color: #17a2b8; }
+        @keyframes slide-in-out { 0% { opacity: 0; transform: translateX(100%); } 20% { opacity: 1; transform: translateX(0); } 80% { opacity: 1; transform: translateX(0); } 100% { opacity: 0; transform: translateX(100%); } }
+    
+        /* 動態主題 & 特效 */
+        #dynamic-theme-styles { display: none; }
+        @keyframes blink-border { 50% { box-shadow: 0 0 15px 5px var(--blink-color, #fbc02d); } }
+        .blinking-border { animation: blink-border 2s infinite; }
+        #punch-effect-container { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; overflow: hidden; }
+        .falling-element { position: absolute; top: -50px; animation: fall linear forwards; user-select: none; }
+        @keyframes fall { to { transform: translateY(105vh) rotate(360deg); opacity: 0; } }
+        .flash-element { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 8rem; font-weight: bold; color: white; text-shadow: 0 0 20px rgba(0,0,0,0.5); animation: flash 1.5s ease-out forwards; }
+        @keyframes flash { 0% { opacity: 0; transform: translate(-50%, -50%) scale(0.5); } 20% { opacity: 1; transform: translate(-50%, -50%) scale(1.2); } 80% { opacity: 1; transform: translate(-50%, -50%) scale(1); } 100% { opacity: 0; transform: translate(-50%, -50%) scale(1.5); } }
+
+    </style>
+    <style id="dynamic-theme-styles"></style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+    <div id="punch-effect-container"></div>
+    <div class="magic-container w-full max-w-5xl p-6 sm:p-8 rounded-2xl">
+        <header class="text-center mb-6">
+            <div id="title-banner" class="title-banner-shell">
+                <h1 id="main-title" class="text-3xl sm:text-4xl font-bold text-gray-800">震欣科技AI作息系統</h1>
+                <p id="sub-title" class="text-lg sm:text-xl text-gray-600 mt-1"></p>
+            </div>
+            <div id="clock-panel" class="bg-gray-800 text-white rounded-lg p-4 mt-4 text-center shadow-inner transition-all duration-500 relative">
+                <div id="clock-decoration-container"></div>
+                <p id="current-date" class="text-lg"></p>
+                <p id="current-time" class="text-5xl font-mono font-bold tracking-wider"></p>
+                <div id="clock-panel-symbols-container" class="absolute top-0 left-0 w-full h-full pointer-events-none flex justify-between items-center px-4 text-3xl opacity-80"></div>
+            </div>
+        </header>
+        <div id="punch-area" class="mb-4">
+            <label for="punch-input" class="block text-sm font-medium text-gray-700 mb-2">感應或輸入卡號/密碼 (全域輸入)</label>
+            <input type="password" id="punch-input" class="input-magic w-full p-4 text-2xl text-center border border-gray-300 rounded-lg focus:outline-none" placeholder="...輸入區...">
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+            <div><label for="shift-selector" class="block text-sm font-medium text-gray-700 mb-2">當前班別</label><select id="shift-selector" class="input-magic w-full p-3 text-lg border border-gray-300 rounded-lg"></select></div>
+            <div><label for="punch-status-selector" class="block text-sm font-medium text-gray-700 mb-2">打卡狀態</label><select id="punch-status-selector" class="input-magic w-full p-3 text-lg border border-gray-300 rounded-lg"><option value="auto">系統自動判斷</option><option value="in">上班</option><option value="out">下班</option></select></div>
+        </div>
+        
+        <div id="message-box" class="message-box min-h-[60px] p-4 mb-6 rounded-lg text-center font-semibold text-4xl"></div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 text-center mb-6">
+            <button id="toggle-panel-btn" class="btn-magic bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-6" tabindex="0">管理者設定</button>
+            <button id="toggle-report-btn" class="btn-magic bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6" tabindex="0">考勤報表</button>
+            <button id="open-automation-btn" class="btn-magic bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6" tabindex="0">AI系統控制</button>
+        </div>
+        
+        <div id="management-panel" class="collapsible-panel overflow-hidden">
+             <div class="p-4 border-t-2 border-gray-200 grid grid-cols-1 gap-8">
+                <div class="grid grid-cols-1 gap-8">
+                    <div class="bg-white p-5 rounded-lg shadow">
+                        <h3 class="text-xl font-bold text-gray-800 mb-4">人員資料設定</h3>
+                        <div class="employee-form-grid">
+                            <input id="emp-id" type="text" placeholder="工號*" class="input-magic px-2 py-1.5 text-sm border rounded">
+                            <input id="emp-name" type="text" placeholder="姓名*" class="input-magic px-2 py-1.5 text-sm border rounded">
+                            <input id="emp-gender" type="text" placeholder="性別" class="input-magic px-2 py-1.5 text-sm border rounded">
+                            <input id="emp-nationality" type="text" placeholder="國籍" class="input-magic px-2 py-1.5 text-sm border rounded">
+                            <input id="emp-department" type="text" placeholder="部門*" class="input-magic px-2 py-1.5 text-sm border rounded">
+                            <input id="emp-job-title" type="text" placeholder="職稱" class="input-magic px-2 py-1.5 text-sm border rounded">
+                            <input id="emp-card" type="text" placeholder="卡號*" class="input-magic px-2 py-1.5 text-sm border rounded">
+                            <input id="emp-password" type="password" placeholder="打卡密碼*" class="input-magic px-2 py-1.5 text-sm border rounded">
+                            <input id="emp-national-id" type="text" placeholder="身分證字號" class="input-magic px-2 py-1.5 text-sm border rounded">
+                            <input id="emp-birth-date" type="text" placeholder="出生日" class="input-magic px-2 py-1.5 text-sm border rounded" onfocus="(this.type='date')" onblur="if(!this.value)this.type='text'">
+                            <input id="emp-hire-date" type="text" placeholder="到職日" class="input-magic px-2 py-1.5 text-sm border rounded" onfocus="(this.type='date')" onblur="if(!this.value)this.type='text'">
+                            <input id="emp-termination-date" type="text" placeholder="離職日" class="input-magic px-2 py-1.5 text-sm border rounded" onfocus="(this.type='date')" onblur="if(!this.value)this.type='text'">
+                            <input id="emp-bank-account" type="text" placeholder="銀行帳戶號碼" class="input-magic px-2 py-1.5 text-sm border rounded">
+                            <input id="emp-mobile-phone" type="text" placeholder="聯絡手機" class="input-magic px-2 py-1.5 text-sm border rounded">
+                            <input id="emp-emergency-contact" type="text" placeholder="緊急聯絡人" class="input-magic px-2 py-1.5 text-sm border rounded">
+                            <input id="emp-emergency-phone" type="text" placeholder="緊急聯絡電話" class="input-magic px-2 py-1.5 text-sm border rounded">
+                            <textarea id="emp-contact-address" placeholder="聯絡地址" rows="2" class="input-magic px-2 py-1.5 text-sm border rounded resize-y"></textarea>
+                            <textarea id="emp-registered-address" placeholder="戶籍地址" rows="2" class="input-magic px-2 py-1.5 text-sm border rounded resize-y"></textarea>
+                            <textarea id="emp-family-status" placeholder="家庭概況" rows="2" class="input-magic px-2 py-1.5 text-sm border rounded resize-y"></textarea>
+                            <textarea id="emp-notes" placeholder="備註" rows="2" class="input-magic px-2 py-1.5 text-sm border rounded resize-y"></textarea>
+                        </div>
+                        <button id="save-employee-btn" class="btn-magic w-full mt-4 bg-blue-600 hover:bg-blue-700 text-white font-bold py-1.5 px-4 text-sm">新增/更新員工</button>
+                        <div class="mt-4 p-4 border rounded bg-gray-50">
+                            <label class="block text-sm font-medium text-gray-700">匯入/匯出名冊 (CSV)</label>
+                            <div class="flex justify-between items-center mt-2">
+                                <button id="import-csv-btn" class="text-blue-600 hover:underline">選擇檔案匯入</button>
+                                <button id="export-csv-btn" class="text-green-600 hover:underline">匯出完整名冊</button>
+                            </div>
+                            <span id="csv-file-name" class="text-gray-500 ml-2 text-sm"></span>
+                        </div>
+                        <button id="manage-roster-btn" class="btn-magic w-full mt-4 bg-gray-700 hover:bg-gray-800 text-white font-bold py-2 px-4">所有人員名冊</button>
+                    </div>
+                    <div class="bg-white p-6 rounded-lg shadow">
+                        <h3 class="text-xl font-bold text-gray-800 mb-4">班別設定</h3>
+                        <p class="text-sm text-gray-500 mb-3">固定顯示三列班別欄位，其餘可用卷軸瀏覽。</p>
+                        <div id="shift-settings-container" class="space-y-3 overflow-y-auto pr-2" style="max-height: 11rem;"></div>
+                        <button id="save-shifts-btn" class="btn-magic w-full mt-4 bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-4">儲存班別設定</button>
+                    </div>
+                </div>
+
+                <div class="bg-white p-6 rounded-lg shadow">
+                    <h3 class="text-xl font-bold text-gray-800 mb-4">手動補登紀錄</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
+                        <input type="text" id="manual-emp-id" placeholder="工號/卡號/密碼" class="input-magic p-2 border rounded md:col-span-1">
+                        <input type="date" id="manual-date" class="input-magic p-2 border rounded">
+                        <input type="time" id="manual-time" step="1" class="input-magic p-2 border rounded">
+                        <select id="manual-shift-selector" class="input-magic p-2 border rounded"></select>
+                        <select id="manual-status" class="input-magic p-2 border rounded"><option value="in">上班</option><option value="out">下班</option></select>
+                    </div>
+                    <button id="manual-punch-btn" class="btn-magic w-full mt-4 bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2 px-4">執行手動補登</button>
+                </div>
+
+                <div class="bg-white p-6 rounded-lg shadow">
+                    <h3 class="text-xl font-bold text-gray-800 mb-4">系統設定 ⚙️</h3>
+                    <p id="app-version" class="text-xs text-gray-400 mb-4"></p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <button id="open-data-settings-btn" class="btn-magic bg-sky-500 hover:bg-sky-600 text-white font-bold py-3 px-6">資料設定 📝</button>
+                        <button id="edit-special-effects-btn" class="btn-magic bg-pink-500 hover:bg-pink-600 text-white font-bold py-3 px-6">節日特效 ✨</button>
+                        <button id="edit-theme-schedules-btn" class="btn-magic bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-3 px-6">主題特效 🎨</button>
+                        <button id="manage-greetings-btn" class="btn-magic bg-cyan-500 hover:bg-cyan-600 text-white font-bold py-3 px-6">問候語管理 👋</button>
+                    </div>
+                </div>
+
+                <div id="bells-section" class="bg-white p-6 rounded-lg shadow">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="text-xl font-bold text-gray-800">作息響鈴 🔔</h3>
+                        <div class="space-x-2">
+                            <button id="open-bell-history-modal-btn" class="btn-magic bg-gray-200 hover:bg-gray-300 text-gray-800 py-2 px-4 text-sm">響鈴紀錄</button>
+                            <button id="open-manage-sounds-modal-btn" class="btn-magic bg-green-500 hover:bg-green-600 text-white py-2 px-4 text-sm">管理聲音</button>
+                            <button id="open-add-bell-modal-btn" class="btn-magic bg-blue-500 hover:bg-blue-600 text-white py-2 px-4 text-sm">新增響鈴</button>
+                        </div>
+                    </div>
+                    <div id="bell-schedule-list" class="space-y-3 max-h-60 overflow-y-auto bg-gray-50 p-2 rounded-md border">
+                    </div>
+                </div>
+             </div>
+        </div>
+    </div>
+
+    <div id="password-modal" class="modal-overlay">
+        <div class="modal-content w-full max-w-md">
+            <h2 class="text-2xl font-bold text-gray-800 mb-4">管理者密碼</h2>
+            <p class="text-gray-600 mb-4">請輸入管理者密碼以開啟面板。</p>
+            <input type="password" id="password-input" class="input-magic w-full p-3 text-lg border border-gray-300 rounded-lg mb-6" placeholder="請輸入密碼...">
+            <div class="flex justify-between items-center">
+                <button id="change-admin-password-btn" class="text-sm text-blue-600 hover:underline">變更管理者密碼</button>
+                <div class="space-x-4">
+                    <button id="cancel-password-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-6">取消</button>
+                    <button id="confirm-password-btn" class="btn-magic bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-6">確認</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div id="data-settings-modal" class="modal-overlay">
+        <div class="modal-content w-full max-w-md">
+            <h2 class="text-2xl font-bold text-sky-700 mb-4">資料設定</h2>
+            <div class="space-y-4">
+                <div>
+                    <label for="main-title-input" class="block text-sm font-medium text-gray-700">主標題文字</label>
+                    <input type="text" id="main-title-input" class="input-magic mt-1 p-2 w-full border rounded">
+                </div>
+                <div>
+                    <label for="sub-title-input" class="block text-sm font-medium text-gray-700">副標題文字</label>
+                    <input type="text" id="sub-title-input" class="input-magic mt-1 p-2 w-full border rounded">
+                </div>
+            </div>
+            <div class="flex justify-end space-x-4 mt-6">
+                <button id="cancel-data-settings-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-6">取消</button>
+                <button id="save-data-settings-btn" class="btn-magic bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-6">儲存</button>
+            </div>
+        </div>
+    </div>
+    <div id="add-bell-modal" class="modal-overlay">
+        <div class="modal-content w-full max-w-lg">
+            <h2 id="add-bell-modal-title" class="text-2xl font-bold text-blue-700 mb-4">新增響鈴場景</h2>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">場景標題</label>
+                    <input id="bell-title-input" type="text" placeholder="例如：午休時間到了！" class="input-magic mt-1 p-2 w-full border rounded">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">響鈴時間</label>
+                    <input id="bell-time-input" type="time" class="input-magic mt-1 p-2 w-full border rounded">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">重複週期</label>
+                    <div id="bell-weekdays-container" class="grid grid-cols-7 gap-1 mt-1"></div>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">選擇音效</label>
+                        <select id="bell-sound-select" class="input-magic mt-1 p-2 w-full border rounded"></select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">響鈴秒數</label>
+                        <input id="bell-duration-input" type="number" value="5" min="1" class="input-magic mt-1 p-2 w-full border rounded">
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end space-x-4 mt-6">
+                <button id="cancel-add-bell-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-6">取消</button>
+                <button id="save-bell-btn" class="btn-magic bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6">儲存</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="manage-sounds-modal" class="modal-overlay">
+        <div class="modal-content w-full max-w-lg">
+            <h2 class="text-2xl font-bold text-green-700 mb-4">聲音庫管理</h2>
+            <div class="p-4 border rounded bg-gray-50 mb-4">
+                <label class="block text-sm font-medium text-gray-700">新增聲音檔 (MP3, WAV)</label>
+                <button id="import-sound-btn" class="btn-magic w-full mt-2 bg-teal-500 hover:bg-teal-600 text-white py-2">選擇檔案匯入</button>
+            </div>
+            <div>
+                <h3 class="text-lg font-semibold text-gray-800 mb-2">我的收藏</h3>
+                <div id="custom-sound-list-modal" class="space-y-2 max-h-60 overflow-y-auto"></div>
+            </div>
+            <div class="flex justify-end mt-6">
+                <button id="close-manage-sounds-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-6">關閉</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="bell-history-modal" class="modal-overlay">
+        <div class="modal-content w-full max-w-lg">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-bold text-gray-700">響鈴歷史</h2>
+                <button id="clear-bell-history-btn" class="btn-magic bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 text-sm">清除所有紀錄</button>
+            </div>
+            <div id="bell-history-list-modal" class="text-sm text-gray-600 max-h-80 overflow-y-auto bg-gray-100 p-2 rounded"></div>
+            <div class="flex justify-end mt-6">
+                <button id="close-bell-history-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-6">關閉</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="roster-modal" class="modal-overlay">
+        <div class="modal-content w-full max-w-7xl">
+            <h2 class="text-2xl font-bold text-gray-800 mb-4">所有人員名冊</h2>
+            <div class="mb-4 rounded-lg border bg-gray-50 p-4">
+                <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                        <p class="text-sm font-medium text-gray-700">欄位顯示設定</p>
+                        <p id="roster-column-summary" class="text-xs text-gray-500">核心 8 欄固定顯示，其它欄位可自行勾選。</p>
+                    </div>
+                    <button id="reset-roster-columns-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 text-sm">還原最精簡欄位</button>
+                </div>
+                <div id="roster-column-toggle-list" class="roster-column-toggle-grid mt-3"></div>
+            </div>
+            <div class="roster-table-scroll">
+                <table id="roster-table" class="w-max min-w-full text-sm text-left text-gray-500">
+                    <thead id="roster-table-head" class="text-xs text-gray-700 uppercase bg-gray-50"></thead>
+                    <tbody id="roster-table-body"></tbody>
+                </table>
+            </div>
+            <div class="flex justify-end mt-6">
+                <button id="close-roster-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-6">關閉</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="confirm-modal" class="modal-overlay">
+        <div class="modal-content w-full max-w-md">
+            <h2 id="confirm-title" class="text-2xl font-bold text-red-600 mb-4">確認操作</h2>
+            <p id="confirm-message" class="text-gray-600 mb-6">您確定要執行此操作嗎？</p>
+            <div class="flex justify-end space-x-4">
+                <button id="cancel-confirm-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-6">取消</button>
+                <button id="confirm-confirm-btn" class="btn-magic bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6">確認</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="report-login-modal" class="modal-overlay">
+        <div class="modal-content w-full max-w-md">
+            <h2 class="text-2xl font-bold text-green-700 mb-4">考勤報表登入</h2>
+            <p class="text-gray-600 mb-4">請輸入您的卡號/密碼，或管理者密碼以查詢所有資料。</p>
+            <input type="password" id="report-login-input" class="input-magic w-full p-3 text-lg border border-gray-300 rounded-lg mb-6" placeholder="請輸入卡號或密碼...">
+            <div class="flex justify-end space-x-4">
+                <button id="cancel-report-login-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-6">取消</button>
+                <button id="confirm-report-login-btn" class="btn-magic bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6">登入</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="report-date-range-modal" class="modal-overlay">
+        <div class="modal-content w-full max-w-md">
+            <h2 class="text-2xl font-bold text-green-700 mb-4">選擇查詢範圍</h2>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">開始日期</label>
+                    <input id="report-start-date" type="date" class="input-magic mt-1 p-2 w-full border rounded">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">結束日期</label>
+                    <input id="report-end-date" type="date" class="input-magic mt-1 p-2 w-full border rounded">
+                </div>
+            </div>
+            <div class="flex justify-end space-x-4 mt-6">
+                <button id="cancel-report-date-range-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-6">取消</button>
+                <button id="confirm-report-date-range-btn" class="btn-magic bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6">查詢</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="report-view-modal" class="modal-overlay">
+        <div class="modal-content w-full max-w-7xl h-[90vh] flex flex-col">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-bold text-gray-800">考勤紀錄報表</h2>
+                <div class="flex items-center space-x-4">
+                    <span id="report-auto-close-timer" class="text-sm text-gray-500"></span>
+                    <button id="export-report-csv-btn" class="btn-magic bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4">匯出CSV</button>
+                    <button id="close-report-view-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4">關閉</button>
+                </div>
+            </div>
+            <div class="flex-grow overflow-y-auto">
+                <table id="report-table" class="w-full text-sm text-left text-gray-500">
+                    <thead class="text-xs text-gray-700 uppercase bg-gray-50 sticky top-0">
+                        <tr>
+                            <th scope="col" class="px-4 py-3">工號</th>
+                            <th scope="col" class="px-4 py-3">姓名</th>
+                            <th scope="col" class="px-4 py-3">打卡日期</th>
+                            <th scope="col" class="px-4 py-3">打卡時間</th>
+                            <th scope="col" class="px-4 py-3">班別</th>
+                            <th scope="col" class="px-4 py-3">狀態</th>
+                        </tr>
+                    </thead>
+                    <tbody id="report-table-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div id="greetings-modal" class="modal-overlay">
+        <div class="modal-content w-full max-w-3xl h-[80vh] flex flex-col">
+            <h2 class="text-2xl font-bold text-cyan-700 mb-4 flex-shrink-0">問候語管理</h2>
+            <div class="flex-grow grid grid-cols-1 md:grid-cols-2 gap-6 overflow-hidden">
+                <div class="bg-gray-50 p-4 rounded-lg flex flex-col overflow-hidden">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-2 flex-shrink-0">已設定的問候語</h3>
+                    <div id="greetings-list" class="flex-grow space-y-2 overflow-y-auto pr-2"></div>
+                </div>
+                <div class="bg-white p-4 rounded-lg border">
+                    <h3 id="greetings-form-title" class="text-lg font-semibold text-gray-800 mb-4">新增問候語</h3>
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium">類型</label>
+                            <select id="greeting-type" class="input-magic mt-1 p-2 w-full border rounded">
+                                <option value="in">上班</option>
+                                <option value="out">下班</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium">問候語內容 (每行一則)</label>
+                            <textarea id="greeting-message" rows="3" class="input-magic mt-1 p-2 w-full border rounded"></textarea>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium">指定工號 (選填)</label>
+                            <input id="greeting-emp-id" type="text" placeholder="留空則為通用問候語" class="input-magic mt-1 p-2 w-full border rounded">
+                        </div>
+                    </div>
+                    <div class="flex justify-end space-x-2 mt-4">
+                        <button id="cancel-greeting-edit-btn" class="btn-magic bg-gray-400 hover:bg-gray-500 text-white py-2 px-4 hidden">取消編輯</button>
+                        <button id="save-greeting-btn" class="btn-magic bg-cyan-600 hover:bg-cyan-700 text-white py-2 px-4">儲存</button>
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end mt-6 flex-shrink-0">
+                <button id="close-greetings-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-6">關閉</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="special-effects-modal" class="modal-overlay">
+        <div class="modal-content w-full max-w-2xl">
+            <h2 class="text-2xl font-bold text-pink-700 mb-4">節日特效排程</h2>
+            <div class="mb-6 p-4 border rounded-lg bg-gray-50">
+                <h3 id="effect-form-title" class="text-lg font-semibold text-gray-800 mb-2">新增特效排程</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <input id="effect-name-input" type="text" placeholder="特效名稱 (例如: 聖誕節)" class="input-magic p-2 border rounded col-span-2">
+                    <input id="effect-prefix-input" type="text" placeholder="前綴符號 (例如: 🎄)" class="input-magic p-2 border rounded">
+                    <input id="effect-suffix-input" type="text" placeholder="後綴符號 (例如: 🎁)" class="input-magic p-2 border rounded">
+                    <div>
+                        <label class="text-sm">開始日期</label>
+                        <input id="effect-start-date-input" type="date" class="input-magic p-2 border rounded w-full">
+                    </div>
+                    <div>
+                        <label class="text-sm">結束日期</label>
+                        <input id="effect-end-date-input" type="date" class="input-magic p-2 border rounded w-full">
+                    </div>
+                </div>
+                <div class="flex justify-end space-x-2 mt-4">
+                    <button id="cancel-effect-edit-btn" class="btn-magic bg-gray-400 hover:bg-gray-500 text-white py-2 px-4 hidden">取消編輯</button>
+                    <button id="save-effect-btn" class="btn-magic bg-pink-600 hover:bg-pink-700 text-white py-2 px-4">儲存特效</button>
+                </div>
+            </div>
+            <div>
+                <h3 class="text-lg font-semibold text-gray-800 mb-2">已設定的排程</h3>
+                <div id="special-effects-list" class="space-y-2 max-h-60 overflow-y-auto"></div>
+            </div>
+            <div class="flex justify-end mt-6">
+                <button id="close-effects-modal-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-6">關閉</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="theme-schedule-modal" class="modal-overlay">
+        <div class="modal-content w-full max-w-2xl">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-bold text-indigo-700">主題特效排程設定</h2>
+                <button id="open-theme-editor-btn" class="btn-magic bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 px-4">🎨 主題特效編輯器</button>
+            </div>
+            <div class="mb-6 p-4 border rounded-lg bg-gray-50">
+                <h3 id="theme-form-title" class="text-lg font-semibold text-gray-800 mb-2">新增主題排程</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <input id="theme-name-input" type="text" placeholder="排程名稱 (例如: 聖誕月)" class="input-magic p-2 border rounded col-span-2">
+                    <select id="theme-select-input" class="input-magic p-2 border rounded"></select>
+                    <div></div>
+                    <div>
+                        <label class="text-sm">開始日期</label>
+                        <input id="theme-start-date-input" type="date" class="input-magic p-2 border rounded w-full">
+                    </div>
+                    <div>
+                        <label class="text-sm">結束日期</label>
+                        <input id="theme-end-date-input" type="date" class="input-magic p-2 border rounded w-full">
+                    </div>
+                </div>
+                <div class="flex justify-end space-x-2 mt-4">
+                    <button id="cancel-theme-edit-btn" class="btn-magic bg-gray-400 hover:bg-gray-500 text-white py-2 px-4 hidden">取消編輯</button>
+                    <button id="save-theme-schedule-btn" class="btn-magic bg-indigo-600 hover:bg-indigo-700 text-white py-2 px-4">儲存排程</button>
+                </div>
+            </div>
+            <div>
+                <h3 class="text-lg font-semibold text-gray-800 mb-2">已設定的排程</h3>
+                <div id="theme-schedules-list" class="space-y-2 max-h-60 overflow-y-auto"></div>
+            </div>
+            <div class="flex justify-end mt-6">
+                <button id="close-theme-schedule-modal-btn" class_name="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-6">關閉</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="theme-editor-modal" class="modal-overlay">
+        <div class="modal-content w-full max-w-6xl h-[90vh] flex flex-col">
+            <h2 class="text-2xl font-bold text-amber-700 mb-4 flex-shrink-0">主題特效編輯器</h2>
+            <div class="flex-grow grid grid-cols-3 gap-6 overflow-hidden">
+                <div class="col-span-1 bg-gray-50 p-4 rounded-lg overflow-y-auto space-y-4">
+                    <div>
+                        <label class="font-bold">主題名稱</label>
+                        <input id="theme-editor-name" type="text" placeholder="我的魔法主題" class="input-magic w-full p-2 mt-1 border rounded">
+                    </div>
+                    <details open>
+                        <summary class="font-bold cursor-pointer">⚙️ 參數設定</summary>
+                        <div class="pl-4 mt-2 space-y-2">
+                            <div class="grid grid-cols-2 gap-x-4 gap-y-2 mt-1">
+                                <div><label>白天起始時間</label><input id="theme-editor-day-start-time" type="time" value="05:00" class="input-magic w-full p-1 mt-1 border rounded"></div>
+                                <div><label>晚上起始時間</label><input id="theme-editor-night-start-time" type="time" value="17:00" class="input-magic w-full p-1 mt-1 border rounded"></div>
+                            </div>
+                        </div>
+                    </details>
+                    <details open>
+                        <summary class="font-bold cursor-pointer">🎨 色彩與字型</summary>
+                        <div class="pl-4 mt-2 space-y-4">
+                            <div>
+                                <h4 class="font-semibold text-gray-600">背景顏色</h4>
+                                <div class="grid grid-cols-2 gap-x-4 gap-y-2 mt-1">
+                                    <div><label>白天背景 (漸層起始)</label><input id="theme-editor-bg-day-start" type="color" value="#dfe9f3" class="w-full h-8 p-0 mt-1"></div>
+                                    <div><label>白天背景 (漸層結束)</label><input id="theme-editor-bg-day-end" type="color" value="#ffffff" class="w-full h-8 p-0 mt-1"></div>
+                                    <div><label>晚上背景 (漸層起始)</label><input id="theme-editor-bg-night-start" type="color" value="#2c3e50" class="w-full h-8 p-0 mt-1"></div>
+                                    <div><label>晚上背景 (漸層結束)</label><input id="theme-editor-bg-night-end" type="color" value="#4ca1af" class="w-full h-8 p-0 mt-1"></div>
+                                    <div class="col-span-2">
+                                        <label>主畫面背景圖片</label>
+                                        <div class="flex items-center space-x-2">
+                                            <button id="theme-editor-select-page-bg-image-btn" class="input-magic flex-grow p-2 mt-1 border rounded text-left text-gray-500 truncate">選擇圖片...</button>
+                                            <button id="theme-editor-clear-page-bg-image-btn" class="text-xs text-red-500 hover:underline mt-1">清除</button>
+                                        </div>
+                                    </div>
+                                    <div class="col-span-2">
+                                        <label>標題區圖片</label>
+                                        <div class="flex items-center space-x-2">
+                                            <button id="theme-editor-select-title-bg-image-btn" class="input-magic flex-grow p-2 mt-1 border rounded text-left text-gray-500 truncate">選擇圖片...</button>
+                                            <button id="theme-editor-clear-title-bg-image-btn" class="text-xs text-red-500 hover:underline mt-1">清除</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <hr>
+                            <div><label>主標題文字</label><input id="theme-editor-main-title-color" type="color" value="#1f2937" class="w-full h-8 p-0 mt-1"></div>
+                            <hr>
+                            <div class="grid grid-cols-2 gap-2">
+                                <div><label>管理者按鈕背景</label><input id="theme-editor-btn-admin-bg" type="color" value="#8b5cf6" class="w-full h-8 p-0 mt-1"></div>
+                                <div><label>管理者按鈕文字</label><input id="theme-editor-btn-admin-text" type="color" value="#ffffff" class="w-full h-8 p-0 mt-1"></div>
+                                <div><label>報表按鈕背景</label><input id="theme-editor-btn-report-bg" type="color" value="#10b981" class="w-full h-8 p-0 mt-1"></div>
+                                <div><label>報表按鈕文字</label><input id="theme-editor-btn-report-text" type="color" value="#ffffff" class="w-full h-8 p-0 mt-1"></div>
+                                <div><label>AI按鈕背景</label><input id="theme-editor-btn-ai-bg" type="color" value="#3b82f6" class="w-full h-8 p-0 mt-1"></div>
+                                <div><label>AI按鈕文字</label><input id="theme-editor-btn-ai-text" type="color" value="#ffffff" class="w-full h-8 p-0 mt-1"></div>
+                            </div>
+                        </div>
+                    </details>
+                    <details open>
+                        <summary class="font-bold cursor-pointer">🕰️ 時鐘面板</summary>
+                         <div class="pl-4 mt-2 space-y-2">
+                            <div class="grid grid-cols-2 gap-2">
+                                <div><label>背景顏色</label><input id="theme-editor-clock-bg" type="color" value="#374151" class="w-full h-8 p-0 mt-1"></div>
+                                <div><label>文字顏色</label><input id="theme-editor-clock-text" type="color" value="#ffffff" class="w-full h-8 p-0 mt-1"></div>
+                                <div class="col-span-2">
+                                    <label>背景圖片</label>
+                                    <div class="flex items-center space-x-2">
+                                        <button id="theme-editor-select-bg-image-btn" class="input-magic flex-grow p-2 mt-1 border rounded text-left text-gray-500 truncate">選擇圖片...</button>
+                                        <button id="theme-editor-clear-bg-image-btn" class="text-xs text-red-500 hover:underline mt-1">清除</button>
+                                    </div>
+                                </div>
+                                <div class="col-span-2">
+                                    <label>圖片位置</label>
+                                    <select id="theme-editor-clock-bg-pos" class="input-magic w-full p-2 mt-1 border rounded">
+                                        <option value="center">置中</option>
+                                        <option value="top">靠上</option>
+                                        <option value="bottom">靠下</option>
+                                        <option value="left">靠左</option>
+                                        <option value="right">靠右</option>
+                                        <option value="top left">左上</option>
+                                        <option value="top right">右上</option>
+                                        <option value="bottom left">左下</option>
+                                        <option value="bottom right">右下</option>
+                                    </select>
+                                </div>
+                                <div><label>內部裝飾 (左)</label><input id="theme-editor-clock-symbols-left" type="text" placeholder="e.g. 🎄" class="input-magic w-full p-2 mt-1 border rounded"></div>
+                                <div><label>內部裝飾 (右)</label><input id="theme-editor-clock-symbols-right" type="text" placeholder="e.g. 🎁" class="input-magic w-full p-2 mt-1 border rounded"></div>
+                            </div>
+                         </div>
+                    </details>
+                    <details>
+                        <summary class="font-bold cursor-pointer">✨ 動畫與特效</summary>
+                        <div class="pl-4 mt-2 space-y-2">
+                            <div>
+                                <label class="flex items-center"><input type="checkbox" id="theme-editor-blink-enabled" class="mr-2"> 主時鐘閃爍邊框</label>
+                                <div class="grid grid-cols-2 gap-2 mt-1">
+                                    <div><label>白天閃爍顏色</label><input id="theme-editor-blink-day-color" type="color" value="#fbc02d" class="w-full h-8 p-0 mt-1"></div>
+                                    <div><label>晚上閃爍顏色</label><input id="theme-editor-blink-night-color" type="color" value="#29d9ff" class="w-full h-8 p-0 mt-1"></div>
+                                </div>
+                            </div>
+                            <hr>
+                            <div>
+                                <label>打卡背景特效</label>
+                                <select id="theme-editor-punch-effect" class="input-magic w-full p-2 mt-1 border rounded">
+                                    <option value="none">無</option>
+                                    <option value="fall">灑落</option>
+                                    <option value="flash">閃現</option>
+                                </select>
+                                <input id="theme-editor-punch-fall-content" type="text" placeholder="灑落的 Emoji (e.g. ✨,🎉,💖)" class="input-magic w-full p-2 mt-1 border rounded">
+                                <input id="theme-editor-punch-flash-content" type="text" placeholder="閃現的文字或 Emoji" class="input-magic w-full p-2 mt-1 border rounded hidden">
+                            </div>
+                        </div>
+                    </details>
+                </div>
+                <div class="col-span-2 bg-gray-200 p-4 rounded-lg overflow-hidden flex items-center justify-center">
+                    <div id="theme-editor-preview" class="w-full max-w-lg scale-90 origin-center">
+                        </div>
+                </div>
+            </div>
+            <div class="flex-shrink-0 flex justify-between items-center mt-6">
+                 <div>
+                    <label>讀取/編輯現有主題</label>
+                    <select id="theme-editor-load-select" class="input-magic p-2 border rounded"></select>
+                 </div>
+                 <div class="space-x-4">
+                    <button id="close-theme-editor-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-6">關閉</button>
+                    <button id="delete-custom-theme-btn" class="btn-magic bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6">刪除此主題</button>
+                    <button id="save-custom-theme-btn" class="btn-magic bg-amber-600 hover:bg-amber-700 text-white font-bold py-2 px-6">儲存主題</button>
+                 </div>
+            </div>
+        </div>
+    </div>
+
+
+    <div id="ai-password-modal" class="modal-overlay">
+        <div class="modal-content w-full max-w-md">
+            <h2 class="text-2xl font-bold text-blue-800 mb-4">AI 系統控制</h2>
+            <p class="text-gray-600 mb-4">請輸入系統密碼以繼續。</p>
+            <input type="password" id="ai-password-input" class="input-magic w-full p-3 text-lg border border-gray-300 rounded-lg mb-6" placeholder="請輸入系統密碼...">
+            <div class="flex justify-between items-center">
+                <button id="change-system-password-btn" class="text-sm text-blue-600 hover:underline">變更系統密碼</button>
+                <div class="space-x-4">
+                    <button id="cancel-ai-password-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-6">取消</button>
+                    <button id="confirm-ai-password-btn" class="btn-magic bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6">確認</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="change-password-modal" class="modal-overlay">
+        <div class="modal-content w-full max-w-md">
+            <h2 id="change-password-title" class="text-2xl font-bold text-gray-800 mb-4">變更密碼</h2>
+            <div class="space-y-4">
+                <div>
+                    <label id="current-password-label" class="block text-sm font-medium text-gray-700">目前的密碼</label>
+                    <input id="current-password-input" type="password" class="input-magic mt-1 p-2 w-full border rounded">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">新的密碼</label>
+                    <input id="new-password-input" type="password" class="input-magic mt-1 p-2 w-full border rounded">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">確認新的密碼</label>
+                    <input id="confirm-password-input" type="password" class="input-magic mt-1 p-2 w-full border rounded">
+                </div>
+            </div>
+            <div class="flex justify-end space-x-4 mt-6">
+                <button id="cancel-change-password-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-6">取消</button>
+                <button id="confirm-change-password-btn" class="btn-magic bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6">確認變更</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="automation-modal" class="modal-overlay">
+        <div class="modal-content w-full max-w-4xl h-[90vh] flex flex-col">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-bold text-blue-800">AI 系統控制 - 自動化排程</h2>
+                <button id="close-automation-modal-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4">關閉</button>
+            </div>
+            
+            <div class="flex-grow grid grid-cols-1 lg:grid-cols-2 gap-8 overflow-y-auto p-1">
+                <div class="flex flex-col gap-8">
+                    <div class="bg-gray-50 p-6 rounded-lg border">
+                        <h3 class="text-xl font-semibold text-gray-800 mb-4">自動任務設定區</h3>
+                        <div id="automation-tasks-list" class="space-y-2"></div>
+                    </div>
+                    <div class="bg-gray-50 p-6 rounded-lg border">
+                        <h3 class="text-xl font-semibold text-gray-800 mb-4">預設匯出資料夾</h3>
+                        <p id="automation-export-directory-summary" class="text-sm text-gray-500 mb-3">目前未設定預設匯出資料夾，匯出時會改用桌面資料夾。</p>
+                        <input id="automation-export-directory-default" type="text" class="input-magic p-2 border rounded w-full" placeholder="留空時使用桌面資料夾">
+                        <div class="flex flex-wrap justify-end gap-2 mt-4">
+                            <button id="clear-automation-export-directory-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4">清除</button>
+                            <button id="select-automation-export-directory-btn" class="btn-magic bg-slate-500 hover:bg-slate-600 text-white font-bold py-2 px-4">選擇資料夾</button>
+                            <button id="save-automation-export-directory-btn" class="btn-magic bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4">儲存預設資料夾</button>
+                        </div>
+                    </div>
+                    <div class="bg-gray-50 p-6 rounded-lg border">
+                        <h3 id="auto-task-form-title" class="text-xl font-semibold text-gray-800 mb-4">新增自動任務</h3>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="text-sm">週期</label>
+                                <select id="auto-task-frequency" class="input-magic p-2 border rounded w-full mt-1">
+                                    <option value="immediate">立即</option>
+                                    <option value="daily">每日</option>
+                                    <option value="weekly">每週</option>
+                                    <option value="monthly">每月</option>
+                                </select>
+                            </div>
+                             <div id="auto-task-day-weekly-container" class="hidden">
+                                <label class="text-sm">日期</label>
+                                <select id="auto-task-day-weekly" class="input-magic p-2 border rounded w-full mt-1">
+                                    <option value="1">週一</option>
+                                    <option value="2">週二</option>
+                                    <option value="3">週三</option>
+                                    <option value="4">週四</option>
+                                    <option value="5">週五</option>
+                                    <option value="6">週六</option>
+                                    <option value="0">週日</option>
+                                </select>
+                            </div>
+                            <div id="auto-task-day-monthly-container" class="hidden">
+                                <label class="text-sm">日期 (1-31)</label>
+                                <input id="auto-task-day-monthly" type="number" min="1" max="31" value="1" class="input-magic p-2 border rounded w-full mt-1">
+                            </div>
+                            <div id="auto-task-time-container" class="sm:col-span-2">
+                                <label class="text-sm">時間</label>
+                                <input id="auto-task-time" type="time" class="input-magic p-2 border rounded w-full mt-1">
+                            </div>
+                            <div>
+                                <label class="text-sm">任務</label>
+                                <select id="auto-task-type" class="input-magic p-2 border rounded w-full mt-1">
+                                    <option value="export">匯出</option>
+                                    <option value="delete">刪除</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="text-sm">目標</label>
+                                <select id="auto-task-target" class="input-magic p-2 border rounded w-full mt-1">
+                                    <option value="last_week_records">上週打卡紀錄</option>
+                                    <option value="last_month_records">上月打卡紀錄</option>
+                                    <option value="manual_records">手動補登紀錄</option>
+                                    <option value="all_records">全部打卡紀錄</option>
+                                    <option value="all_employees">所有人員資料</option>
+                                    <option value="all_bell_records">全部響鈴紀錄</option>
+                                    <option value="log">系統任務日誌</option>
+                                </select>
+                            </div>
+                            <div id="auto-task-export-template-container" class="hidden sm:col-span-2">
+                                <label class="text-sm">考勤報表匯出模板</label>
+                                <select id="auto-task-export-template" class="input-magic p-2 border rounded w-full mt-1">
+                                    <option value="payroll">薪資系統</option>
+                                    <option value="anomaly">異常稽核</option>
+                                    <option value="analysis">報表分析</option>
+                                    <option value="full">完整格式</option>
+                                    <option value="custom">自訂格式</option>
+                                </select>
+                            </div>
+                            <div id="auto-task-export-directory-container" class="hidden sm:col-span-2">
+                                <label class="text-sm">此任務自訂匯出資料夾</label>
+                                <input id="auto-task-export-directory" type="text" class="input-magic p-2 border rounded w-full mt-1" placeholder="留空則使用預設匯出資料夾">
+                                <div class="flex flex-wrap justify-end gap-2 mt-3">
+                                    <button id="clear-auto-task-export-directory-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4">清除</button>
+                                    <button id="select-auto-task-export-directory-btn" class="btn-magic bg-slate-500 hover:bg-slate-600 text-white font-bold py-2 px-4">選擇資料夾</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex justify-end space-x-2 mt-4">
+                            <button id="cancel-auto-task-edit-btn" class="btn-magic bg-gray-400 hover:bg-gray-500 text-white font-bold py-2 px-4 hidden">取消編輯</button>
+                            <button id="save-automation-task-btn" class="btn-magic bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6">新增任務</button>
+                        </div>
+                    </div>
+                    <div class="bg-gray-50 p-6 rounded-lg border">
+                        <h3 class="text-xl font-semibold text-gray-800 mb-4">外部 API 保護設定</h3>
+                        <p id="external-api-settings-summary" class="text-sm text-gray-500 mb-3">目前外部 API 功能已停用。</p>
+                        <label class="flex items-center gap-2 text-sm font-medium text-gray-700">
+                            <input id="external-api-enabled" type="checkbox" class="h-4 w-4">
+                            啟用外部 API 功能
+                        </label>
+                        <div class="mt-4">
+                            <label for="external-api-key" class="block text-sm font-medium text-gray-700">自訂 API 金鑰</label>
+                            <input id="external-api-key" type="password" class="input-magic p-2 border rounded w-full mt-1" placeholder="請輸入自訂 API 金鑰">
+                            <p class="text-xs text-gray-500 mt-2">外部裝置可使用 <code>x-api-key</code> 或 <code>Authorization: Bearer 你的金鑰</code> 呼叫 /api/* 入口。</p>
+                        </div>
+                        <div class="flex flex-wrap justify-end gap-2 mt-4">
+                            <button id="clear-external-api-key-btn" class="btn-magic bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4">清空金鑰</button>
+                            <button id="save-external-api-settings-btn" class="btn-magic bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-4">儲存 API 設定</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-gray-50 p-6 rounded-lg border flex flex-col">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="text-xl font-semibold text-gray-800">系統任務日誌</h3>
+                        <button id="clear-automation-log-btn" class="btn-magic bg-red-500 hover:bg-red-600 text-white py-1 px-3 text-sm">清除日誌</button>
+                    </div>
+                    <div id="automation-log-list" class="flex-grow space-y-2 overflow-y-auto text-sm pr-2"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <audio id="bell-audio-player"></audio>
+    
+    <div id="toast-container"></div>
+
+    <script type="module" src="./renderer-scripts/main.js"></script>
+
+</body>
+</html>

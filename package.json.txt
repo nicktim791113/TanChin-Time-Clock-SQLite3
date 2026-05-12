@@ -1,0 +1,43 @@
+{
+  "name": "TanChin-Time-Clock-SQLite3", // 套件名稱，專案在 npm 或打包時的識別名稱
+  "version": "1.1.15", // 版本號，用於版本管理與更新時比對
+  "productName": "TanChin-Time-Clock-SQLite3", // 應用程式顯示名稱（安裝檔與視窗標題使用）
+  "description": "一個神奇的AI作息打卡桌面應用程式，擁有自動更新魔法！", // 專案的簡短描述
+  "main": "main.js", // 應用程式進入點檔案，Electron 從這裡開始執行主程序
+  "author": "HUANG-CHI-WEI", // 專案作者名稱或公司名稱
+  "scripts": {
+    "start": "electron .", // 啟動開發模式，直接執行 Electron 應用程式
+    "pack": "electron-builder --dir", // 使用 electron-builder 打包成資料夾（未壓縮）
+    "build": "electron-builder", // 使用 electron-builder 打包成本地安裝檔（不發布）
+    "publish": "electron-builder --publish always", // 打包並自動發布到 GitHub（需設定 GitHub Token）
+    "postinstall": "electron-builder install-app-deps" // 安裝依賴後，重建本機原生模組（包含 sqlite3）
+  },
+  "_scriptNotes": {
+    "postinstall": "安裝後自動重建本機模組 (包括 sqlite3)" // 這是對 postinstall 指令的備註說明
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0", // SQLite3 的高效能 Node.js 模組，用於本地資料庫操作
+    "electron-log": "^5.1.5", // 應用程式日誌紀錄套件
+    "electron-updater": "^6.2.1" // Electron 自動更新功能套件
+  },
+  "devDependencies": {
+    "electron": "^31.2.0", // Electron 核心套件，用於開發桌面應用程式
+    "electron-builder": "^24.13.3" // 打包與發布 Electron 應用程式的工具
+  },
+  "build": {
+    "appId": "com.huangchiwei.tanchintimeclock", // 應用程式的唯一識別 ID（安裝與更新使用）
+    "publish": {
+      "provider": "github", // 發布平台（此處為 GitHub）
+      "owner": "nicktim791113", // GitHub 儲存庫擁有者帳號
+      "repo": "TanChin-Time-Clock-SQLite3" // GitHub 儲存庫名稱
+    },
+    "win": {
+      "target": "nsis", // Windows 打包目標（nsis 為安裝程式格式）
+      "icon": "icon.ico" // 應用程式圖示檔案（安裝檔與捷徑使用）
+    },
+    "nsis": {
+      "oneClick": false, // 是否使用一鍵安裝模式（false 表示顯示安裝精靈）
+      "allowToChangeInstallationDirectory": true // 允許使用者自訂安裝目錄
+    }
+  }
+}

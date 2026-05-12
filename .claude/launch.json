@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Electron App + Express Server",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["start"],
+      "port": 3000
+    },
+    {
+      "name": "Tailwind CSS Watch",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["tailwindcss", "-i", "./assets/css/input.css", "-o", "./assets/css/tailwind.css", "--watch"],
+      "port": 3001,
+      "autoPort": true
+    }
+  ]
+}

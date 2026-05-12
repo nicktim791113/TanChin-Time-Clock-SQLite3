@@ -1,0 +1,51 @@
+{
+  "name": "TanChin-Time-Clock-SQLite3",
+  "version": "1.1.48",
+  "productName": "TanChin-Time-Clock-SQLite3",
+  "description": "一個神奇的AI作息打卡桌面應用程式，擁有自動更新魔法！",
+  "main": "main.js",
+  "author": "HUANG-CHI-WEI",
+  "scripts": {
+    "build:css": "npx tailwindcss -i ./assets/css/input.css -o ./assets/css/tailwind.css",
+    "prestart": "npm run build:css",
+    "prepack": "npm run build:css",
+    "prebuild": "npm run build:css",
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "build": "electron-builder",
+    "publish": "electron-builder --publish always",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "_scriptNotes": {
+    "postinstall": "安裝後自動重建本機模組 (包括 sqlite3)",
+    "★ [1] tailwind": "新增了 build:css 指令，並透過 prestart/prepack 確保每次啟動與打包前都會自動生成本地的 CSS 檔案。"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "electron-log": "^5.1.5",
+    "electron-updater": "^6.2.1",
+    "express": "^4.19.2",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "electron": "^31.2.0",
+    "electron-builder": "^24.13.3",
+    "tailwindcss": "^3.4.3"
+  },
+  "build": {
+    "appId": "com.huangchiwei.tanchintimeclock",
+    "publish": {
+      "provider": "github",
+      "owner": "nicktim791113",
+      "repo": "TanChin-Time-Clock-SQLite3"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
