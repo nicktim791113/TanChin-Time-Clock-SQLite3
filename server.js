@@ -3925,6 +3925,20 @@ function attachBrowserRoutes(server) {
   });
 }
 
+function handleServerListenError(error) {
+  const baseMessage = error?.code === 'EADDRINUSE'
+    ? `Port ${PORT} is already in use. Please close the existing TanChin window or any other program using port ${PORT}, then start again.`
+    : `The local browser server could not start.${error?.message ? ` ${error.message}` : ''}`;
+
+  console.error(`[信使驛站] ${baseMessage}`);
+  try {
+    dialog.showErrorBox('TanChin-Time-Clock-SQLite3 startup failed', baseMessage);
+  } catch (dialogError) {
+    console.error('[信使驛站] Unable to show startup error dialog:', dialogError);
+  }
+  app.quit();
+}
+
 function startServer(mainWindow) {
   if (serverInstance) {
     mainWindowRef = mainWindow;
@@ -3955,6 +3969,7 @@ function startServer(mainWindow) {
     serverStartedAt = Date.now();
     console.log(`[信使驛站] 傳送門已在頻道 ${PORT} 開啟，等待遠方的訊息...`);
   });
+  serverInstance.on('error', handleServerListenError);
 
   scheduleAuditArchiveJob();
   return serverInstance;

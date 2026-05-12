@@ -20,6 +20,14 @@ log.info('App starting...');
 let mainWindow;
 let bellInterval;
 let automationInterval;
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+
+function focusMainWindow() {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+}
 
 function broadcastBrowserUpdate(type, meta = {}) {
   if (!type || typeof serverModule.broadcastDataUpdate !== 'function') return;
@@ -967,23 +975,31 @@ function createWindow() {
     mainWindow.on('closed', () => { mainWindow = null; });
 }
 
-app.whenReady().then(() => {
-  const userDataPath = app.getPath('userData');
-  const dbPath = path.join(userDataPath, 'app_data.db');
-  dbModule.init(dbPath); 
-  createWindow();
-  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
-  
-  mainWindow.webContents.on('did-finish-load', () => {
-    autoUpdater.checkForUpdates();
-  });
+if (!gotSingleInstanceLock) {
+    app.quit();
+} else {
+    app.on('second-instance', () => {
+        focusMainWindow();
+    });
 
-  startBellScheduler();
-  startAutomationScheduler();
-  
-  // ✨ 魔法施展處：國王下令，啟動信使驛站，並交給它傳訊號角！ ✨
-  serverModule.startServer(mainWindow);
-});
+    app.whenReady().then(() => {
+      const userDataPath = app.getPath('userData');
+      const dbPath = path.join(userDataPath, 'app_data.db');
+      dbModule.init(dbPath);
+      createWindow();
+      app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+
+      mainWindow.webContents.on('did-finish-load', () => {
+        autoUpdater.checkForUpdates();
+      });
+
+      startBellScheduler();
+      startAutomationScheduler();
+
+      // ✨ 魔法施展處：國王下令，啟動信使驛站，並交給它傳訊號角！ ✨
+      serverModule.startServer(mainWindow);
+    });
+}
 
 app.on('window-all-closed', () => {
   if (bellInterval) clearInterval(bellInterval);
