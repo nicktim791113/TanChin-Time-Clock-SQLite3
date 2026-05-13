@@ -4568,7 +4568,7 @@ renderAdminPeopleSection = function renderAdminPeopleSectionTabsOverride(dataset
                             </div>
                             <label class="field">
                                 <span>讀卡輸入</span>
-                                <input id="employee-card-capture-input" type="text" autocomplete="off" placeholder="按「讀取卡片」後感應卡片" disabled>
+                                <input id="employee-card-capture-input" type="text" autocomplete="off" inputmode="numeric" spellcheck="false" placeholder="點選此欄或按「讀取卡片」後感應卡片" readonly>
                             </label>
                             <div id="employee-card-capture-result" class="card-capture-result hidden"></div>
                             <p id="employee-card-capture-message" class="helper-text">尚未讀取卡片。</p>
@@ -4649,8 +4649,16 @@ renderAdminPeopleSection = function renderAdminPeopleSectionTabsOverride(dataset
 };
 
 let employeeCardCaptureTimer = null;
+let employeeCardCaptureAutoFinishTimer = null;
+
+function clearEmployeeCardCaptureAutoFinishTimer() {
+    if (!employeeCardCaptureAutoFinishTimer) return;
+    clearTimeout(employeeCardCaptureAutoFinishTimer);
+    employeeCardCaptureAutoFinishTimer = null;
+}
 
 function clearEmployeeCardCaptureTimer() {
+    clearEmployeeCardCaptureAutoFinishTimer();
     if (!employeeCardCaptureTimer) return;
     clearTimeout(employeeCardCaptureTimer);
     employeeCardCaptureTimer = null;
@@ -4713,7 +4721,8 @@ function clearEmployeeCardCaptureResult() {
     const { input, result } = getEmployeeCardCaptureNodes();
     if (input) {
         input.value = "";
-        input.disabled = true;
+        input.disabled = false;
+        input.readOnly = true;
         input.dataset.active = "";
         input.dataset.timedOut = "";
     }
@@ -4729,6 +4738,7 @@ function startEmployeeCardCapture() {
     if (!input) return;
     clearEmployeeCardCaptureTimer();
     input.disabled = false;
+    input.readOnly = false;
     input.dataset.active = "true";
     input.dataset.timedOut = "";
     input.value = "";
@@ -4750,7 +4760,11 @@ function startEmployeeCardCapture() {
         }
         employeeCardCaptureTimer = null;
     }, 15000);
-    setTimeout(() => input.focus(), 0);
+    input.focus({ preventScroll: true });
+    input.select();
+    setTimeout(() => {
+        if (document.activeElement !== input) input.focus({ preventScroll: true });
+    }, 0);
 }
 
 async function finishEmployeeCardCapture(rawValue) {
@@ -4792,7 +4806,8 @@ async function finishEmployeeCardCapture(rawValue) {
         `;
     }
 
-    input.disabled = true;
+    input.disabled = false;
+    input.readOnly = true;
     input.dataset.active = "";
     input.dataset.timedOut = "";
     if (duplicateEmployee) {
@@ -4815,6 +4830,29 @@ async function finishEmployeeCardCapture(rawValue) {
         setFormMessage("employee-form", "卡號已由讀卡器填入，請確認後儲存員工資料。", "success");
     }
     cardField?.focus();
+}
+
+function queueEmployeeCardCaptureAutoFinish(input) {
+    if (!input || input.dataset.active !== "true") return;
+    clearEmployeeCardCaptureAutoFinishTimer();
+    if (!String(input.value || "").trim()) return;
+    employeeCardCaptureAutoFinishTimer = setTimeout(() => {
+        const { input: activeInput } = getEmployeeCardCaptureNodes();
+        if (activeInput?.dataset.active === "true" && String(activeInput.value || "").trim()) {
+            void finishEmployeeCardCapture(activeInput.value);
+        }
+    }, 800);
+}
+
+function handleEmployeeCardCaptureInput(event) {
+    if (event.target?.id !== "employee-card-capture-input") return;
+    queueEmployeeCardCaptureAutoFinish(event.target);
+}
+
+function handleEmployeeCardCaptureFocus(event) {
+    const input = event.target;
+    if (input?.id !== "employee-card-capture-input" || input.dataset.active === "true") return;
+    startEmployeeCardCapture();
 }
 
 function renderAdminShiftSection(datasets) {
@@ -7290,6 +7328,11 @@ handleDashboardSubmit = async function handleDashboardSubmitSecurityOverride(eve
 
 const originalHandleDashboardClickWithCardCapture = handleDashboardClick;
 handleDashboardClick = async function handleDashboardClickCardCaptureOverride(event) {
+    if (event.target?.id === "employee-card-capture-input") {
+        if (event.target.dataset.active !== "true") startEmployeeCardCapture();
+        return;
+    }
+
     const actionTarget = event.target.closest("[data-action]");
     if (!actionTarget) return originalHandleDashboardClickWithCardCapture(event);
 
@@ -8478,9 +8521,14 @@ function initialize() {
     ui.dashboardContent.addEventListener("click", handleDashboardClick);
     ui.dashboardContent.addEventListener("change", handleDashboardChange);
     ui.dashboardContent.addEventListener("keydown", handleEmployeeCardCaptureKeydown);
+    ui.dashboardContent.addEventListener("focusin", handleEmployeeCardCaptureFocus);
     // Use capture so dynamically-rendered forms always reach the shared submit handler.
     ui.dashboardContent.addEventListener("submit", handleDashboardSubmit, true);
     ui.dashboardContent.addEventListener("input", (event) => {
+        if (event.target.id === "employee-card-capture-input") {
+            handleEmployeeCardCaptureInput(event);
+            return;
+        }
         if (event.target.id === "employee-filter-query") {
             ensureAdminPeopleFilters().query = event.target.value || "";
             refreshEmployeeDirectoryView();

@@ -1,6 +1,6 @@
 {
   "name": "TanChin-Time-Clock-SQLite3",
-  "version": "1.1.50",
+  "version": "1.1.51",
   "productName": "TanChin-Time-Clock-SQLite3",
   "description": "TanChin time clock desktop and browser system.",
   "main": "main.js",
