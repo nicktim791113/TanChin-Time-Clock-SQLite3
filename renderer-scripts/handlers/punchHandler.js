@@ -9,11 +9,14 @@ import { dbRequest } from '../api.js';
 import { showToast, showMessage } from '../utils.js';
 import { triggerPunchEffect } from './themeHandler.js';
 
-function describePunchCredential(value) {
+function getPunchCredentialSuffix(value) {
     const text = String(value || '');
     if (!text) return '空白';
-    const suffix = text.length <= 4 ? text : text.slice(-4);
-    return `長度 ${text.length}，後 4 碼 ${suffix}`;
+    return text.length <= 4 ? text : text.slice(-4);
+}
+
+function formatPunchNotice(punchValue, code, text) {
+    return `卡號末4碼 ${getPunchCredentialSuffix(punchValue)}｜${text}。（代碼 ${code}）`;
 }
 
 function getPunchCredentialMeta(value) {
@@ -49,8 +52,8 @@ function matchesPunchCredential(employee, punchValue) {
     return card === punchValue || password === punchValue;
 }
 
-function showPunchSaveError(errorMessage, code = 'P003') {
-    showMessage(`[${code}] 打卡紀錄儲存失敗。請回報 ${code}、畫面時間與姓名給管理者。系統訊息：${errorMessage || '未知錯誤'}`, 'error');
+function showPunchSaveError(punchValue, code = 'P003') {
+    showMessage(formatPunchNotice(punchValue, code, '打卡未完成，請通報管理者'), 'error');
 }
 
 async function writePunchFailureAuditLog({ code, reason, punchValue, employee = null, extra = {} }) {
@@ -100,7 +103,7 @@ export async function handlePunch() {
             reason: '找不到卡號或密碼對應的員工',
             punchValue
         });
-        showMessage(`[P001] 找不到卡號或密碼。讀到：${describePunchCredential(punchValue)}。請確認人員名冊的卡號沒有多餘空白，並回報 P001 給管理者。`, 'error');
+        showMessage(formatPunchNotice(punchValue, 'P001', '打卡失敗，請通報管理者'), 'error');
         ui.punchInput.value = '';
         return;
     }
@@ -155,14 +158,14 @@ export async function handlePunch() {
                     error: result.error || ''
                 }
             });
-            showPunchSaveError(result.error, 'P004');
+            showPunchSaveError(punchValue, 'P004');
             ui.punchInput.value = '';
             resetSelectorsToAuto();
             return;
         }
         const updatedRecords = [duplicateRecord, ...state.punchRecords];
         setState({ punchRecords: updatedRecords });
-        showMessage(`[P002] ${employee.name}，您在 1 分鐘內已打過【${punchStatusText}】卡，系統已記錄為重複打卡。若不是本人剛打過，請回報 P002。`, 'info');
+        showMessage(formatPunchNotice(punchValue, 'P002', `1 分鐘內重複打卡已記錄（${punchStatusText}），有疑問請通報`), 'info');
         ui.punchInput.value = '';
         resetSelectorsToAuto();
         return;
@@ -219,7 +222,7 @@ export async function handlePunch() {
                 error: result.error || ''
             }
         });
-        showPunchSaveError(result.error);
+        showPunchSaveError(punchValue);
     }
     ui.punchInput.value = '';
 }
