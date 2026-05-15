@@ -22,6 +22,7 @@ function formatPunchNotice(punchValue, code, text) {
 function getPunchCredentialMeta(value) {
     const text = String(value || '');
     return {
+        input: text,
         length: text.length,
         suffix: text.length <= 4 ? text : text.slice(-4)
     };
@@ -73,6 +74,7 @@ async function writePunchFailureAuditLog({ code, reason, punchValue, employee = 
             after_data: {
                 failure_code: code,
                 failure_reason: reason,
+                credential_input: credentialMeta.input,
                 input_length: credentialMeta.length,
                 input_suffix: credentialMeta.suffix || '',
                 card_hash: cardHash,

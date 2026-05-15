@@ -4684,6 +4684,7 @@ async function writeEmployeeCardCaptureDiagnostic({
                 failureReason: success ? "" : reason,
                 warningCode: success && code ? code : "",
                 warningReason: success && code ? reason : "",
+                credentialInput: trimmedCard,
                 inputLength: meta.length,
                 inputSuffix: meta.suffix,
                 cardHash,
@@ -6181,14 +6182,16 @@ function renderPunchDiagnosticField(label, value, { mono = false } = {}) {
 }
 
 function buildCardAuditRecordText(data = {}) {
+    const credentialInput = String(data.credential_input || data.input_value || data.raw_input || "").trim();
     const inputLength = data.input_length == null || data.input_length === "" ? "-" : String(data.input_length);
     const inputSuffix = data.input_suffix == null || data.input_suffix === "" ? "-" : String(data.input_suffix);
     const cardHash = String(data.card_hash || "").trim() || "-";
-    return `輸入長度：${inputLength}；卡號後 4 碼：${inputSuffix}；卡號雜湊：${cardHash}`;
+    return `完整輸入值：${credentialInput || "-"}；輸入長度：${inputLength}；卡號後 4 碼：${inputSuffix}；卡號雜湊：${cardHash}`;
 }
 
 function renderPunchFailureDiagnostic(log) {
     const data = normalizeAuditData(log.after_data);
+    const credentialInput = String(data.credential_input || data.input_value || data.raw_input || "").trim();
     const cardHash = String(data.card_hash || "").trim();
     const cardHashText = cardHash || "-";
     const reason = data.failure_reason || data.error_message || log.summary || "打卡失敗";
@@ -6206,6 +6209,7 @@ function renderPunchFailureDiagnostic(log) {
             <dl class="punch-diagnostic-grid">
                 ${renderPunchDiagnosticField("失敗原因", reason)}
                 ${renderPunchDiagnosticField("卡號紀錄", cardAuditRecordText, { mono: true })}
+                ${renderPunchDiagnosticField("完整輸入值", credentialInput || "-", { mono: true })}
                 ${renderPunchDiagnosticField("輸入長度", data.input_length)}
                 ${renderPunchDiagnosticField("卡號後 4 碼", data.input_suffix, { mono: true })}
                 ${renderPunchDiagnosticField("卡號雜湊", cardHashText, { mono: true })}
@@ -6221,10 +6225,11 @@ function renderPunchFailureDiagnostic(log) {
 function renderCardReaderTestDiagnostic(log) {
     const data = normalizeAuditData(log.after_data);
     const cardHash = String(data.card_hash || "").trim();
-    const cardHashText = cardHash ? `${cardHash.slice(0, 16)}...` : "-";
+    const cardHashText = cardHash || "-";
     const code = data.failure_code || data.warning_code || "-";
     const reason = data.failure_reason || data.warning_reason || log.summary || "讀卡測試";
     const duplicateText = [data.duplicate_employee_id, data.duplicate_employee_name].filter(Boolean).join(" / ");
+    const cardAuditRecordText = buildCardAuditRecordText(data);
 
     return `
         <div class="punch-diagnostic-panel">
@@ -6235,6 +6240,7 @@ function renderCardReaderTestDiagnostic(log) {
             <dl class="punch-diagnostic-grid">
                 ${renderPunchDiagnosticField("結果", log.success ? "讀卡有收到輸入" : "未收到有效輸入")}
                 ${renderPunchDiagnosticField("說明", reason)}
+                ${renderPunchDiagnosticField("卡號紀錄", cardAuditRecordText, { mono: true })}
                 ${renderPunchDiagnosticField("輸入長度", data.input_length)}
                 ${renderPunchDiagnosticField("卡號後 4 碼", data.input_suffix, { mono: true })}
                 ${renderPunchDiagnosticField("卡號雜湊", cardHashText, { mono: true })}

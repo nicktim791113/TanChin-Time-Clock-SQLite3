@@ -1456,6 +1456,7 @@ function formatGenericPunchFailure(error, code = 'P299') {
 function getCredentialAuditMeta(value) {
   const text = String(value || '').trim();
   return {
+    credential_input: text,
     input_length: text.length,
     input_suffix: text.length <= 4 ? text : text.slice(-4)
   };
@@ -2994,6 +2995,7 @@ function attachBrowserRoutes(server) {
     const failureReason = String(request.body?.failureReason || '').trim();
     const warningCode = String(request.body?.warningCode || '').trim();
     const warningReason = String(request.body?.warningReason || '').trim();
+    const credentialInput = String(request.body?.credentialInput || '').trim();
     const inputLength = Number(request.body?.inputLength || 0);
     const inputSuffix = String(request.body?.inputSuffix || '').trim();
     const cardHash = String(request.body?.cardHash || '').trim();
@@ -3016,6 +3018,7 @@ function attachBrowserRoutes(server) {
         ...(failureReason ? { failure_reason: failureReason } : {}),
         ...(warningCode ? { warning_code: warningCode } : {}),
         ...(warningReason ? { warning_reason: warningReason } : {}),
+        ...(credentialInput ? { credential_input: credentialInput } : {}),
         input_length: inputLength,
         input_suffix: inputSuffix,
         ...(cardHash ? { card_hash: cardHash } : {}),
