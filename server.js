@@ -26,6 +26,98 @@ const DEFAULT_BROWSER_SECURITY_SETTINGS = {
   maxGpsAccuracyMeters: 300
 };
 const BROWSER_CLIENT_DIR = path.join(__dirname, 'browser-client');
+const BROWSER_ROLES = ['employee', 'admin', 'developer'];
+const ADMIN_PERMISSION_DEFINITIONS = [
+  { code: 'admin.people.view', category: '人員資料', label: '查看人員資料', section: 'people' },
+  { code: 'admin.people.edit', category: '人員資料', label: '新增與編輯人員', section: 'people' },
+  { code: 'admin.people.delete', category: '人員資料', label: '刪除人員', section: 'people', highRisk: true },
+  { code: 'admin.security.view', category: '安全設定', label: '查看安全狀態', section: 'security' },
+  { code: 'admin.security.manage', category: '安全設定', label: '調整裝置與 GPS 安全設定', section: 'security', highRisk: true },
+  { code: 'admin.security.password', category: '安全設定', label: '變更管理者密碼', section: 'security', highRisk: true },
+  { code: 'admin.accounts.manage', category: '安全設定', label: '帳號權限管理', section: 'security', highRisk: true },
+  { code: 'admin.shifts.manage', category: '考勤作業', label: '班別設定', section: 'shifts' },
+  { code: 'admin.manualPunch.create', category: '考勤作業', label: '手動補登', section: 'manualPunch', highRisk: true },
+  { code: 'admin.reports.view', category: '考勤報表', label: '查詢考勤報表', section: 'reports' },
+  { code: 'admin.reports.export', category: '考勤報表', label: '匯出考勤報表', section: 'reports', highRisk: true },
+  { code: 'admin.leave.review', category: '請假管理', label: '請假終審', section: 'leave' },
+  { code: 'admin.leave.settings', category: '請假管理', label: '假別與審核路徑設定', section: 'leave' },
+  { code: 'admin.system.manage', category: '系統外觀與提醒', label: '主畫面與問候語設定', section: 'system' },
+  { code: 'admin.bells.manage', category: '系統外觀與提醒', label: '響鈴與聲音設定', section: 'bells' },
+  { code: 'admin.themes.manage', category: '系統外觀與提醒', label: '主題與特效設定', section: 'themes' }
+];
+const ADMIN_PERMISSION_CODES = new Set(ADMIN_PERMISSION_DEFINITIONS.map((permission) => permission.code));
+const ADMIN_SECTION_RULES = [
+  { id: 'people', label: '人員資料', permissions: ['admin.people.view', 'admin.people.edit', 'admin.people.delete'] },
+  { id: 'security', label: '安全設定', permissions: ['admin.security.view', 'admin.security.manage', 'admin.security.password', 'admin.accounts.manage'] },
+  { id: 'shifts', label: '班別設定', permissions: ['admin.shifts.manage'] },
+  { id: 'manualPunch', label: '手動補登', permissions: ['admin.manualPunch.create'] },
+  { id: 'reports', label: '考勤報表', permissions: ['admin.reports.view', 'admin.reports.export'] },
+  { id: 'leave', label: '請假管理', permissions: ['admin.leave.review', 'admin.leave.settings'] },
+  { id: 'system', label: '系統設定', permissions: ['admin.system.manage'] },
+  { id: 'bells', label: '響鈴設定', permissions: ['admin.bells.manage'] },
+  { id: 'themes', label: '主題特效', permissions: ['admin.themes.manage'] }
+];
+const ADMIN_PERMISSION_PRESETS = [
+  {
+    id: 'none',
+    label: '無管理者權限',
+    description: '只能以員工身份使用。',
+    permissions: []
+  },
+  {
+    id: 'full_admin',
+    label: '完整管理者',
+    description: '可使用全部管理者功能。',
+    permissions: ADMIN_PERMISSION_DEFINITIONS.map((permission) => permission.code)
+  },
+  {
+    id: 'hr_admin',
+    label: '人事管理者',
+    description: '管理人員資料、請假與報表查詢。',
+    permissions: [
+      'admin.people.view',
+      'admin.people.edit',
+      'admin.leave.review',
+      'admin.leave.settings',
+      'admin.reports.view'
+    ]
+  },
+  {
+    id: 'attendance_admin',
+    label: '考勤管理者',
+    description: '管理班別、補登與考勤報表。',
+    permissions: [
+      'admin.shifts.manage',
+      'admin.manualPunch.create',
+      'admin.reports.view',
+      'admin.reports.export'
+    ]
+  },
+  {
+    id: 'report_viewer',
+    label: '報表查詢者',
+    description: '只能查詢考勤報表。',
+    permissions: ['admin.reports.view']
+  },
+  {
+    id: 'appearance_admin',
+    label: '系統外觀管理者',
+    description: '管理主畫面、問候語、響鈴與主題。',
+    permissions: [
+      'admin.system.manage',
+      'admin.bells.manage',
+      'admin.themes.manage'
+    ]
+  },
+  {
+    id: 'custom',
+    label: '自訂權限',
+    description: '逐項勾選管理者功能。',
+    permissions: []
+  }
+];
+const ADMIN_PERMISSION_PRESET_IDS = new Set(ADMIN_PERMISSION_PRESETS.map((preset) => preset.id));
+const FULL_ADMIN_PERMISSION_CODES = ADMIN_PERMISSION_PRESETS.find((preset) => preset.id === 'full_admin').permissions;
 
 let serverInstance = null;
 let mainWindowRef = null;
@@ -142,6 +234,10 @@ API_ROUTE_CATALOG.push(
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/automation-export-directory/save', auth: '開發人員', description: '儲存自動化匯出的預設資料夾' }
 );
 
+API_ROUTE_CATALOG.push(
+  { category: '管理者 API', method: 'POST', path: '/api/browser/admin/account-access/save', auth: '開發人員或帳號權限管理', description: '儲存帳號可登入角色與管理者功能權限' }
+);
+
 function ensureDirectory(directoryPath) {
   if (!fs.existsSync(directoryPath)) {
     fs.mkdirSync(directoryPath, { recursive: true });
@@ -217,6 +313,201 @@ function formatLocalTime(date) {
 function getSettingValue(key, fallbackValue) {
   const value = dbModule.getSetting(key);
   return value === null || value === undefined || value === '' ? fallbackValue : value;
+}
+
+function normalizeStringList(values = []) {
+  return [...new Set((Array.isArray(values) ? values : [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean))];
+}
+
+function normalizeAllowedRoles(values = []) {
+  const roleSet = new Set(normalizeStringList(values).filter((role) => BROWSER_ROLES.includes(role)));
+  roleSet.add('employee');
+  return BROWSER_ROLES.filter((role) => roleSet.has(role));
+}
+
+function normalizeAdminPermissionCodes(values = []) {
+  const permissionSet = new Set(normalizeStringList(values).filter((code) => ADMIN_PERMISSION_CODES.has(code)));
+  return ADMIN_PERMISSION_DEFINITIONS
+    .map((permission) => permission.code)
+    .filter((code) => permissionSet.has(code));
+}
+
+function getAdminPermissionPreset(presetId) {
+  return ADMIN_PERMISSION_PRESETS.find((preset) => preset.id === presetId) || ADMIN_PERMISSION_PRESETS[0];
+}
+
+function buildPermissionCatalog() {
+  return {
+    roles: [
+      { id: 'employee', label: '員工' },
+      { id: 'admin', label: '管理者' },
+      { id: 'developer', label: '開發人員' }
+    ],
+    adminSections: ADMIN_SECTION_RULES,
+    adminPermissions: ADMIN_PERMISSION_DEFINITIONS,
+    adminPresets: ADMIN_PERMISSION_PRESETS
+  };
+}
+
+function normalizeAccountAccessInput(record = {}, options = {}) {
+  const presetId = ADMIN_PERMISSION_PRESET_IDS.has(String(record.admin_preset || record.adminPreset || '').trim())
+    ? String(record.admin_preset || record.adminPreset || '').trim()
+    : 'none';
+  const preset = getAdminPermissionPreset(presetId);
+  const allowedRoles = normalizeAllowedRoles(record.allowed_roles || record.allowedRoles || ['employee']);
+  const adminPermissions = presetId === 'custom'
+    ? normalizeAdminPermissionCodes(record.admin_permissions || record.adminPermissions || [])
+    : normalizeAdminPermissionCodes(preset.permissions);
+
+  return {
+    employee_id: String(record.employee_id || record.employeeId || '').trim(),
+    allowed_roles: allowedRoles,
+    admin_preset: presetId,
+    admin_permissions: allowedRoles.includes('admin') ? adminPermissions : [],
+    updated_at: Number(record.updated_at || record.updatedAt) || Date.now(),
+    updated_by: String(record.updated_by || record.updatedBy || options.updatedBy || '').trim()
+  };
+}
+
+function hasExplicitAccountAccessRules() {
+  return dbModule.countAccountAccessRecords() > 0;
+}
+
+function getLegacyDefaultAccountAccess(employeeId) {
+  return {
+    employee_id: String(employeeId || '').trim(),
+    allowed_roles: ['employee', 'admin', 'developer'],
+    admin_preset: 'full_admin',
+    admin_permissions: FULL_ADMIN_PERMISSION_CODES,
+    updated_at: 0,
+    updated_by: '',
+    source: 'legacy_default'
+  };
+}
+
+function getEmployeeDefaultAccountAccess(employeeId) {
+  return {
+    employee_id: String(employeeId || '').trim(),
+    allowed_roles: ['employee'],
+    admin_preset: 'none',
+    admin_permissions: [],
+    updated_at: 0,
+    updated_by: '',
+    source: 'default'
+  };
+}
+
+function getAccountAccessForEmployee(employeeId) {
+  const normalizedEmployeeId = String(employeeId || '').trim();
+  const explicitRecord = dbModule.getAccountAccessRecord(normalizedEmployeeId);
+  if (explicitRecord) {
+    return {
+      ...normalizeAccountAccessInput(explicitRecord),
+      source: 'explicit'
+    };
+  }
+  return hasExplicitAccountAccessRules()
+    ? getEmployeeDefaultAccountAccess(normalizedEmployeeId)
+    : getLegacyDefaultAccountAccess(normalizedEmployeeId);
+}
+
+function canEmployeeLoginAsRole(employeeId, role) {
+  if (role === 'employee') return true;
+  return getAccountAccessForEmployee(employeeId).allowed_roles.includes(role);
+}
+
+function getAdminPermissionsForSession(session = {}) {
+  if (session?.impersonation?.active && (session.realRole || session.role) === 'developer') {
+    return FULL_ADMIN_PERMISSION_CODES;
+  }
+  if ((session.realRole || session.role) === 'developer' && session.role !== 'admin') {
+    return FULL_ADMIN_PERMISSION_CODES;
+  }
+  if (!session?.employeeId) return [];
+  return getAccountAccessForEmployee(session.employeeId).admin_permissions;
+}
+
+function hasAdminPermission(session, permissionCode) {
+  return getAdminPermissionsForSession(session).includes(permissionCode);
+}
+
+function hasAnyAdminPermission(session, permissionCodes = []) {
+  const permissionSet = new Set(getAdminPermissionsForSession(session));
+  return permissionCodes.some((code) => permissionSet.has(code));
+}
+
+function getAdminSectionAccess(session = {}) {
+  return ADMIN_SECTION_RULES.filter((section) => hasAnyAdminPermission(session, section.permissions));
+}
+
+function buildAccountAccessState(employees = dbModule.loadEmployees()) {
+  const initialized = hasExplicitAccountAccessRules();
+  return {
+    initialized,
+    canManage: true,
+    catalog: buildPermissionCatalog(),
+    accounts: employees.map((employee) => {
+      const access = getAccountAccessForEmployee(employee.id);
+      return {
+        employee: sanitizeEmployeeForProfile(employee),
+        access
+      };
+    })
+  };
+}
+
+function validateAccountAccessSave(records, request) {
+  const employees = dbModule.loadEmployees();
+  const employeeIds = new Set(employees.map((employee) => employee.id));
+  const normalizedRecords = (Array.isArray(records) ? records : [])
+    .map((record) => normalizeAccountAccessInput(record, {
+      updatedBy: request.browserSession?.realEmployeeId || request.browserSession?.employeeId || ''
+    }))
+    .filter((record) => record.employee_id && employeeIds.has(record.employee_id));
+  const explicitIds = new Set(normalizedRecords.map((record) => record.employee_id));
+
+  const completeRecords = employees.map((employee) => {
+    const explicit = normalizedRecords.find((record) => record.employee_id === employee.id);
+    if (explicit) return explicit;
+    const existing = getAccountAccessForEmployee(employee.id);
+    return normalizeAccountAccessInput({
+      ...existing,
+      employee_id: employee.id,
+      updated_by: request.browserSession?.realEmployeeId || request.browserSession?.employeeId || ''
+    });
+  });
+
+  const fullAdminCount = completeRecords.filter((record) =>
+    record.allowed_roles.includes('admin') &&
+    FULL_ADMIN_PERMISSION_CODES.every((code) => record.admin_permissions.includes(code))
+  ).length;
+  const developerCount = completeRecords.filter((record) => record.allowed_roles.includes('developer')).length;
+  if (!fullAdminCount) {
+    throw createHttpError('至少需要保留一位完整管理者，避免之後無法再調整帳號權限。', 400);
+  }
+  if (!developerCount) {
+    throw createHttpError('至少需要保留一位開發人員，避免系統救援入口消失。', 400);
+  }
+
+  const session = request.browserSession || {};
+  const actorId = session.realEmployeeId || session.employeeId || '';
+  const actorRecord = completeRecords.find((record) => record.employee_id === actorId);
+  if ((session.realRole || session.role) !== 'developer') {
+    const keepsOwnAccess = actorRecord &&
+      actorRecord.allowed_roles.includes('admin') &&
+      actorRecord.admin_permissions.includes('admin.accounts.manage');
+    if (!keepsOwnAccess) {
+      throw createHttpError('不能移除自己目前的帳號權限管理能力，請先交給另一位完整管理者處理。', 400);
+    }
+  }
+
+  return completeRecords.map((record) => ({
+    ...record,
+    updated_at: Date.now(),
+    updated_by: actorId
+  })).filter((record) => explicitIds.has(record.employee_id) || record.source !== 'default');
 }
 
 function getAttendanceExportCustomFields() {
@@ -1089,44 +1380,60 @@ function getSystemHealthSnapshot() {
   };
 }
 
-function getAdminDatasets() {
+function getAdminDatasets(session = {}) {
   const settings = getSettingsSnapshot();
-  const security = getAdminSecurityDatasets();
   const employees = dbModule.loadEmployees();
-  const customSounds = dbModule.loadCustomSounds().map((sound) => ({
-    ...sound,
-    browserUrl: getBrowserMediaUrl(sound.path)
-  }));
-  const customThemes = dbModule.loadCustomThemes().map((theme) => ({
-    ...theme,
-    styles: {
-      ...THEME_STYLE_DEFAULTS,
-      ...theme.styles,
-      browserPageBgImage: getBrowserMediaUrl(theme.styles.pageBgImage),
-      browserTitleBgImage: getBrowserMediaUrl(theme.styles.titleBgImage),
-      browserClockBgImage: getBrowserMediaUrl(theme.styles.clockBgImage)
-    }
-  }));
+  const canPeople = hasAnyAdminPermission(session, ['admin.people.view', 'admin.people.edit', 'admin.people.delete']);
+  const canSecurity = hasAnyAdminPermission(session, ['admin.security.view', 'admin.security.manage', 'admin.security.password']);
+  const canAccounts = hasAdminPermission(session, 'admin.accounts.manage');
+  const canShifts = hasAdminPermission(session, 'admin.shifts.manage');
+  const canManualPunch = hasAdminPermission(session, 'admin.manualPunch.create');
+  const canReports = hasAnyAdminPermission(session, ['admin.reports.view', 'admin.reports.export']);
+  const canLeave = hasAnyAdminPermission(session, ['admin.leave.review', 'admin.leave.settings']);
+  const canSystem = hasAdminPermission(session, 'admin.system.manage');
+  const canBells = hasAdminPermission(session, 'admin.bells.manage');
+  const canThemes = hasAdminPermission(session, 'admin.themes.manage');
+  const needsEmployees = canPeople || canSecurity || canAccounts || canManualPunch || canReports || canLeave;
+  const needsShifts = canShifts || canManualPunch || canReports;
+  const customSounds = canBells
+    ? dbModule.loadCustomSounds().map((sound) => ({
+      ...sound,
+      browserUrl: getBrowserMediaUrl(sound.path)
+    }))
+    : [];
+  const customThemes = canThemes
+    ? dbModule.loadCustomThemes().map((theme) => ({
+      ...theme,
+      styles: {
+        ...THEME_STYLE_DEFAULTS,
+        ...theme.styles,
+        browserPageBgImage: getBrowserMediaUrl(theme.styles.pageBgImage),
+        browserTitleBgImage: getBrowserMediaUrl(theme.styles.titleBgImage),
+        browserClockBgImage: getBrowserMediaUrl(theme.styles.clockBgImage)
+      }
+    }))
+    : [];
 
   return {
-    employees,
-    shifts: dbModule.loadShifts(),
-    greetings: dbModule.loadGreetings(),
-    bellSchedules: dbModule.loadBellSchedules(),
-    bellHistory: dbModule.loadBellHistory().map((history) => ({
+    employees: needsEmployees ? employees : [],
+    shifts: needsShifts ? dbModule.loadShifts() : [],
+    greetings: canSystem ? dbModule.loadGreetings() : [],
+    bellSchedules: canBells ? dbModule.loadBellSchedules() : [],
+    bellHistory: canBells ? dbModule.loadBellHistory().map((history) => ({
       ...history,
       soundName: String(history.sound || '').split(/[\\/]/).pop() || history.sound
-    })),
+    })) : [],
     customSounds,
-    specialEffects: dbModule.loadSpecialEffects(),
-    themeSchedules: dbModule.loadThemeSchedules(),
+    specialEffects: canThemes ? dbModule.loadSpecialEffects() : [],
+    themeSchedules: canThemes ? dbModule.loadThemeSchedules() : [],
     customThemes,
-    leave: getAdminLeaveState(employees),
-    security,
+    leave: canLeave ? getAdminLeaveState(employees) : null,
+    security: (canSecurity || canAccounts) ? getAdminSecurityDatasets() : null,
+    accountAccess: canAccounts ? buildAccountAccessState(employees) : null,
     settings: {
-      mainTitle: settings.mainTitle,
-      subtitle: settings.subtitle,
-      heroDescription: settings.heroDescription
+      mainTitle: canSystem ? settings.mainTitle : '',
+      subtitle: canSystem ? settings.subtitle : '',
+      heroDescription: canSystem ? settings.heroDescription : ''
     }
   };
 }
@@ -1158,6 +1465,7 @@ function getDeveloperDatasets() {
       externalApiKeyConfigured: externalApiSettings.keyConfigured
     },
     employees: dbModule.loadEmployees().map(sanitizeEmployeeForProfile),
+    accountAccess: buildAccountAccessState(),
     automationExport: getAutomationExportDirectorySettings(),
     attendanceExport: getAttendanceExportSettings(),
     systemHealth: getSystemHealthSnapshot(),
@@ -1335,8 +1643,8 @@ function buildAdminDashboardInsights(datasets, allRecords) {
   };
 }
 
-function buildManagerDashboard(employee) {
-  const datasets = getAdminDatasets();
+function buildManagerDashboard(employee, session = {}) {
+  const datasets = getAdminDatasets(session);
   const allRecords = getAllPunchRecords();
   const todayStart = getDayStartTimestamp();
   const todayRecords = allRecords.filter((record) => record.timestamp >= todayStart);
@@ -1344,11 +1652,18 @@ function buildManagerDashboard(employee) {
   const todayPunchFailureCount = dbModule.countPunchFailureAuditLogsSince(todayStart, ['P002', 'P004', 'P103']);
   const todayAbnormalPunchCount = todayRecords.filter(isAbnormalPunchRecord).length + todayPunchFailureCount;
   const insights = buildAdminDashboardInsights(datasets, allRecords);
+  const adminPermissions = getAdminPermissionsForSession(session);
+  const adminSections = getAdminSectionAccess(session);
 
   return {
     role: 'admin',
     user: sanitizeEmployeeForProfile(employee),
     displaySettings: getBrowserDisplaySettings(),
+    permissions: {
+      admin: adminPermissions,
+      sections: adminSections
+    },
+    permissionCatalog: buildPermissionCatalog(),
     summary: {
       employeeCount: datasets.employees.length,
       shiftCount: datasets.shifts.length,
@@ -1417,7 +1732,7 @@ function buildDashboardForSession(session) {
   }
 
   if (session.role === 'employee') return appendImpersonationState(buildEmployeeDashboard(employee, session), session);
-  if (session.role === 'admin') return appendImpersonationState(buildManagerDashboard(employee), session);
+  if (session.role === 'admin') return appendImpersonationState(buildManagerDashboard(employee, session), session);
   return appendImpersonationState(buildDeveloperDashboard(employee), session);
 }
 
@@ -1739,6 +2054,17 @@ function requireBrowserSession(request, response, next) {
     response.status(401).json({ success: false, error: withSupportCode('P230', '請先登入瀏覽器入口後再操作。') });
     return;
   }
+  if (session.impersonation?.active && (session.realRole || session.role) === 'developer') {
+    if (!canEmployeeLoginAsRole(session.realEmployeeId || session.employeeId, 'developer')) {
+      browserSessions.delete(session.token);
+      response.status(403).json({ success: false, error: '這個開發人員帳號的登入權限已變更，請重新登入。' });
+      return;
+    }
+  } else if (!canEmployeeLoginAsRole(session.employeeId, session.role)) {
+    browserSessions.delete(session.token);
+    response.status(403).json({ success: false, error: '這個帳號目前沒有此頁面的使用權，請重新登入。' });
+    return;
+  }
   request.browserSession = session;
   next();
 }
@@ -1752,6 +2078,38 @@ function requireBrowserRole(...roles) {
     }
     next();
   };
+}
+
+function requireAdminPermission(...permissionCodes) {
+  return (request, response, next) => {
+    const session = request.browserSession;
+    if (!session || session.role !== 'admin') {
+      response.status(403).json({ success: false, error: withSupportCode('P231', '目前登入角色沒有這個操作權限。') });
+      return;
+    }
+    if (permissionCodes.length && !permissionCodes.every((code) => hasAdminPermission(session, code))) {
+      response.status(403).json({ success: false, error: withSupportCode('P232', '這個管理者帳號尚未被授權使用此功能。') });
+      return;
+    }
+    next();
+  };
+}
+
+function requireAccountAccessManagement(request, response, next) {
+  const session = request.browserSession;
+  if (!session) {
+    response.status(401).json({ success: false, error: withSupportCode('P230', '請先登入瀏覽器入口後再操作。') });
+    return;
+  }
+  if ((session.realRole || session.role) === 'developer') {
+    next();
+    return;
+  }
+  if (session.role === 'admin' && hasAdminPermission(session, 'admin.accounts.manage')) {
+    next();
+    return;
+  }
+  response.status(403).json({ success: false, error: withSupportCode('P232', '只有開發人員或具備帳號權限管理的管理者可以操作。') });
 }
 
 function requireDeveloperIdentity(request, response, next) {
@@ -2626,7 +2984,7 @@ function attachBrowserRoutes(server) {
       const normalizedSecret = String(secret || '').trim();
       const normalizedDeviceInfo = normalizeClientDeviceInfo(deviceInfo || {});
 
-      if (!['employee', 'admin', 'developer'].includes(normalizedRole)) {
+      if (!BROWSER_ROLES.includes(normalizedRole)) {
         response.status(400).json({ success: false, error: withSupportCode('L100', '不支援的登入角色。') });
         return;
       }
@@ -2639,6 +2997,11 @@ function attachBrowserRoutes(server) {
       let deviceAuthorization = null;
       if (!employee) {
         response.status(404).json({ success: false, error: withSupportCode('L102', '找不到這個工號。') });
+        return;
+      }
+
+      if (!canEmployeeLoginAsRole(employee.id, normalizedRole)) {
+        response.status(403).json({ success: false, error: withSupportCode('L104', '這個帳號尚未被授權登入此頁面。') });
         return;
       }
 
@@ -2931,14 +3294,17 @@ function attachBrowserRoutes(server) {
     response.json({ success: true });
   });
 
-  server.post('/api/browser/admin/employees/save', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/employees/save', requireBrowserSession, requireAdminPermission('admin.people.edit'), (request, response) => {
     const previousEmployees = dbModule.loadEmployees();
     const employees = Array.isArray(request.body?.employees) ? request.body.employees.map(normalizeEmployee) : [];
     dbModule.saveEmployees(employees);
     const retainedIds = new Set(employees.map((employee) => employee.id));
     previousEmployees
       .filter((employee) => !retainedIds.has(employee.id))
-      .forEach((employee) => dbModule.deleteEmployeeDevicesByEmployee(employee.id));
+      .forEach((employee) => {
+        dbModule.deleteEmployeeDevicesByEmployee(employee.id);
+        dbModule.deleteAccountAccessByEmployee(employee.id);
+      });
     writeBrowserAuditLog(request, {
       action: 'save',
       target_type: 'employee_batch',
@@ -2951,7 +3317,7 @@ function attachBrowserRoutes(server) {
     response.json({ success: true, message: '員工資料已儲存。' });
   });
 
-  server.post('/api/browser/admin/employee/save', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/employee/save', requireBrowserSession, requireAdminPermission('admin.people.edit'), (request, response) => {
     const originalId = String(request.body?.originalId || '').trim();
     const employee = normalizeEmployee(request.body?.employee || {});
 
@@ -2975,7 +3341,17 @@ function attachBrowserRoutes(server) {
 
     dbModule.saveEmployees(filteredEmployees);
     if (previousEmployee && compareId && compareId !== employee.id) {
+      const previousAccess = dbModule.getAccountAccessRecord(compareId);
       dbModule.deleteEmployeeDevicesByEmployee(compareId);
+      dbModule.deleteAccountAccessByEmployee(compareId);
+      if (previousAccess) {
+        dbModule.saveAccountAccessRecord({
+          ...previousAccess,
+          employee_id: employee.id,
+          updated_at: Date.now(),
+          updated_by: request.browserSession?.realEmployeeId || request.browserSession?.employeeId || ''
+        });
+      }
     }
     writeBrowserAuditLog(request, {
       action: previousEmployee ? 'update' : 'create',
@@ -2989,7 +3365,7 @@ function attachBrowserRoutes(server) {
     response.json({ success: true, message: '員工資料已儲存。' });
   });
 
-  server.post('/api/browser/admin/card-reader-test-log', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/card-reader-test-log', requireBrowserSession, requireAdminPermission('admin.people.edit'), (request, response) => {
     const success = request.body?.success !== false && String(request.body?.success || 'true') !== 'false';
     const failureCode = String(request.body?.failureCode || '').trim();
     const failureReason = String(request.body?.failureReason || '').trim();
@@ -3030,7 +3406,7 @@ function attachBrowserRoutes(server) {
     response.json({ success: true, message: '讀卡診斷已記錄。' });
   });
 
-  server.post('/api/browser/admin/employee/delete', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/employee/delete', requireBrowserSession, requireAdminPermission('admin.people.delete'), (request, response) => {
     const employeeId = String(request.body?.employeeId || '').trim();
     if (!employeeId) {
       response.status(400).json({ success: false, error: '缺少 employeeId。' });
@@ -3042,6 +3418,7 @@ function attachBrowserRoutes(server) {
     const updatedEmployees = employees.filter((item) => item.id !== employeeId);
     dbModule.saveEmployees(updatedEmployees);
     dbModule.deleteEmployeeDevicesByEmployee(employeeId);
+    dbModule.deleteAccountAccessByEmployee(employeeId);
     writeBrowserAuditLog(request, {
       action: 'delete',
       target_type: 'employee',
@@ -3053,7 +3430,7 @@ function attachBrowserRoutes(server) {
     response.json({ success: true, message: '員工資料已刪除。' });
   });
 
-  server.post('/api/browser/admin/security-settings/save', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/security-settings/save', requireBrowserSession, requireAdminPermission('admin.security.manage'), (request, response) => {
     try {
       const previousSettings = getBrowserSecuritySettings();
       const nextSettings = normalizeBrowserSecuritySettings(request.body || {});
@@ -3073,7 +3450,7 @@ function attachBrowserRoutes(server) {
     }
   });
 
-  server.post('/api/browser/admin/employee-device/delete', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/employee-device/delete', requireBrowserSession, requireAdminPermission('admin.security.manage'), (request, response) => {
     const employeeId = String(request.body?.employeeId || '').trim();
     const deviceId = String(request.body?.deviceId || '').trim();
     if (!employeeId || !deviceId) {
@@ -3099,7 +3476,7 @@ function attachBrowserRoutes(server) {
     response.json({ success: true, message: '裝置綁定已解除。' });
   });
 
-  server.post('/api/browser/admin/employee-devices/clear', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/employee-devices/clear', requireBrowserSession, requireAdminPermission('admin.security.manage'), (request, response) => {
     const employeeId = String(request.body?.employeeId || '').trim();
     if (!employeeId) {
       response.status(400).json({ success: false, error: '缺少 employeeId。' });
@@ -3119,7 +3496,31 @@ function attachBrowserRoutes(server) {
     response.json({ success: true, message: '員工綁定裝置已全部清除。' });
   });
 
-  server.post('/api/browser/admin/shifts/save', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/account-access/save', requireBrowserSession, requireAccountAccessManagement, (request, response) => {
+    try {
+      const previousRecords = dbModule.loadAccountAccessRecords();
+      const records = validateAccountAccessSave(request.body?.accounts || [], request);
+      dbModule.saveAccountAccessRecords(records);
+      writeBrowserAuditLog(request, {
+        action: 'save',
+        target_type: 'account_access',
+        target_id: 'all',
+        summary: `更新帳號權限設定，共 ${records.length} 筆`,
+        before_data: { count: previousRecords.length },
+        after_data: { count: records.length }
+      });
+      notifyDesktop('accountAccess', getBrowserSyncMeta(request));
+      response.json({
+        success: true,
+        message: '帳號權限設定已更新。',
+        dashboard: buildDashboardForSession(request.browserSession)
+      });
+    } catch (error) {
+      response.status(error.statusCode || 400).json({ success: false, error: error.message });
+    }
+  });
+
+  server.post('/api/browser/admin/shifts/save', requireBrowserSession, requireAdminPermission('admin.shifts.manage'), (request, response) => {
     const previousShifts = dbModule.loadShifts();
     const shifts = Array.isArray(request.body?.shifts)
       ? request.body.shifts.map((shift) => ({
@@ -3141,7 +3542,7 @@ function attachBrowserRoutes(server) {
     response.json({ success: true, message: '班別設定已更新。' });
   });
 
-  server.post('/api/browser/admin/manual-punch', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/manual-punch', requireBrowserSession, requireAdminPermission('admin.manualPunch.create'), (request, response) => {
     const { employeeQuery, date, time, shift, status } = request.body || {};
     const employee = getEmployeeByAnyCredential(String(employeeQuery || '').trim());
     if (!employee) {
@@ -3179,7 +3580,7 @@ function attachBrowserRoutes(server) {
     response.json({ success: true, message: `已為 ${employee.name} 補登打卡。` });
   });
 
-  server.post('/api/browser/admin/reports/query', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/reports/query', requireBrowserSession, requireAdminPermission('admin.reports.view'), (request, response) => {
     try {
       const report = buildAdminAttendanceReport(request.body || {});
       response.json({
@@ -3192,7 +3593,7 @@ function attachBrowserRoutes(server) {
     }
   });
 
-  server.post('/api/browser/admin/reports/export', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/reports/export', requireBrowserSession, requireAdminPermission('admin.reports.export'), (request, response) => {
     try {
       const report = buildAdminAttendanceReport(request.body || {});
       const startDate = new Date(`${report.filters.startDate}T00:00:00`);
@@ -3226,7 +3627,7 @@ function attachBrowserRoutes(server) {
     }
   });
 
-  server.post('/api/browser/admin/leave/final-decision', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/leave/final-decision', requireBrowserSession, requireAdminPermission('admin.leave.review'), (request, response) => {
     try {
       const requestId = String(request.body?.requestId || '').trim();
       const decision = String(request.body?.decision || '').trim() === 'approved' ? 'approved' : 'rejected';
@@ -3258,7 +3659,7 @@ function attachBrowserRoutes(server) {
     }
   });
 
-  server.post('/api/browser/admin/leave-types/save', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/leave-types/save', requireBrowserSession, requireAdminPermission('admin.leave.settings'), (request, response) => {
     try {
       const types = Array.isArray(request.body?.leaveTypes)
         ? request.body.leaveTypes.map(normalizeLeaveTypePayload)
@@ -3281,7 +3682,7 @@ function attachBrowserRoutes(server) {
     }
   });
 
-  server.post('/api/browser/admin/leave-routes/save', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/leave-routes/save', requireBrowserSession, requireAdminPermission('admin.leave.settings'), (request, response) => {
     try {
       const employees = dbModule.loadEmployees();
       const employeeIds = new Set(employees.map((employee) => employee.id));
@@ -3307,7 +3708,7 @@ function attachBrowserRoutes(server) {
     }
   });
 
-  server.post('/api/browser/admin/data-settings', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/data-settings', requireBrowserSession, requireAdminPermission('admin.system.manage'), (request, response) => {
     const mainTitle = String(request.body?.mainTitle || '').trim();
     const subtitle = String(request.body?.subtitle || '').trim();
     const heroDescription = String(request.body?.heroDescription || '').trim();
@@ -3331,7 +3732,7 @@ function attachBrowserRoutes(server) {
     response.json({ success: true, message: '主畫面標題已更新。' });
   });
 
-  server.post('/api/browser/admin/change-admin-password', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/change-admin-password', requireBrowserSession, requireAdminPermission('admin.security.password'), (request, response) => {
     const currentSystemPassword = String(request.body?.currentSystemPassword || '');
     const newPassword = String(request.body?.newPassword || '');
     if (currentSystemPassword !== getSettingValue('systemPassword', DEFAULT_SYSTEM_PASSWORD)) {
@@ -3353,7 +3754,7 @@ function attachBrowserRoutes(server) {
     response.json({ success: true, message: '管理者密碼已更新。' });
   });
 
-  server.post('/api/browser/admin/greetings/save', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/greetings/save', requireBrowserSession, requireAdminPermission('admin.system.manage'), (request, response) => {
     const previousGreetings = dbModule.loadGreetings();
     const greetings = Array.isArray(request.body?.greetings) ? request.body.greetings.map(normalizeGreeting) : [];
     dbModule.saveGreetings(greetings);
@@ -3369,7 +3770,7 @@ function attachBrowserRoutes(server) {
     response.json({ success: true, message: '問候語設定已更新。' });
   });
 
-  server.post('/api/browser/admin/bell-schedules/save', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/bell-schedules/save', requireBrowserSession, requireAdminPermission('admin.bells.manage'), (request, response) => {
     const previousBellSchedules = dbModule.loadBellSchedules();
     const bellSchedules = Array.isArray(request.body?.bellSchedules)
       ? request.body.bellSchedules.map(normalizeBellSchedule)
@@ -3387,7 +3788,7 @@ function attachBrowserRoutes(server) {
     response.json({ success: true, message: '響鈴排程已更新。' });
   });
 
-  server.post('/api/browser/admin/custom-sounds/save', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/custom-sounds/save', requireBrowserSession, requireAdminPermission('admin.bells.manage'), (request, response) => {
     const previousSounds = dbModule.loadCustomSounds();
     const customSounds = Array.isArray(request.body?.customSounds)
       ? request.body.customSounds.map((sound) => ({
@@ -3409,7 +3810,7 @@ function attachBrowserRoutes(server) {
     response.json({ success: true, message: '自訂聲音清單已更新。' });
   });
 
-  server.post('/api/browser/admin/custom-sounds/upload', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/custom-sounds/upload', requireBrowserSession, requireAdminPermission('admin.bells.manage'), (request, response) => {
     try {
       const sound = saveUploadedSound(request.body?.dataUrl, request.body?.fileName);
       const updatedSounds = [...dbModule.loadCustomSounds(), { id: sound.id, name: sound.name, path: sound.path }];
@@ -3428,7 +3829,7 @@ function attachBrowserRoutes(server) {
     }
   });
 
-  server.post('/api/browser/admin/bell-history/clear', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/bell-history/clear', requireBrowserSession, requireAdminPermission('admin.bells.manage'), (request, response) => {
     const historyCount = dbModule.loadBellHistory().length;
     dbModule.clearBellHistory();
     writeBrowserAuditLog(request, {
@@ -3443,7 +3844,7 @@ function attachBrowserRoutes(server) {
     response.json({ success: true, message: '響鈴歷史已清空。' });
   });
 
-  server.post('/api/browser/admin/special-effects/save', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/special-effects/save', requireBrowserSession, requireAdminPermission('admin.themes.manage'), (request, response) => {
     const previousEffects = dbModule.loadSpecialEffects();
     const specialEffects = Array.isArray(request.body?.specialEffects)
       ? request.body.specialEffects.map(normalizeSpecialEffect)
@@ -3461,7 +3862,7 @@ function attachBrowserRoutes(server) {
     response.json({ success: true, message: '節日特效設定已更新。' });
   });
 
-  server.post('/api/browser/admin/theme-schedules/save', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/theme-schedules/save', requireBrowserSession, requireAdminPermission('admin.themes.manage'), (request, response) => {
     const previousThemeSchedules = dbModule.loadThemeSchedules();
     const themeSchedules = Array.isArray(request.body?.themeSchedules)
       ? request.body.themeSchedules.map(normalizeThemeSchedule)
@@ -3479,7 +3880,7 @@ function attachBrowserRoutes(server) {
     response.json({ success: true, message: '主題排程已更新。' });
   });
 
-  server.post('/api/browser/admin/custom-themes/save', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/custom-themes/save', requireBrowserSession, requireAdminPermission('admin.themes.manage'), (request, response) => {
     const previousThemes = dbModule.loadCustomThemes();
     const customThemes = Array.isArray(request.body?.customThemes)
       ? request.body.customThemes.map(normalizeCustomTheme)
@@ -3497,7 +3898,7 @@ function attachBrowserRoutes(server) {
     response.json({ success: true, message: '自訂主題已更新。' });
   });
 
-  server.post('/api/browser/admin/custom-themes/upload-image', requireBrowserSession, requireBrowserRole('admin'), (request, response) => {
+  server.post('/api/browser/admin/custom-themes/upload-image', requireBrowserSession, requireAdminPermission('admin.themes.manage'), (request, response) => {
     try {
       const image = saveUploadedThemeImage(request.body?.dataUrl, request.body?.fileName);
       writeBrowserAuditLog(request, {

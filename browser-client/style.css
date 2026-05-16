@@ -2252,3 +2252,30 @@ body::after {
     font-size: 0.92rem;
     line-height: 1.5;
 }
+
+.account-access-card {
+    grid-column: 1 / -1;
+}
+
+.account-access-row {
+    display: grid;
+    gap: 0.9rem;
+    border: 1px solid rgba(24, 72, 103, 0.08);
+}
+
+.account-access-row .field {
+    max-width: 360px;
+}
+
+.account-permission-group {
+    display: grid;
+    gap: 0.55rem;
+}
+
+.account-permission-group .employee-column-grid {
+    align-items: stretch;
+}
+
+.account-permission-group .employee-column-option {
+    min-height: 42px;
+}

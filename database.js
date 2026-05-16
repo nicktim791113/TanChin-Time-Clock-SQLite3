@@ -55,6 +55,14 @@ function init(dbFilePath) {
     CREATE TABLE IF NOT EXISTS bell_history ( timestamp INTEGER PRIMARY KEY, scheduleId TEXT, time TEXT, sound TEXT );
     CREATE TABLE IF NOT EXISTS custom_sounds ( id TEXT PRIMARY KEY, name TEXT, path TEXT );
     CREATE TABLE IF NOT EXISTS settings ( key TEXT PRIMARY KEY, value TEXT );
+    CREATE TABLE IF NOT EXISTS account_access (
+      employee_id TEXT PRIMARY KEY,
+      allowed_roles TEXT NOT NULL DEFAULT '["employee"]',
+      admin_preset TEXT NOT NULL DEFAULT 'none',
+      admin_permissions TEXT NOT NULL DEFAULT '[]',
+      updated_at INTEGER,
+      updated_by TEXT
+    );
     CREATE TABLE IF NOT EXISTS special_effects ( id TEXT PRIMARY KEY, name TEXT, prefix TEXT, suffix TEXT, start_date TEXT, end_date TEXT, enabled INTEGER );
     CREATE TABLE IF NOT EXISTS theme_schedules ( id TEXT PRIMARY KEY, name TEXT, theme_name TEXT, start_date TEXT, end_date TEXT, enabled INTEGER );
     CREATE TABLE IF NOT EXISTS automation_tasks ( id TEXT PRIMARY KEY, frequency TEXT, day TEXT, time TEXT, task_type TEXT, target TEXT, export_template TEXT, export_directory TEXT, enabled INTEGER );
@@ -169,6 +177,7 @@ function init(dbFilePath) {
     CREATE INDEX IF NOT EXISTS idx_leave_requests_supervisor_id ON leave_requests (supervisor_id);
     CREATE INDEX IF NOT EXISTS idx_leave_requests_start_at ON leave_requests (start_at);
     CREATE INDEX IF NOT EXISTS idx_leave_approval_steps_request_id ON leave_approval_steps (request_id);
+    CREATE INDEX IF NOT EXISTS idx_account_access_updated_at ON account_access (updated_at DESC);
   `);
   
   // --- 魔法加固區：自動升級寶庫結構 ---
@@ -710,6 +719,90 @@ const getSetting = (key) => {
     return row ? JSON.parse(row.value) : null;
 };
 
+function safeParseArray(value, fallback = []) {
+    if (Array.isArray(value)) return value;
+    if (!value) return fallback;
+    try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : fallback;
+    } catch (error) {
+        return fallback;
+    }
+}
+
+function normalizeStringList(values = []) {
+    return [...new Set((Array.isArray(values) ? values : [])
+        .map((value) => String(value || '').trim())
+        .filter(Boolean))];
+}
+
+function mapAccountAccessRow(row = {}) {
+    return {
+        employee_id: String(row.employee_id || '').trim(),
+        allowed_roles: normalizeStringList(safeParseArray(row.allowed_roles, ['employee'])),
+        admin_preset: String(row.admin_preset || 'none').trim() || 'none',
+        admin_permissions: normalizeStringList(safeParseArray(row.admin_permissions, [])),
+        updated_at: Number(row.updated_at) || 0,
+        updated_by: String(row.updated_by || '').trim()
+    };
+}
+
+function normalizeAccountAccessForStorage(record = {}) {
+    return {
+        employee_id: String(record.employee_id || record.employeeId || '').trim(),
+        allowed_roles: JSON.stringify(normalizeStringList(record.allowed_roles || record.allowedRoles || ['employee'])),
+        admin_preset: String(record.admin_preset || record.adminPreset || 'none').trim() || 'none',
+        admin_permissions: JSON.stringify(normalizeStringList(record.admin_permissions || record.adminPermissions || [])),
+        updated_at: Number(record.updated_at || record.updatedAt) || Date.now(),
+        updated_by: String(record.updated_by || record.updatedBy || '').trim()
+    };
+}
+
+const countAccountAccessRecords = () => Number(get('SELECT COUNT(*) AS total FROM account_access')?.total || 0);
+const loadAccountAccessRecords = () => all('SELECT * FROM account_access ORDER BY employee_id').map(mapAccountAccessRow);
+const getAccountAccessRecord = (employeeId) => {
+    const row = get('SELECT * FROM account_access WHERE employee_id = ?', String(employeeId || '').trim());
+    return row ? mapAccountAccessRow(row) : null;
+};
+
+const saveAccountAccessRecords = (records = []) => {
+    const insert = db.prepare(`
+        INSERT OR REPLACE INTO account_access (
+            employee_id, allowed_roles, admin_preset, admin_permissions, updated_at, updated_by
+        ) VALUES (
+            @employee_id, @allowed_roles, @admin_preset, @admin_permissions, @updated_at, @updated_by
+        )
+    `);
+    const normalizedRecords = (Array.isArray(records) ? records : [])
+        .map(normalizeAccountAccessForStorage)
+        .filter((record) => record.employee_id);
+    db.transaction(() => {
+        run('DELETE FROM account_access');
+        for (const record of normalizedRecords) insert.run(record);
+    })();
+};
+
+const saveAccountAccessRecord = (record = {}) => {
+    const normalized = normalizeAccountAccessForStorage(record);
+    if (!normalized.employee_id) return;
+    run(
+        `INSERT OR REPLACE INTO account_access (
+            employee_id, allowed_roles, admin_preset, admin_permissions, updated_at, updated_by
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+        normalized.employee_id,
+        normalized.allowed_roles,
+        normalized.admin_preset,
+        normalized.admin_permissions,
+        normalized.updated_at,
+        normalized.updated_by
+    );
+};
+
+const deleteAccountAccessByEmployee = (employeeId) => run(
+    'DELETE FROM account_access WHERE employee_id = ?',
+    String(employeeId || '').trim()
+);
+
 function mapEmployeeDeviceRow(row) {
     return {
         ...row,
@@ -1055,6 +1148,8 @@ module.exports = {
   addBellHistory, hasBellHistorySince, loadBellHistory, clearBellHistory,
   saveCustomSounds, loadCustomSounds,
   setSetting, getSetting,
+  countAccountAccessRecords, loadAccountAccessRecords, getAccountAccessRecord,
+  saveAccountAccessRecords, saveAccountAccessRecord, deleteAccountAccessByEmployee,
   loadEmployeeDevices, getEmployeeDevice, saveEmployeeDevice,
   deleteEmployeeDevice, deleteEmployeeDevicesByEmployee,
   saveSpecialEffects, loadSpecialEffects,

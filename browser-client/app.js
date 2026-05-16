@@ -8505,6 +8505,321 @@ handleRealtimeSyncMessage = async function handleRealtimeSyncMessageLeaveOverrid
     return originalHandleRealtimeSyncMessageWithLeave(payload);
 };
 
+function getAdminPermissionSet(dashboard = state.dashboard) {
+    return new Set(dashboard?.permissions?.admin || []);
+}
+
+function adminHasAnyPermission(permissionCodes = [], dashboard = state.dashboard) {
+    const permissionSet = getAdminPermissionSet(dashboard);
+    return permissionCodes.some((code) => permissionSet.has(code));
+}
+
+function getAdminDashboardSections(dashboard = state.dashboard) {
+    const sections = Array.isArray(dashboard?.permissions?.sections) ? dashboard.permissions.sections : [];
+    if (sections.length) return sections;
+    if (dashboard?.permissions) return [];
+    return [
+        { id: "people", label: "人員資料" },
+        { id: "security", label: "安全設定" },
+        { id: "shifts", label: "班別設定" },
+        { id: "manualPunch", label: "手動補登" },
+        { id: "reports", label: "考勤報表" },
+        { id: "leave", label: "請假管理" },
+        { id: "system", label: "系統設定" },
+        { id: "bells", label: "響鈴設定" },
+        { id: "themes", label: "主題特效" }
+    ];
+}
+
+function renderAdminPermissionAwareContent(sectionId, datasets) {
+    if (sectionId === "people") return renderAdminPeopleSection(datasets);
+    if (sectionId === "security") return renderAdminSecuritySection(datasets);
+    if (sectionId === "shifts") return renderAdminShiftSection(datasets);
+    if (sectionId === "manualPunch") return renderAdminManualPunchSection(datasets);
+    if (sectionId === "reports") return renderAdminReportSection(datasets);
+    if (sectionId === "leave") return renderAdminLeaveSection(datasets);
+    if (sectionId === "system") return renderAdminSystemSection(datasets);
+    if (sectionId === "bells") return renderAdminBellSection(datasets);
+    if (sectionId === "themes") return renderAdminThemeSection(datasets);
+    return renderEmptyState("這個管理者帳號目前沒有可使用的管理頁面。");
+}
+
+function getAccountAccessDataset(datasets = getDatasets()) {
+    return datasets?.accountAccess || null;
+}
+
+function getAccountAccessCatalog(accountAccess = getAccountAccessDataset()) {
+    return accountAccess?.catalog || {
+        roles: [],
+        adminSections: [],
+        adminPermissions: [],
+        adminPresets: []
+    };
+}
+
+function getAccountAccessPresetPermissions(presetId, accountAccess = getAccountAccessDataset()) {
+    const preset = (getAccountAccessCatalog(accountAccess).adminPresets || [])
+        .find((item) => item.id === presetId);
+    return new Set(preset?.permissions || []);
+}
+
+function renderAccountRoleControls(account) {
+    const allowedRoles = new Set(account?.access?.allowed_roles || ["employee"]);
+    return `
+        <div class="field-grid three dense-field-grid">
+            <label class="switch-line"><input type="checkbox" data-access-role value="employee" checked disabled> 員工</label>
+            <label class="switch-line"><input type="checkbox" data-access-role value="admin" ${allowedRoles.has("admin") ? "checked" : ""}> 管理者</label>
+            <label class="switch-line"><input type="checkbox" data-access-role value="developer" ${allowedRoles.has("developer") ? "checked" : ""}> 開發人員</label>
+        </div>
+    `;
+}
+
+function renderAccountPresetOptions(account, presets = []) {
+    const currentPreset = account?.access?.admin_preset || "none";
+    return presets.map((preset) => `
+        <option value="${escapeHtml(preset.id)}" ${preset.id === currentPreset ? "selected" : ""}>
+            ${escapeHtml(preset.label)}
+        </option>
+    `).join("");
+}
+
+function renderAccountPermissionGroups(account, permissions = []) {
+    const selectedPermissions = new Set(account?.access?.admin_permissions || []);
+    const groups = permissions.reduce((result, permission) => {
+        const category = permission.category || "其他";
+        if (!result.has(category)) result.set(category, []);
+        result.get(category).push(permission);
+        return result;
+    }, new Map());
+
+    return [...groups.entries()].map(([category, items]) => `
+        <div class="account-permission-group">
+            <p class="sub-kicker">${escapeHtml(category)}</p>
+            <div class="employee-column-grid">
+                ${items.map((permission) => `
+                    <label class="employee-column-option">
+                        <input type="checkbox" data-access-permission value="${escapeHtml(permission.code)}" ${selectedPermissions.has(permission.code) ? "checked" : ""}>
+                        <span>${escapeHtml(permission.label)}${permission.highRisk ? "（高風險）" : ""}</span>
+                    </label>
+                `).join("")}
+            </div>
+        </div>
+    `).join("");
+}
+
+function renderAccountAccessManager(accountAccess = getAccountAccessDataset()) {
+    if (!accountAccess?.canManage) return "";
+    const catalog = getAccountAccessCatalog(accountAccess);
+    const accounts = Array.isArray(accountAccess.accounts) ? accountAccess.accounts : [];
+    if (!accounts.length) return renderEmptyState("目前沒有可設定權限的員工帳號。");
+
+    return `
+        <article class="table-card account-access-card">
+            <div class="list-toolbar">
+                <div>
+                    <p class="sub-kicker">帳號管理</p>
+                    <h3>帳號權限管理</h3>
+                    <p class="helper-text">設定每位員工可登入的頁面角色，並限制管理者能使用的管理功能。</p>
+                </div>
+                <div class="badge-row">
+                    ${renderBadge(accountAccess.initialized ? "已啟用自訂權限" : "沿用舊版登入規則", accountAccess.initialized ? "success" : "warning")}
+                    ${renderBadge(`帳號 ${accounts.length} 筆`)}
+                </div>
+            </div>
+            <form id="account-access-form" class="stack-form">
+                <div class="record-list">
+                    ${accounts.map((account) => {
+                        const employee = account.employee || {};
+                        return `
+                            <div class="list-item account-access-row" data-account-access-row data-employee-id="${escapeHtml(employee.id || "")}">
+                                <div class="list-item-top">
+                                    <span>${escapeHtml(employee.id || "-")} / ${escapeHtml(employee.name || "-")}</span>
+                                    <div class="badge-row">
+                                        ${renderBadge(employee.department || "未設定部門")}
+                                        ${account.access?.source === "legacy_default" ? renderBadge("舊版預設", "warning") : ""}
+                                    </div>
+                                </div>
+                                ${renderAccountRoleControls(account)}
+                                <label class="field">
+                                    <span>管理者權限模板</span>
+                                    <select data-access-preset>
+                                        ${renderAccountPresetOptions(account, catalog.adminPresets || [])}
+                                    </select>
+                                </label>
+                                ${renderAccountPermissionGroups(account, catalog.adminPermissions || [])}
+                            </div>
+                        `;
+                    }).join("")}
+                </div>
+                <div class="form-toolbar">
+                    <button class="primary-btn" type="submit">儲存帳號權限</button>
+                </div>
+                <div class="inline-message" data-form-message-for="account-access-form" aria-live="polite"></div>
+            </form>
+        </article>
+    `;
+}
+
+function insertAccountAccessManager(html, datasets) {
+    const accountAccess = getAccountAccessDataset(datasets);
+    if (!accountAccess?.canManage) return html;
+    const manager = renderAccountAccessManager(accountAccess);
+    const closingIndex = String(html || "").lastIndexOf("</div>");
+    if (closingIndex === -1) return `${html}${manager}`;
+    return `${html.slice(0, closingIndex)}${manager}${html.slice(closingIndex)}`;
+}
+
+const originalRenderAdminSecuritySectionWithAccountAccess = renderAdminSecuritySection;
+renderAdminSecuritySection = function renderAdminSecuritySectionAccountAccessOverride(datasets = {}) {
+    const baseHtml = datasets.security
+        ? originalRenderAdminSecuritySectionWithAccountAccess(datasets)
+        : `<div class="workspace-stack"></div>`;
+    return insertAccountAccessManager(baseHtml, datasets);
+};
+
+const originalRenderDeveloperSystemSettingsSectionWithAccountAccess = renderDeveloperSystemSettingsSection;
+renderDeveloperSystemSettingsSection = function renderDeveloperSystemSettingsSectionAccountAccessOverride(datasets = {}) {
+    return insertAccountAccessManager(originalRenderDeveloperSystemSettingsSectionWithAccountAccess(datasets), datasets);
+};
+
+renderAdminDashboard = function renderAdminDashboardPermissionAware(dashboard) {
+    const sections = getAdminDashboardSections(dashboard);
+    if (!sections.some((section) => section.id === state.activeSections.admin)) {
+        state.activeSections.admin = sections[0]?.id || "";
+    }
+    const activeSection = state.activeSections.admin;
+    const content = sections.length
+        ? renderAdminPermissionAwareContent(activeSection, dashboard.datasets)
+        : renderEmptyState("這個管理者帳號目前沒有可使用的管理頁面，請聯絡完整管理者或開發人員調整權限。");
+    const statModel = buildAdminDashboardStatModel(dashboard);
+
+    return `
+        <div class="workspace-shell">
+            ${renderStatsGrid(statModel.summary, {
+                employeeCount: "員工數量",
+                shiftCount: "班別數量",
+                todayPunchCount: "今日正常打卡",
+                todayAbnormalPunchCount: "今日異常打卡",
+                bellScheduleCount: "響鈴排程",
+                greetingCount: "問候語",
+                customThemeCount: "自訂主題"
+            }, {
+                clickableKeys: statModel.clickableKeys,
+                subtitles: statModel.subtitles
+            })}
+            ${renderSectionTabs("admin", sections)}
+            ${content}
+        </div>
+    `;
+};
+
+function syncAccountAccessRow(row) {
+    if (!row) return;
+    const adminToggle = row.querySelector('[data-access-role][value="admin"]');
+    const presetSelect = row.querySelector("[data-access-preset]");
+    const permissionCheckboxes = Array.from(row.querySelectorAll("[data-access-permission]"));
+    const adminEnabled = Boolean(adminToggle?.checked);
+    const presetId = adminEnabled ? (presetSelect?.value || "none") : "none";
+    const presetPermissions = getAccountAccessPresetPermissions(presetId);
+    if (presetSelect) presetSelect.disabled = !adminEnabled;
+
+    permissionCheckboxes.forEach((checkbox) => {
+        if (!adminEnabled) {
+            checkbox.checked = false;
+            checkbox.disabled = true;
+            return;
+        }
+        if (presetId !== "custom") {
+            checkbox.checked = presetPermissions.has(checkbox.value);
+            checkbox.disabled = true;
+            return;
+        }
+        checkbox.disabled = false;
+    });
+}
+
+function syncAccountAccessForm() {
+    document.querySelectorAll("[data-account-access-row]").forEach(syncAccountAccessRow);
+}
+
+const originalPostRenderSetupWithAccountAccess = postRenderSetup;
+postRenderSetup = function postRenderSetupAccountAccessOverride() {
+    originalPostRenderSetupWithAccountAccess();
+    syncAccountAccessForm();
+};
+
+function collectAccountAccessForm(form) {
+    return Array.from(form.querySelectorAll("[data-account-access-row]")).map((row) => ({
+        employee_id: row.dataset.employeeId || "",
+        allowed_roles: Array.from(row.querySelectorAll("[data-access-role]:checked")).map((input) => input.value),
+        admin_preset: row.querySelector("[data-access-preset]")?.value || "none",
+        admin_permissions: Array.from(row.querySelectorAll("[data-access-permission]:checked")).map((input) => input.value)
+    }));
+}
+
+const originalHandleDashboardChangeWithAccountAccess = handleDashboardChange;
+handleDashboardChange = async function handleDashboardChangeAccountAccessOverride(event) {
+    const row = event.target?.closest?.("[data-account-access-row]");
+    if (row && (event.target.matches("[data-access-role]") || event.target.matches("[data-access-preset]"))) {
+        syncAccountAccessRow(row);
+        return;
+    }
+    return originalHandleDashboardChangeWithAccountAccess(event);
+};
+
+SAVE_FEEDBACK_FORM_IDS.add("account-access-form");
+
+const originalHandleDashboardSubmitWithAccountAccess = handleDashboardSubmit;
+handleDashboardSubmit = async function handleDashboardSubmitAccountAccessOverride(event) {
+    const form = event.target instanceof HTMLFormElement
+        ? event.target
+        : event.target?.closest?.("form");
+    const formId = form?.getAttribute?.("id") || "";
+
+    if (formId !== "account-access-form") {
+        return originalHandleDashboardSubmitWithAccountAccess(event);
+    }
+
+    event.preventDefault();
+    if (!form) return;
+    setFormMessage(formId, "");
+
+    try {
+        const result = await requestJson("/api/browser/admin/account-access/save", {
+            method: "POST",
+            auth: true,
+            body: { accounts: collectAccountAccessForm(form) }
+        });
+        if (result.dashboard) {
+            renderDashboard(result.dashboard);
+        } else {
+            await reloadDashboard(result.message || "帳號權限設定已更新。");
+        }
+        setMessage(ui.dashboardMessage, result.message || "帳號權限設定已更新。", "success");
+        setFormMessage(formId, result.message || "帳號權限設定已更新。", "success");
+    } catch (error) {
+        setMessage(ui.dashboardMessage, error.message, "error");
+        setFormMessage(formId, error.message, "error");
+    }
+};
+
+const originalGetRealtimeSyncLabelWithAccountAccess = getRealtimeSyncLabel;
+getRealtimeSyncLabel = function getRealtimeSyncLabelAccountAccessOverride(type) {
+    if (type === "accountAccess") return "帳號權限設定";
+    return originalGetRealtimeSyncLabelWithAccountAccess(type);
+};
+
+const originalHandleRealtimeSyncMessageWithAccountAccess = handleRealtimeSyncMessage;
+handleRealtimeSyncMessage = async function handleRealtimeSyncMessageAccountAccessOverride(payload) {
+    const type = payload?.type;
+    const role = state.dashboard?.role;
+    if (type === "accountAccess" && ["admin", "developer"].includes(role)) {
+        await reloadDashboard("帳號權限設定已更新。", "info");
+        return;
+    }
+    return originalHandleRealtimeSyncMessageWithAccountAccess(payload);
+};
+
 function initialize() {
     ui.roleSelector.addEventListener("click", (event) => {
         const button = event.target.closest("[data-role]");
