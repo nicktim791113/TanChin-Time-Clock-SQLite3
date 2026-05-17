@@ -17,6 +17,10 @@ const {
 const PORT = 3000;
 const DEFAULT_ADMIN_PASSWORD = 'TC5128';
 const DEFAULT_SYSTEM_PASSWORD = '0000';
+const DEFAULT_SYSTEM_ADMIN_USERNAME = 'system-admin';
+const DEFAULT_SYSTEM_ADMIN_PASSWORD = 'TC-SYS-0000';
+const SYSTEM_ADMIN_ROLE = 'system_admin';
+const SYSTEM_ADMIN_SESSION_ID = '__system_admin__';
 const DEFAULT_BROWSER_HERO_DESCRIPTION = '透過瀏覽器快速查看打卡資料、管理設定與系統狀態。';
 const DEFAULT_MAIN_TITLE = '震欣科技AI作息系統';
 const DEFAULT_SUBTITLE = '您的 AI 智慧好夥伴';
@@ -26,7 +30,8 @@ const DEFAULT_BROWSER_SECURITY_SETTINGS = {
   maxGpsAccuracyMeters: 300
 };
 const BROWSER_CLIENT_DIR = path.join(__dirname, 'browser-client');
-const BROWSER_ROLES = ['employee', 'admin', 'developer'];
+const ACCOUNT_ASSIGNABLE_ROLES = ['employee', 'admin', 'developer'];
+const BROWSER_ROLES = [...ACCOUNT_ASSIGNABLE_ROLES, SYSTEM_ADMIN_ROLE];
 const ADMIN_PERMISSION_DEFINITIONS = [
   { code: 'admin.people.view', category: '人員資料', label: '查看人員資料', section: 'people' },
   { code: 'admin.people.edit', category: '人員資料', label: '新增與編輯人員', section: 'people' },
@@ -237,6 +242,9 @@ API_ROUTE_CATALOG.push(
 API_ROUTE_CATALOG.push(
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/account-access/save', auth: '開發人員或帳號權限管理', description: '儲存帳號可登入角色與管理者功能權限' }
 );
+API_ROUTE_CATALOG.push(
+  { category: '系統管理者 API', method: 'POST', path: '/api/browser/system-admin/credentials/save', auth: '系統管理者', description: '更新網頁端系統管理者帳號與密碼' }
+);
 
 function ensureDirectory(directoryPath) {
   if (!fs.existsSync(directoryPath)) {
@@ -315,6 +323,27 @@ function getSettingValue(key, fallbackValue) {
   return value === null || value === undefined || value === '' ? fallbackValue : value;
 }
 
+function getSystemAdminCredentials() {
+  const username = String(getSettingValue('systemAdminUsername', DEFAULT_SYSTEM_ADMIN_USERNAME) || '').trim()
+    || DEFAULT_SYSTEM_ADMIN_USERNAME;
+  const password = String(getSettingValue('systemAdminPassword', DEFAULT_SYSTEM_ADMIN_PASSWORD) || '').trim()
+    || DEFAULT_SYSTEM_ADMIN_PASSWORD;
+  return { username, password };
+}
+
+function isSystemAdminSession(session = {}) {
+  return (session.realRole || session.role) === SYSTEM_ADMIN_ROLE;
+}
+
+function buildSystemAdminProfile() {
+  return {
+    id: getSystemAdminCredentials().username,
+    name: '系統管理者',
+    department: '網頁端',
+    job_title: '帳號權限管理'
+  };
+}
+
 function normalizeStringList(values = []) {
   return [...new Set((Array.isArray(values) ? values : [])
     .map((value) => String(value || '').trim())
@@ -322,9 +351,9 @@ function normalizeStringList(values = []) {
 }
 
 function normalizeAllowedRoles(values = []) {
-  const roleSet = new Set(normalizeStringList(values).filter((role) => BROWSER_ROLES.includes(role)));
+  const roleSet = new Set(normalizeStringList(values).filter((role) => ACCOUNT_ASSIGNABLE_ROLES.includes(role)));
   roleSet.add('employee');
-  return BROWSER_ROLES.filter((role) => roleSet.has(role));
+  return ACCOUNT_ASSIGNABLE_ROLES.filter((role) => roleSet.has(role));
 }
 
 function normalizeAdminPermissionCodes(values = []) {
@@ -375,18 +404,6 @@ function hasExplicitAccountAccessRules() {
   return dbModule.countAccountAccessRecords() > 0;
 }
 
-function getLegacyDefaultAccountAccess(employeeId) {
-  return {
-    employee_id: String(employeeId || '').trim(),
-    allowed_roles: ['employee', 'admin', 'developer'],
-    admin_preset: 'full_admin',
-    admin_permissions: FULL_ADMIN_PERMISSION_CODES,
-    updated_at: 0,
-    updated_by: '',
-    source: 'legacy_default'
-  };
-}
-
 function getEmployeeDefaultAccountAccess(employeeId) {
   return {
     employee_id: String(employeeId || '').trim(),
@@ -408,9 +425,7 @@ function getAccountAccessForEmployee(employeeId) {
       source: 'explicit'
     };
   }
-  return hasExplicitAccountAccessRules()
-    ? getEmployeeDefaultAccountAccess(normalizedEmployeeId)
-    : getLegacyDefaultAccountAccess(normalizedEmployeeId);
+  return getEmployeeDefaultAccountAccess(normalizedEmployeeId);
 }
 
 function canEmployeeLoginAsRole(employeeId, role) {
@@ -419,6 +434,9 @@ function canEmployeeLoginAsRole(employeeId, role) {
 }
 
 function getAdminPermissionsForSession(session = {}) {
+  if (isSystemAdminSession(session)) {
+    return FULL_ADMIN_PERMISSION_CODES;
+  }
   if (session?.impersonation?.active && (session.realRole || session.role) === 'developer') {
     return FULL_ADMIN_PERMISSION_CODES;
   }
@@ -479,22 +497,10 @@ function validateAccountAccessSave(records, request) {
     });
   });
 
-  const fullAdminCount = completeRecords.filter((record) =>
-    record.allowed_roles.includes('admin') &&
-    FULL_ADMIN_PERMISSION_CODES.every((code) => record.admin_permissions.includes(code))
-  ).length;
-  const developerCount = completeRecords.filter((record) => record.allowed_roles.includes('developer')).length;
-  if (!fullAdminCount) {
-    throw createHttpError('至少需要保留一位完整管理者，避免之後無法再調整帳號權限。', 400);
-  }
-  if (!developerCount) {
-    throw createHttpError('至少需要保留一位開發人員，避免系統救援入口消失。', 400);
-  }
-
   const session = request.browserSession || {};
   const actorId = session.realEmployeeId || session.employeeId || '';
   const actorRecord = completeRecords.find((record) => record.employee_id === actorId);
-  if ((session.realRole || session.role) !== 'developer') {
+  if (!['developer', SYSTEM_ADMIN_ROLE].includes(session.realRole || session.role)) {
     const keepsOwnAccess = actorRecord &&
       actorRecord.allowed_roles.includes('admin') &&
       actorRecord.admin_permissions.includes('admin.accounts.manage');
@@ -1706,6 +1712,39 @@ function buildDeveloperDashboard(employee) {
   };
 }
 
+function buildSystemAdminDashboard() {
+  const employees = dbModule.loadEmployees();
+  const accountAccess = buildAccountAccessState(employees);
+  const accounts = accountAccess.accounts || [];
+  const credentials = getSystemAdminCredentials();
+
+  return {
+    role: SYSTEM_ADMIN_ROLE,
+    user: {
+      ...buildSystemAdminProfile(),
+      id: credentials.username
+    },
+    displaySettings: getBrowserDisplaySettings(),
+    permissions: {
+      admin: FULL_ADMIN_PERMISSION_CODES,
+      sections: [{ id: 'security', label: '帳號權限管理', permissions: ['admin.accounts.manage'] }]
+    },
+    permissionCatalog: buildPermissionCatalog(),
+    summary: {
+      employeeCount: accounts.length,
+      adminAccountCount: accounts.filter((account) => account.access?.allowed_roles?.includes('admin')).length,
+      developerAccountCount: accounts.filter((account) => account.access?.allowed_roles?.includes('developer')).length,
+      customAccessCount: accounts.filter((account) => account.access?.source === 'explicit').length
+    },
+    datasets: {
+      systemAdminAccount: {
+        username: credentials.username
+      },
+      accountAccess
+    }
+  };
+}
+
 function appendImpersonationState(dashboard, session) {
   if (!dashboard || !session?.impersonation?.active) return dashboard;
   return {
@@ -1724,6 +1763,10 @@ function appendImpersonationState(dashboard, session) {
 }
 
 function buildDashboardForSession(session) {
+  if (isSystemAdminSession(session)) {
+    return buildSystemAdminDashboard(session);
+  }
+
   const employee = getEmployeeById(session.employeeId);
   if (!employee) {
     const employeeMissingError = new Error('登入帳號對應的員工資料已不存在，請重新登入。');
@@ -2054,6 +2097,11 @@ function requireBrowserSession(request, response, next) {
     response.status(401).json({ success: false, error: withSupportCode('P230', '請先登入瀏覽器入口後再操作。') });
     return;
   }
+  if (isSystemAdminSession(session)) {
+    request.browserSession = session;
+    next();
+    return;
+  }
   if (session.impersonation?.active && (session.realRole || session.role) === 'developer') {
     if (!canEmployeeLoginAsRole(session.realEmployeeId || session.employeeId, 'developer')) {
       browserSessions.delete(session.token);
@@ -2099,6 +2147,10 @@ function requireAccountAccessManagement(request, response, next) {
   const session = request.browserSession;
   if (!session) {
     response.status(401).json({ success: false, error: withSupportCode('P230', '請先登入瀏覽器入口後再操作。') });
+    return;
+  }
+  if (isSystemAdminSession(session)) {
+    next();
     return;
   }
   if ((session.realRole || session.role) === 'developer') {
@@ -2989,7 +3041,59 @@ function attachBrowserRoutes(server) {
         return;
       }
       if (!normalizedEmployeeId || !normalizedSecret) {
-        response.status(400).json({ success: false, error: withSupportCode('L101', '請輸入工號與卡號或密碼資訊。') });
+        const missingCredentialMessage = normalizedRole === SYSTEM_ADMIN_ROLE
+          ? '請輸入系統管理者帳號與密碼。'
+          : '請輸入工號與卡號或密碼資訊。';
+        response.status(400).json({ success: false, error: withSupportCode('L101', missingCredentialMessage) });
+        return;
+      }
+
+      if (normalizedRole === SYSTEM_ADMIN_ROLE) {
+        const credentials = getSystemAdminCredentials();
+        if (normalizedEmployeeId !== credentials.username || normalizedSecret !== credentials.password) {
+          response.status(401).json({ success: false, error: withSupportCode('L105', '系統管理者帳號或密碼不正確。') });
+          return;
+        }
+
+        const token = createBrowserSession(SYSTEM_ADMIN_ROLE, SYSTEM_ADMIN_SESSION_ID, {
+          realRole: SYSTEM_ADMIN_ROLE,
+          realEmployeeId: SYSTEM_ADMIN_SESSION_ID,
+          realEmployeeName: '系統管理者',
+          deviceId: normalizedDeviceInfo.deviceId || null,
+          deviceName: normalizedDeviceInfo.deviceName || null,
+          devicePlatform: normalizedDeviceInfo.platform || null,
+          deviceBrowserName: normalizedDeviceInfo.browserName || null,
+          ipAddress: getRequestIpAddress(request),
+          userAgent: request.headers['user-agent'] || null
+        });
+        writeAuditLog({
+          actor_id: SYSTEM_ADMIN_SESSION_ID,
+          actor_name: '系統管理者',
+          role: SYSTEM_ADMIN_ROLE,
+          channel: 'browser',
+          action: 'login',
+          target_type: 'session',
+          target_id: SYSTEM_ADMIN_SESSION_ID,
+          summary: '網頁端系統管理者登入。',
+          after_data: {
+            role: SYSTEM_ADMIN_ROLE,
+            username: credentials.username
+          },
+          success: true,
+          ip_address: getRequestIpAddress(request),
+          session_token_suffix: getSessionTokenSuffix(token)
+        });
+        response.json({
+          success: true,
+          token,
+          dashboard: buildDashboardForSession(browserSessions.get(token)),
+          deviceBinding: {
+            enabled: false,
+            newlyBound: false,
+            deviceName: normalizedDeviceInfo.deviceName || '',
+            issuedDeviceToken: ''
+          }
+        });
         return;
       }
 
@@ -3513,6 +3617,65 @@ function attachBrowserRoutes(server) {
       response.json({
         success: true,
         message: '帳號權限設定已更新。',
+        dashboard: buildDashboardForSession(request.browserSession)
+      });
+    } catch (error) {
+      response.status(error.statusCode || 400).json({ success: false, error: error.message });
+    }
+  });
+
+  server.post('/api/browser/system-admin/credentials/save', requireBrowserSession, requireBrowserRole(SYSTEM_ADMIN_ROLE), (request, response) => {
+    try {
+      const current = getSystemAdminCredentials();
+      const currentPassword = String(request.body?.currentPassword || '').trim();
+      const username = String(request.body?.username || '').trim();
+      const newPassword = String(request.body?.newPassword || '').trim();
+      const confirmPassword = String(request.body?.confirmPassword || '').trim();
+
+      if (currentPassword !== current.password) {
+        throw createHttpError('目前系統管理者密碼不正確。', 401);
+      }
+      if (!username) {
+        throw createHttpError('系統管理者帳號不可空白。', 400);
+      }
+      if (newPassword || confirmPassword) {
+        if (newPassword.length < 6) {
+          throw createHttpError('新的系統管理者密碼至少需要 6 個字元。', 400);
+        }
+        if (newPassword !== confirmPassword) {
+          throw createHttpError('新密碼與確認密碼不一致。', 400);
+        }
+      }
+
+      dbModule.setSetting('systemAdminUsername', username);
+      if (newPassword) {
+        dbModule.setSetting('systemAdminPassword', newPassword);
+      }
+
+      writeAuditLog({
+        actor_id: SYSTEM_ADMIN_SESSION_ID,
+        actor_name: '系統管理者',
+        role: SYSTEM_ADMIN_ROLE,
+        channel: 'browser',
+        action: 'update',
+        target_type: 'system_admin_account',
+        target_id: username,
+        summary: '更新網頁端系統管理者帳號。',
+        before_data: {
+          username: current.username
+        },
+        after_data: {
+          username,
+          password_changed: Boolean(newPassword)
+        },
+        success: true,
+        ip_address: getRequestIpAddress(request),
+        session_token_suffix: getSessionTokenSuffix(request.browserSession.token)
+      });
+
+      response.json({
+        success: true,
+        message: '系統管理者帳號設定已更新。',
         dashboard: buildDashboardForSession(request.browserSession)
       });
     } catch (error) {

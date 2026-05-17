@@ -47,13 +47,14 @@
                     <button type="button" class="role-chip active" data-role="employee">員工</button>
                     <button type="button" class="role-chip" data-role="admin">管理者</button>
                     <button type="button" class="role-chip" data-role="developer">開發人員</button>
+                    <button type="button" class="role-chip" data-role="system_admin">系統管理者</button>
                 </div>
 
                 <div class="role-help" id="role-help"></div>
 
                 <form id="login-form" class="login-form">
                     <label class="field">
-                        <span>員工編號</span>
+                        <span id="employee-id-label">員工編號</span>
                         <input id="employee-id-input" name="employeeId" type="text" autocomplete="username" placeholder="輸入員工編號" required>
                     </label>
 

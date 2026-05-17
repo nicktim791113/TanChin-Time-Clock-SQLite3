@@ -1,21 +1,35 @@
 const roleConfig = {
     employee: {
         title: "員工登入",
+        accountLabel: "員工編號",
+        accountPlaceholder: "輸入員工編號",
         secretLabel: "卡號",
         secretPlaceholder: "請輸入卡號",
         help: "員工使用工號與卡號登入，登入後可看到個人資訊、目前班別與近 7 日打卡紀錄。"
     },
     admin: {
         title: "管理者登入",
+        accountLabel: "員工編號",
+        accountPlaceholder: "輸入員工編號",
         secretLabel: "管理者密碼",
         secretPlaceholder: "請輸入管理者密碼",
         help: "管理者使用工號與管理者密碼登入，登入後可管理員工、班別、問候語、響鈴、主題與資料設定。"
     },
     developer: {
         title: "開發人員登入",
+        accountLabel: "員工編號",
+        accountPlaceholder: "輸入員工編號",
         secretLabel: "系統密碼",
         secretPlaceholder: "請輸入系統密碼",
         help: "開發人員使用工號與系統密碼登入，登入後可管理 AI 系統控制、自動化任務與系統密碼。"
+    },
+    system_admin: {
+        title: "系統管理者登入",
+        accountLabel: "系統管理者帳號",
+        accountPlaceholder: "system-admin",
+        secretLabel: "系統管理者密碼",
+        secretPlaceholder: "請輸入系統管理者密碼",
+        help: "系統管理者使用獨立網頁端帳號登入，只負責設定員工可使用的網頁角色與管理者功能。"
     }
 };
 
@@ -80,6 +94,7 @@ const auditRoleLabels = {
     employee: "員工",
     admin: "管理者",
     developer: "開發人員",
+    system_admin: "系統管理者",
     desktop: "桌面端",
     system: "系統"
 };
@@ -441,6 +456,7 @@ const ui = {
     heroDescriptionForm: document.getElementById("hero-description-form"),
     heroDescriptionInput: document.getElementById("hero-description-input"),
     heroDescriptionCancelBtn: document.getElementById("hero-description-cancel-btn"),
+    employeeIdLabel: document.getElementById("employee-id-label"),
     employeeIdInput: document.getElementById("employee-id-input"),
     secretLabel: document.getElementById("secret-label"),
     secretInput: document.getElementById("secret-input"),
@@ -894,7 +910,7 @@ function renderSuggestionList(items = []) {
 
 function syncDashboardHelpButton(dashboard = state.dashboard) {
     if (!ui.dashboardHelpBtn) return;
-    const canShow = ["admin", "developer"].includes(dashboard?.role) && Array.isArray(dashboard.suggestions) && dashboard.suggestions.length > 0;
+    const canShow = ["admin", "developer", "system_admin"].includes(dashboard?.role) && Array.isArray(dashboard.suggestions) && dashboard.suggestions.length > 0;
     ui.dashboardHelpBtn.classList.toggle("hidden", !canShow);
 }
 
@@ -905,7 +921,7 @@ function syncDashboardIdentityPill(dashboard = state.dashboard) {
         ui.dashboardIdentityPill.classList.add("hidden");
         return;
     }
-    const roleLabel = dashboard.role === "employee" ? "員工" : dashboard.role === "admin" ? "管理者" : "開發人員";
+    const roleLabel = auditRoleLabels[dashboard.role] || dashboard.role || "";
     const userLabel = dashboard.user?.name || dashboard.user?.id || "";
     ui.dashboardIdentityPill.textContent = `${roleLabel}：${userLabel}`;
     ui.dashboardIdentityPill.classList.remove("hidden");
@@ -2662,14 +2678,18 @@ function renderDashboard(dashboard) {
         ? "開發者工作台"
         : dashboard.role === "admin"
             ? "管理者工作台"
-            : "員工工作台";
+            : dashboard.role === "system_admin"
+                ? "系統管理者工作台"
+                : "員工工作台";
     syncDashboardIdentityPill(dashboard);
     syncDashboardHelpButton(dashboard);
     ui.dashboardContent.innerHTML = dashboard.role === "employee"
         ? renderEmployeeDashboard(dashboard)
         : dashboard.role === "admin"
             ? renderAdminDashboard(dashboard)
-            : renderDeveloperDashboard(dashboard);
+            : dashboard.role === "system_admin"
+                ? renderSystemAdminDashboard(dashboard)
+                : renderDeveloperDashboard(dashboard);
 
     if (dashboard.role === "employee") startClock();
     else stopClock();
@@ -2678,11 +2698,13 @@ function renderDashboard(dashboard) {
 }
 
 function setActiveRole(role) {
-    state.activeRole = role;
-    const config = roleConfig[role];
+    state.activeRole = roleConfig[role] ? role : "employee";
+    const config = roleConfig[state.activeRole];
     ui.roleSelector.querySelectorAll(".role-chip").forEach((button) => {
-        button.classList.toggle("active", button.dataset.role === role);
+        button.classList.toggle("active", button.dataset.role === state.activeRole);
     });
+    if (ui.employeeIdLabel) ui.employeeIdLabel.textContent = config.accountLabel || "員工編號";
+    ui.employeeIdInput.placeholder = config.accountPlaceholder || "輸入員工編號";
     ui.secretLabel.textContent = config.secretLabel;
     ui.secretInput.placeholder = config.secretPlaceholder;
     ui.roleHelp.textContent = config.help;
@@ -8622,7 +8644,7 @@ function renderAccountAccessManager(accountAccess = getAccountAccessDataset()) {
                     <p class="helper-text">設定每位員工可登入的頁面角色，並限制管理者能使用的管理功能。</p>
                 </div>
                 <div class="badge-row">
-                    ${renderBadge(accountAccess.initialized ? "已啟用自訂權限" : "沿用舊版登入規則", accountAccess.initialized ? "success" : "warning")}
+                    ${renderBadge(accountAccess.initialized ? "已啟用自訂權限" : "預設員工權限", accountAccess.initialized ? "success" : "warning")}
                     ${renderBadge(`帳號 ${accounts.length} 筆`)}
                 </div>
             </div>
@@ -8636,7 +8658,8 @@ function renderAccountAccessManager(accountAccess = getAccountAccessDataset()) {
                                     <span>${escapeHtml(employee.id || "-")} / ${escapeHtml(employee.name || "-")}</span>
                                     <div class="badge-row">
                                         ${renderBadge(employee.department || "未設定部門")}
-                                        ${account.access?.source === "legacy_default" ? renderBadge("舊版預設", "warning") : ""}
+                                        ${account.access?.source === "default" ? renderBadge("預設員工", "warning") : ""}
+                                        ${account.access?.source === "explicit" ? renderBadge("已自訂", "success") : ""}
                                     </div>
                                 </div>
                                 ${renderAccountRoleControls(account)}
@@ -8657,6 +8680,62 @@ function renderAccountAccessManager(accountAccess = getAccountAccessDataset()) {
                 <div class="inline-message" data-form-message-for="account-access-form" aria-live="polite"></div>
             </form>
         </article>
+    `;
+}
+
+function renderSystemAdminCredentialsPanel(dashboard) {
+    const account = dashboard?.datasets?.systemAdminAccount || {};
+    return `
+        <article class="info-card system-admin-account-card">
+            <div class="list-toolbar">
+                <div>
+                    <p class="sub-kicker">系統管理者</p>
+                    <h3>登入帳號</h3>
+                    <p class="helper-text">此帳號只用於網頁端帳號權限管理，不綁定員工資料。</p>
+                </div>
+                <div class="badge-row">
+                    ${renderBadge(account.username || "system-admin", "info")}
+                </div>
+            </div>
+            <form id="system-admin-credentials-form" class="stack-form dense-form">
+                <label class="field">
+                    <span>目前密碼</span>
+                    <input name="currentPassword" type="password" autocomplete="current-password" required>
+                </label>
+                <label class="field">
+                    <span>系統管理者帳號</span>
+                    <input name="username" type="text" autocomplete="username" value="${escapeHtml(account.username || "system-admin")}" required>
+                </label>
+                <label class="field">
+                    <span>新密碼</span>
+                    <input name="newPassword" type="password" autocomplete="new-password" placeholder="留空則不變更">
+                </label>
+                <label class="field">
+                    <span>確認新密碼</span>
+                    <input name="confirmPassword" type="password" autocomplete="new-password" placeholder="留空則不變更">
+                </label>
+                <div class="form-toolbar">
+                    <button class="secondary-btn" type="submit">更新系統管理者帳號</button>
+                </div>
+                <div class="inline-message" data-form-message-for="system-admin-credentials-form" aria-live="polite"></div>
+            </form>
+        </article>
+    `;
+}
+
+function renderSystemAdminDashboard(dashboard) {
+    const summary = dashboard?.summary || {};
+    return `
+        <div class="workspace-shell">
+            ${renderStatsGrid(summary, {
+                employeeCount: "員工數",
+                adminAccountCount: "管理者帳號",
+                developerAccountCount: "開發人員帳號",
+                customAccessCount: "已自訂權限"
+            })}
+            ${renderSystemAdminCredentialsPanel(dashboard)}
+            ${renderAccountAccessManager(dashboard?.datasets?.accountAccess)}
+        </div>
     `;
 }
 
@@ -8803,6 +8882,44 @@ handleDashboardSubmit = async function handleDashboardSubmitAccountAccessOverrid
     }
 };
 
+SAVE_FEEDBACK_FORM_IDS.add("system-admin-credentials-form");
+
+const originalHandleDashboardSubmitWithSystemAdmin = handleDashboardSubmit;
+handleDashboardSubmit = async function handleDashboardSubmitSystemAdminOverride(event) {
+    const form = event.target instanceof HTMLFormElement
+        ? event.target
+        : event.target?.closest?.("form");
+    const formId = form?.getAttribute?.("id") || "";
+
+    if (formId !== "system-admin-credentials-form") {
+        return originalHandleDashboardSubmitWithSystemAdmin(event);
+    }
+
+    event.preventDefault();
+    if (!form) return;
+    setFormMessage(formId, "");
+
+    try {
+        const values = Object.fromEntries(new FormData(form).entries());
+        const result = await requestJson("/api/browser/system-admin/credentials/save", {
+            method: "POST",
+            auth: true,
+            body: {
+                currentPassword: values.currentPassword || "",
+                username: values.username || "",
+                newPassword: values.newPassword || "",
+                confirmPassword: values.confirmPassword || ""
+            }
+        });
+        if (result.dashboard) renderDashboard(result.dashboard);
+        setMessage(ui.dashboardMessage, result.message || "系統管理者帳號設定已更新。", "success");
+        setFormMessage(formId, result.message || "系統管理者帳號設定已更新。", "success");
+    } catch (error) {
+        setMessage(ui.dashboardMessage, error.message, "error");
+        setFormMessage(formId, error.message, "error");
+    }
+};
+
 const originalGetRealtimeSyncLabelWithAccountAccess = getRealtimeSyncLabel;
 getRealtimeSyncLabel = function getRealtimeSyncLabelAccountAccessOverride(type) {
     if (type === "accountAccess") return "帳號權限設定";
@@ -8813,7 +8930,7 @@ const originalHandleRealtimeSyncMessageWithAccountAccess = handleRealtimeSyncMes
 handleRealtimeSyncMessage = async function handleRealtimeSyncMessageAccountAccessOverride(payload) {
     const type = payload?.type;
     const role = state.dashboard?.role;
-    if (type === "accountAccess" && ["admin", "developer"].includes(role)) {
+    if (type === "accountAccess" && ["admin", "developer", "system_admin"].includes(role)) {
         await reloadDashboard("帳號權限設定已更新。", "info");
         return;
     }
