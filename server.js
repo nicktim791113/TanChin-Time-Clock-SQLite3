@@ -39,7 +39,6 @@ const ADMIN_PERMISSION_DEFINITIONS = [
   { code: 'admin.security.view', category: '安全設定', label: '查看安全狀態', section: 'security' },
   { code: 'admin.security.manage', category: '安全設定', label: '調整裝置與 GPS 安全設定', section: 'security', highRisk: true },
   { code: 'admin.security.password', category: '安全設定', label: '變更管理者密碼', section: 'security', highRisk: true },
-  { code: 'admin.accounts.manage', category: '安全設定', label: '帳號權限管理', section: 'security', highRisk: true },
   { code: 'admin.shifts.manage', category: '考勤作業', label: '班別設定', section: 'shifts' },
   { code: 'admin.manualPunch.create', category: '考勤作業', label: '手動補登', section: 'manualPunch', highRisk: true },
   { code: 'admin.reports.view', category: '考勤報表', label: '查詢考勤報表', section: 'reports' },
@@ -53,7 +52,7 @@ const ADMIN_PERMISSION_DEFINITIONS = [
 const ADMIN_PERMISSION_CODES = new Set(ADMIN_PERMISSION_DEFINITIONS.map((permission) => permission.code));
 const ADMIN_SECTION_RULES = [
   { id: 'people', label: '人員資料', permissions: ['admin.people.view', 'admin.people.edit', 'admin.people.delete'] },
-  { id: 'security', label: '安全設定', permissions: ['admin.security.view', 'admin.security.manage', 'admin.security.password', 'admin.accounts.manage'] },
+  { id: 'security', label: '安全設定', permissions: ['admin.security.view', 'admin.security.manage', 'admin.security.password'] },
   { id: 'shifts', label: '班別設定', permissions: ['admin.shifts.manage'] },
   { id: 'manualPunch', label: '手動補登', permissions: ['admin.manualPunch.create'] },
   { id: 'reports', label: '考勤報表', permissions: ['admin.reports.view', 'admin.reports.export'] },
@@ -240,7 +239,7 @@ API_ROUTE_CATALOG.push(
 );
 
 API_ROUTE_CATALOG.push(
-  { category: '管理者 API', method: 'POST', path: '/api/browser/admin/account-access/save', auth: '開發人員或帳號權限管理', description: '儲存帳號可登入角色與管理者功能權限' }
+  { category: '管理者 API', method: 'POST', path: '/api/browser/admin/account-access/save', auth: '系統管理者或開發人員', description: '儲存帳號可登入角色與管理者功能權限' }
 );
 API_ROUTE_CATALOG.push(
   { category: '系統管理者 API', method: 'POST', path: '/api/browser/system-admin/credentials/save', auth: '系統管理者', description: '更新網頁端系統管理者帳號與密碼' }
@@ -499,15 +498,6 @@ function validateAccountAccessSave(records, request) {
 
   const session = request.browserSession || {};
   const actorId = session.realEmployeeId || session.employeeId || '';
-  const actorRecord = completeRecords.find((record) => record.employee_id === actorId);
-  if (!['developer', SYSTEM_ADMIN_ROLE].includes(session.realRole || session.role)) {
-    const keepsOwnAccess = actorRecord &&
-      actorRecord.allowed_roles.includes('admin') &&
-      actorRecord.admin_permissions.includes('admin.accounts.manage');
-    if (!keepsOwnAccess) {
-      throw createHttpError('不能移除自己目前的帳號權限管理能力，請先交給另一位完整管理者處理。', 400);
-    }
-  }
 
   return completeRecords.map((record) => ({
     ...record,
@@ -1391,7 +1381,6 @@ function getAdminDatasets(session = {}) {
   const employees = dbModule.loadEmployees();
   const canPeople = hasAnyAdminPermission(session, ['admin.people.view', 'admin.people.edit', 'admin.people.delete']);
   const canSecurity = hasAnyAdminPermission(session, ['admin.security.view', 'admin.security.manage', 'admin.security.password']);
-  const canAccounts = hasAdminPermission(session, 'admin.accounts.manage');
   const canShifts = hasAdminPermission(session, 'admin.shifts.manage');
   const canManualPunch = hasAdminPermission(session, 'admin.manualPunch.create');
   const canReports = hasAnyAdminPermission(session, ['admin.reports.view', 'admin.reports.export']);
@@ -1399,7 +1388,7 @@ function getAdminDatasets(session = {}) {
   const canSystem = hasAdminPermission(session, 'admin.system.manage');
   const canBells = hasAdminPermission(session, 'admin.bells.manage');
   const canThemes = hasAdminPermission(session, 'admin.themes.manage');
-  const needsEmployees = canPeople || canSecurity || canAccounts || canManualPunch || canReports || canLeave;
+  const needsEmployees = canPeople || canSecurity || canManualPunch || canReports || canLeave;
   const needsShifts = canShifts || canManualPunch || canReports;
   const customSounds = canBells
     ? dbModule.loadCustomSounds().map((sound) => ({
@@ -1434,8 +1423,8 @@ function getAdminDatasets(session = {}) {
     themeSchedules: canThemes ? dbModule.loadThemeSchedules() : [],
     customThemes,
     leave: canLeave ? getAdminLeaveState(employees) : null,
-    security: (canSecurity || canAccounts) ? getAdminSecurityDatasets() : null,
-    accountAccess: canAccounts ? buildAccountAccessState(employees) : null,
+    security: canSecurity ? getAdminSecurityDatasets() : null,
+    accountAccess: null,
     settings: {
       mainTitle: canSystem ? settings.mainTitle : '',
       subtitle: canSystem ? settings.subtitle : '',
@@ -1727,7 +1716,7 @@ function buildSystemAdminDashboard() {
     displaySettings: getBrowserDisplaySettings(),
     permissions: {
       admin: FULL_ADMIN_PERMISSION_CODES,
-      sections: [{ id: 'security', label: '帳號權限管理', permissions: ['admin.accounts.manage'] }]
+      sections: [{ id: 'security', label: '帳號權限管理', permissions: [] }]
     },
     permissionCatalog: buildPermissionCatalog(),
     summary: {
@@ -2157,11 +2146,7 @@ function requireAccountAccessManagement(request, response, next) {
     next();
     return;
   }
-  if (session.role === 'admin' && hasAdminPermission(session, 'admin.accounts.manage')) {
-    next();
-    return;
-  }
-  response.status(403).json({ success: false, error: withSupportCode('P232', '只有開發人員或具備帳號權限管理的管理者可以操作。') });
+  response.status(403).json({ success: false, error: withSupportCode('P232', '只有系統管理者或開發人員可以操作帳號權限管理。') });
 }
 
 function requireDeveloperIdentity(request, response, next) {

@@ -8585,6 +8585,33 @@ function getAccountAccessPresetPermissions(presetId, accountAccess = getAccountA
     return new Set(preset?.permissions || []);
 }
 
+function getAccountAccessPresetLabel(presetId, accountAccess = getAccountAccessDataset()) {
+    const preset = (getAccountAccessCatalog(accountAccess).adminPresets || [])
+        .find((item) => item.id === presetId);
+    return preset?.label || "無管理者權限";
+}
+
+function getAccountAccessRoleSummary(account) {
+    const allowedRoles = new Set(account?.access?.allowed_roles || ["employee"]);
+    const labels = ["員工"];
+    if (allowedRoles.has("admin")) labels.push("管理者");
+    if (allowedRoles.has("developer")) labels.push("開發人員");
+    return labels.join(" / ");
+}
+
+function getAccountAccessSearchText(account) {
+    const employee = account?.employee || {};
+    const values = [
+        employee.id,
+        employee.name,
+        employee.department,
+        employee.job_title,
+        getAccountAccessRoleSummary(account),
+        getAccountAccessPresetLabel(account?.access?.admin_preset)
+    ];
+    return values.map((value) => String(value || "").trim()).filter(Boolean).join(" ").toLocaleLowerCase();
+}
+
 function renderAccountRoleControls(account) {
     const allowedRoles = new Set(account?.access?.allowed_roles || ["employee"]);
     return `
@@ -8649,27 +8676,44 @@ function renderAccountAccessManager(accountAccess = getAccountAccessDataset()) {
                 </div>
             </div>
             <form id="account-access-form" class="stack-form">
+                <div class="account-access-filter">
+                    <label class="field">
+                        <span>搜尋員工</span>
+                        <input id="account-access-search" type="search" autocomplete="off" placeholder="輸入工號、姓名、部門或角色">
+                    </label>
+                    <p class="helper-text">清單預設只顯示摘要；按「設定」才展開單一員工的角色與管理功能。</p>
+                </div>
                 <div class="record-list">
                     ${accounts.map((account) => {
                         const employee = account.employee || {};
+                        const detailId = `account-access-detail-${escapeHtml(employee.id || "employee")}`;
+                        const roleSummary = getAccountAccessRoleSummary(account);
+                        const presetLabel = getAccountAccessPresetLabel(account.access?.admin_preset, accountAccess);
+                        const searchText = getAccountAccessSearchText(account);
                         return `
-                            <div class="list-item account-access-row" data-account-access-row data-employee-id="${escapeHtml(employee.id || "")}">
-                                <div class="list-item-top">
-                                    <span>${escapeHtml(employee.id || "-")} / ${escapeHtml(employee.name || "-")}</span>
+                            <div class="list-item account-access-row" data-account-access-row data-expanded="false" data-employee-id="${escapeHtml(employee.id || "")}" data-search-text="${escapeHtml(searchText)}">
+                                <div class="list-item-top account-access-row-summary">
+                                    <div>
+                                        <span>${escapeHtml(employee.id || "-")} / ${escapeHtml(employee.name || "-")}</span>
+                                        <div class="record-subline">${escapeHtml(employee.department || "未設定部門")} · ${escapeHtml(roleSummary)} · ${escapeHtml(presetLabel)}</div>
+                                    </div>
                                     <div class="badge-row">
-                                        ${renderBadge(employee.department || "未設定部門")}
+                                        ${renderBadge(roleSummary)}
                                         ${account.access?.source === "default" ? renderBadge("預設員工", "warning") : ""}
                                         ${account.access?.source === "explicit" ? renderBadge("已自訂", "success") : ""}
+                                        <button class="mini-btn" type="button" data-action="toggle-account-access-row" aria-controls="${detailId}" aria-expanded="false">設定</button>
                                     </div>
                                 </div>
-                                ${renderAccountRoleControls(account)}
-                                <label class="field">
-                                    <span>管理者權限模板</span>
-                                    <select data-access-preset>
-                                        ${renderAccountPresetOptions(account, catalog.adminPresets || [])}
-                                    </select>
-                                </label>
-                                ${renderAccountPermissionGroups(account, catalog.adminPermissions || [])}
+                                <div id="${detailId}" class="account-access-detail hidden" data-account-access-detail>
+                                    ${renderAccountRoleControls(account)}
+                                    <label class="field">
+                                        <span>管理者權限模板</span>
+                                        <select data-access-preset>
+                                            ${renderAccountPresetOptions(account, catalog.adminPresets || [])}
+                                        </select>
+                                    </label>
+                                    ${renderAccountPermissionGroups(account, catalog.adminPermissions || [])}
+                                </div>
                             </div>
                         `;
                     }).join("")}
@@ -8748,14 +8792,6 @@ function insertAccountAccessManager(html, datasets) {
     return `${html.slice(0, closingIndex)}${manager}${html.slice(closingIndex)}`;
 }
 
-const originalRenderAdminSecuritySectionWithAccountAccess = renderAdminSecuritySection;
-renderAdminSecuritySection = function renderAdminSecuritySectionAccountAccessOverride(datasets = {}) {
-    const baseHtml = datasets.security
-        ? originalRenderAdminSecuritySectionWithAccountAccess(datasets)
-        : `<div class="workspace-stack"></div>`;
-    return insertAccountAccessManager(baseHtml, datasets);
-};
-
 const originalRenderDeveloperSystemSettingsSectionWithAccountAccess = renderDeveloperSystemSettingsSection;
 renderDeveloperSystemSettingsSection = function renderDeveloperSystemSettingsSectionAccountAccessOverride(datasets = {}) {
     return insertAccountAccessManager(originalRenderDeveloperSystemSettingsSectionWithAccountAccess(datasets), datasets);
@@ -8821,10 +8857,46 @@ function syncAccountAccessForm() {
     document.querySelectorAll("[data-account-access-row]").forEach(syncAccountAccessRow);
 }
 
+function setAccountAccessRowExpanded(row, expanded) {
+    if (!row) return;
+    const isExpanded = Boolean(expanded);
+    const detail = row.querySelector("[data-account-access-detail]");
+    const toggle = row.querySelector('[data-action="toggle-account-access-row"]');
+    row.dataset.expanded = isExpanded ? "true" : "false";
+    row.classList.toggle("is-expanded", isExpanded);
+    detail?.classList.toggle("hidden", !isExpanded);
+    detail?.setAttribute("aria-hidden", String(!isExpanded));
+    if (toggle) {
+        toggle.textContent = isExpanded ? "收合" : "設定";
+        toggle.setAttribute("aria-expanded", String(isExpanded));
+    }
+    if (isExpanded) syncAccountAccessRow(row);
+}
+
+function toggleAccountAccessRow(button) {
+    const row = button?.closest?.("[data-account-access-row]");
+    if (!row) return;
+    const nextExpanded = row.dataset.expanded !== "true";
+    document.querySelectorAll("[data-account-access-row]").forEach((item) => {
+        if (item !== row) setAccountAccessRowExpanded(item, false);
+    });
+    setAccountAccessRowExpanded(row, nextExpanded);
+}
+
+function filterAccountAccessRows() {
+    const query = String(document.getElementById("account-access-search")?.value || "").trim().toLocaleLowerCase();
+    document.querySelectorAll("[data-account-access-row]").forEach((row) => {
+        const matched = !query || String(row.dataset.searchText || "").includes(query);
+        row.classList.toggle("hidden", !matched);
+        if (!matched) setAccountAccessRowExpanded(row, false);
+    });
+}
+
 const originalPostRenderSetupWithAccountAccess = postRenderSetup;
 postRenderSetup = function postRenderSetupAccountAccessOverride() {
     originalPostRenderSetupWithAccountAccess();
     syncAccountAccessForm();
+    filterAccountAccessRows();
 };
 
 function collectAccountAccessForm(form) {
@@ -8844,6 +8916,17 @@ handleDashboardChange = async function handleDashboardChangeAccountAccessOverrid
         return;
     }
     return originalHandleDashboardChangeWithAccountAccess(event);
+};
+
+const originalHandleDashboardClickWithAccountAccess = handleDashboardClick;
+handleDashboardClick = async function handleDashboardClickAccountAccessOverride(event) {
+    const actionTarget = event.target?.closest?.("[data-action]");
+    if (actionTarget?.dataset.action === "toggle-account-access-row") {
+        event.preventDefault();
+        toggleAccountAccessRow(actionTarget);
+        return;
+    }
+    return originalHandleDashboardClickWithAccountAccess(event);
 };
 
 SAVE_FEEDBACK_FORM_IDS.add("account-access-form");
@@ -8930,7 +9013,7 @@ const originalHandleRealtimeSyncMessageWithAccountAccess = handleRealtimeSyncMes
 handleRealtimeSyncMessage = async function handleRealtimeSyncMessageAccountAccessOverride(payload) {
     const type = payload?.type;
     const role = state.dashboard?.role;
-    if (type === "accountAccess" && ["admin", "developer", "system_admin"].includes(role)) {
+    if (type === "accountAccess" && ["developer", "system_admin"].includes(role)) {
         await reloadDashboard("帳號權限設定已更新。", "info");
         return;
     }
@@ -8979,6 +9062,10 @@ function initialize() {
         if (event.target.id === "employee-filter-query") {
             ensureAdminPeopleFilters().query = event.target.value || "";
             refreshEmployeeDirectoryView();
+            return;
+        }
+        if (event.target.id === "account-access-search") {
+            filterAccountAccessRows();
             return;
         }
         if (event.target.closest("#custom-theme-form")) updateThemePreviewFromForm();

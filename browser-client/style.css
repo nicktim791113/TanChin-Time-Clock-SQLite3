@@ -2257,10 +2257,32 @@ body::after {
     grid-column: 1 / -1;
 }
 
+.account-access-filter {
+    display: grid;
+    gap: 0.45rem;
+    max-width: 520px;
+}
+
 .account-access-row {
     display: grid;
     gap: 0.9rem;
     border: 1px solid rgba(24, 72, 103, 0.08);
+}
+
+.account-access-row-summary {
+    align-items: flex-start;
+}
+
+.account-access-detail {
+    display: grid;
+    gap: 0.9rem;
+    padding-top: 0.85rem;
+    border-top: 1px solid rgba(24, 72, 103, 0.08);
+}
+
+.account-access-row.is-expanded {
+    border-color: rgba(63, 151, 197, 0.28);
+    background: rgba(248, 252, 255, 0.86);
 }
 
 .account-access-row .field {
