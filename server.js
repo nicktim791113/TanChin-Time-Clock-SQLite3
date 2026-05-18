@@ -142,6 +142,10 @@ const SOURCE_LABELS = {
   api: '外部裝置',
   browser: '瀏覽器'
 };
+const LEAVE_ATTENDANCE_STATUS_TEXT = '已核准請假';
+const LEAVE_ATTENDANCE_SOURCE_TEXT = '請假模組';
+const LEAVE_RECORD_KIND_TEXT = '請假';
+const PUNCH_RECORD_KIND_TEXT = '打卡';
 
 const THEME_STYLE_DEFAULTS = {
   bgDayStart: '#f5fbff',
@@ -823,6 +827,179 @@ function formatPunchRecord(record) {
   };
 }
 
+function normalizeAttendanceRangeTimestamp(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const timestamp = Number(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function roundAttendanceHours(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+  return Math.round(numeric * 100) / 100;
+}
+
+function formatAttendanceDateTime(timestamp) {
+  const date = new Date(timestamp);
+  return `${formatLocalDate(date)} ${formatLocalTime(date)}`;
+}
+
+function buildPunchAttendanceRecord(record, employeeMap) {
+  const employee = employeeMap.get(record.id) || {};
+  const formatted = formatPunchRecord(record);
+  return {
+    employeeId: record.id,
+    employeeName: employee.name || '未知員工',
+    department: employee.department || '',
+    jobTitle: employee.job_title || '',
+    shift: record.shift || '',
+    timestamp: record.timestamp,
+    dateText: formatted.dateText,
+    timeText: formatted.timeText,
+    type: record.type,
+    typeText: formatted.typeText,
+    status: record.status || '正常',
+    attendanceStatusText: formatted.attendanceStatusText,
+    source: record.source || '',
+    sourceText: formatted.sourceText,
+    recordKind: 'punch',
+    recordKindText: PUNCH_RECORD_KIND_TEXT
+  };
+}
+
+function splitLeaveRequestIntoAttendanceSegments(request, rangeStartMs = null, rangeEndMs = null) {
+  const leaveStartAt = Number(request.start_at) || 0;
+  const leaveEndAt = Number(request.end_at) || 0;
+  if (leaveEndAt <= leaveStartAt) return [];
+
+  const effectiveStartAt = Math.max(leaveStartAt, rangeStartMs ?? leaveStartAt);
+  const effectiveEndAt = Math.min(leaveEndAt, rangeEndMs ?? leaveEndAt);
+  if (effectiveEndAt <= effectiveStartAt) return [];
+
+  const currentDay = new Date(effectiveStartAt);
+  currentDay.setHours(0, 0, 0, 0);
+  const finalDay = new Date(effectiveEndAt);
+  finalDay.setHours(0, 0, 0, 0);
+
+  const segments = [];
+  while (currentDay.getTime() <= finalDay.getTime()) {
+    const dayStartAt = currentDay.getTime();
+    const nextDay = new Date(currentDay);
+    nextDay.setDate(nextDay.getDate() + 1);
+    const nextDayStartAt = nextDay.getTime();
+    const segmentStartAt = Math.max(effectiveStartAt, dayStartAt);
+    const segmentEndAt = Math.min(effectiveEndAt, nextDayStartAt);
+
+    if (segmentEndAt > segmentStartAt) {
+      segments.push({
+        dayStartAt,
+        segmentStartAt,
+        segmentEndAt,
+        rawHours: Math.max(0, (segmentEndAt - segmentStartAt) / 3_600_000)
+      });
+    }
+
+    currentDay.setDate(currentDay.getDate() + 1);
+  }
+
+  return segments;
+}
+
+function allocateLeaveSegmentDurations(segments, approvedHours) {
+  if (!segments.length) return [];
+  const totalApprovedHours = roundAttendanceHours(approvedHours);
+  if (totalApprovedHours <= 0) {
+    return segments.map((segment) => roundAttendanceHours(segment.rawHours));
+  }
+  if (segments.length === 1) return [totalApprovedHours];
+
+  const rawTotalHours = segments.reduce((total, segment) => total + segment.rawHours, 0);
+  let remainingHours = totalApprovedHours;
+  return segments.map((segment, index) => {
+    if (index === segments.length - 1) {
+      return Math.max(0, roundAttendanceHours(remainingHours));
+    }
+    const baseHours = rawTotalHours > 0
+      ? totalApprovedHours * (segment.rawHours / rawTotalHours)
+      : totalApprovedHours / segments.length;
+    const durationHours = Math.min(remainingHours, roundAttendanceHours(baseHours));
+    remainingHours = roundAttendanceHours(remainingHours - durationHours);
+    return durationHours;
+  });
+}
+
+function buildApprovedLeaveAttendanceRecords({ employees, employeeMap, employeeId = '', rangeStartMs = null, rangeEndMs = null } = {}) {
+  const leaveTypes = dbModule.loadLeaveTypes();
+  const typeMap = new Map(leaveTypes.map((type) => [type.id, type]));
+  const query = {
+    status: 'approved',
+    limit: null
+  };
+  if (employeeId) query.employeeId = employeeId;
+  if (rangeStartMs !== null && rangeEndMs !== null) {
+    query.overlapStartAt = rangeStartMs;
+    query.overlapEndAt = rangeEndMs;
+  }
+
+  return dbModule.queryLeaveRequests(query).flatMap((request) => {
+    const employee = employeeMap.get(request.employee_id) || {};
+    const leaveTypeName = typeMap.get(request.leave_type_id)?.name || request.leave_type_id;
+    const segments = splitLeaveRequestIntoAttendanceSegments(request);
+    const segmentDurations = allocateLeaveSegmentDurations(segments, request.duration_hours);
+
+    return segments
+      .map((segment, index) => ({ segment, durationHours: segmentDurations[index] }))
+      .filter(({ segment }) => (rangeStartMs === null || segment.segmentEndAt > rangeStartMs) &&
+        (rangeEndMs === null || segment.segmentStartAt <= rangeEndMs))
+      .map(({ segment, durationHours }) => ({
+        employeeId: request.employee_id,
+        employeeName: employee.name || '未知員工',
+        department: employee.department || '',
+        jobTitle: employee.job_title || '',
+        shift: LEAVE_RECORD_KIND_TEXT,
+        timestamp: segment.segmentStartAt,
+        dateText: formatLocalDate(new Date(segment.dayStartAt)),
+        timeText: formatLocalTime(new Date(segment.segmentStartAt)),
+        type: 'leave',
+        typeText: `請假：${leaveTypeName}`,
+        status: 'approved_leave',
+        attendanceStatusText: LEAVE_ATTENDANCE_STATUS_TEXT,
+        source: 'leave',
+        sourceText: LEAVE_ATTENDANCE_SOURCE_TEXT,
+        recordKind: 'leave',
+        recordKindText: LEAVE_RECORD_KIND_TEXT,
+        leaveRequestId: request.id,
+        leaveTypeName,
+        leaveStartText: formatAttendanceDateTime(segment.segmentStartAt),
+        leaveEndText: formatAttendanceDateTime(segment.segmentEndAt),
+        leaveDurationHours: durationHours,
+        leaveRequestDurationHours: roundAttendanceHours(request.duration_hours),
+        durationHours
+      }));
+  });
+}
+
+function buildAttendanceRecordsWithApprovedLeave(options = {}) {
+  const employees = options.employees || getAllEmployees();
+  const employeeMap = options.employeeMap || new Map(employees.map((employee) => [employee.id, employee]));
+  const employeeId = String(options.employeeId || '').trim();
+  const rangeStartMs = normalizeAttendanceRangeTimestamp(options.rangeStartMs);
+  const rangeEndMs = normalizeAttendanceRangeTimestamp(options.rangeEndMs);
+  const sourceFilter = String(options.sourceFilter || '').trim();
+  const punchRecords = (options.punchRecords || getAllPunchRecords())
+    .filter((record) => rangeStartMs === null || record.timestamp >= rangeStartMs)
+    .filter((record) => rangeEndMs === null || record.timestamp <= rangeEndMs)
+    .filter((record) => !employeeId || record.id === employeeId)
+    .filter((record) => !sourceFilter || record.source === sourceFilter)
+    .map((record) => buildPunchAttendanceRecord(record, employeeMap));
+
+  const leaveRecords = options.includeLeave === false
+    ? []
+    : buildApprovedLeaveAttendanceRecords({ employees, employeeMap, employeeId, rangeStartMs, rangeEndMs });
+
+  return [...punchRecords, ...leaveRecords].sort((a, b) => b.timestamp - a.timestamp);
+}
+
 function getAllEmployees() {
   return dbModule.loadEmployees();
 }
@@ -997,58 +1174,13 @@ function buildAdminAttendanceReport(input = {}) {
     throw error;
   }
 
-  const punchRecords = getAllPunchRecords()
-    .filter((record) => record.timestamp >= rangeStart.getTime() && record.timestamp <= rangeEnd.getTime())
-    .filter((record) => !employeeId || record.id === employeeId)
-    .sort((a, b) => b.timestamp - a.timestamp)
-    .map((record) => {
-      const employee = employeeMap.get(record.id) || {};
-      const formatted = formatPunchRecord(record);
-      return {
-        employeeId: record.id,
-        employeeName: employee.name || '未知員工',
-        department: employee.department || '',
-        jobTitle: employee.job_title || '',
-        shift: record.shift || '',
-        timestamp: record.timestamp,
-        dateText: formatted.dateText,
-        timeText: formatted.timeText,
-        type: record.type,
-        typeText: formatted.typeText,
-        status: record.status || '正常',
-        attendanceStatusText: formatted.attendanceStatusText,
-        source: record.source || '',
-        sourceText: formatted.sourceText
-      };
-    });
-  const leaveTypes = dbModule.loadLeaveTypes();
-  const leaveLookup = buildLeaveLookup(employees, leaveTypes);
-  const leaveRecords = dbModule.queryLeaveRequests({ status: 'approved', limit: 500 })
-    .filter((request) => request.start_at <= rangeEnd.getTime() && request.end_at >= rangeStart.getTime())
-    .filter((request) => !employeeId || request.employee_id === employeeId)
-    .map((request) => {
-      const employee = employeeMap.get(request.employee_id) || {};
-      const formattedLeave = formatLeaveRequestForDashboard(request, leaveLookup);
-      return {
-        employeeId: request.employee_id,
-        employeeName: employee.name || '未知員工',
-        department: employee.department || '',
-        jobTitle: employee.job_title || '',
-        shift: '請假',
-        timestamp: request.start_at,
-        dateText: formatLocalDate(new Date(request.start_at)),
-        timeText: `${formatLocalTime(new Date(request.start_at))} ~ ${formatLocalTime(new Date(request.end_at))}`,
-        type: 'leave',
-        typeText: `請假：${formattedLeave.leaveTypeName}`,
-        status: '已核准請假',
-        attendanceStatusText: '已核准請假',
-        source: 'leave',
-        sourceText: '請假模組',
-        leaveRequestId: request.id,
-        durationHours: request.duration_hours
-      };
-    });
-  const records = [...punchRecords, ...leaveRecords].sort((a, b) => b.timestamp - a.timestamp);
+  const records = buildAttendanceRecordsWithApprovedLeave({
+    employees,
+    employeeMap,
+    employeeId,
+    rangeStartMs: rangeStart.getTime(),
+    rangeEndMs: rangeEnd.getTime()
+  });
 
   return {
     filters: {
@@ -1063,9 +1195,9 @@ function buildAdminAttendanceReport(input = {}) {
       abnormalCount: records.filter((record) =>
         record.attendanceStatusText !== '正常' &&
         record.attendanceStatusText !== '重複打卡' &&
-        record.attendanceStatusText !== '已核准請假'
+        record.attendanceStatusText !== LEAVE_ATTENDANCE_STATUS_TEXT
       ).length,
-      leaveCount: records.filter((record) => record.attendanceStatusText === '已核准請假').length,
+      leaveCount: records.filter((record) => record.recordKind === 'leave' || record.attendanceStatusText === LEAVE_ATTENDANCE_STATUS_TEXT).length,
       duplicateCount: records.filter((record) => record.attendanceStatusText === '重複打卡').length,
       employeeCount: new Set(records.map((record) => record.employeeId)).size,
       inCount: records.filter((record) => record.type === 'in').length,
@@ -2762,30 +2894,30 @@ async function executeAutomationTask(task) {
       let recordsToExport = [];
 
       if (task.target === 'last_week_records' || task.target === 'last_month_records') {
-        recordsToExport = allRecords.filter((record) => record.timestamp >= startTime.getTime() && record.timestamp <= endTime.getTime());
+        recordsToExport = buildAttendanceRecordsWithApprovedLeave({
+          employees,
+          punchRecords: allRecords,
+          rangeStartMs: startTime.getTime(),
+          rangeEndMs: endTime.getTime()
+        });
       } else if (task.target === 'manual_records') {
-        recordsToExport = allRecords.filter((record) => record.source === 'manual');
+        recordsToExport = buildAttendanceRecordsWithApprovedLeave({
+          employees,
+          punchRecords: allRecords,
+          sourceFilter: 'manual',
+          includeLeave: false
+        });
       } else if (task.target === 'all_records') {
-        recordsToExport = allRecords;
+        recordsToExport = buildAttendanceRecordsWithApprovedLeave({
+          employees,
+          punchRecords: allRecords
+        });
       }
 
       if (!recordsToExport.length) {
-        message = `目前沒有符合「${descriptiveDateRange}」的打卡紀錄可匯出。`;
+        message = `目前沒有符合「${descriptiveDateRange}」的考勤紀錄可匯出。`;
       } else {
         recordsToExport.sort((a, b) => a.timestamp - b.timestamp);
-        const rows = recordsToExport.map((record) => {
-          const employee = employees.find((item) => item.id === record.id) || { name: '未知員工' };
-          const formatted = formatPunchRecord(record);
-          return [
-            `"${record.id}"`,
-            `"${employee.name}"`,
-            `"${formatted.dateText}"`,
-            `"${formatted.timeText}"`,
-            `"${record.shift}"`,
-            `"${formatted.statusText}"`,
-            `"${formatted.sourceText}"`
-          ].join(',');
-        });
         csvContent = buildAttendanceExportCsv(recordsToExport, employees, {
           templateId: task.export_template,
           customFieldIds: getAttendanceExportCustomFields()
@@ -3746,6 +3878,8 @@ function attachBrowserRoutes(server) {
       const report = buildAdminAttendanceReport(request.body || {});
       const startDate = new Date(`${report.filters.startDate}T00:00:00`);
       const endDate = new Date(`${report.filters.endDate}T23:59:59.999`);
+      const templateId = normalizeAttendanceExportTemplateId(request.body?.templateId || 'payroll');
+      const exportPrefix = templateId === 'payroll_leave' ? '考勤薪資請假明細' : '考勤報表';
       writeBrowserAuditLog(request, {
         action: 'export',
         target_type: 'attendance_report',
@@ -3763,9 +3897,9 @@ function attachBrowserRoutes(server) {
         success: true,
         message: '考勤報表匯出內容已產生。',
         data: {
-          fileName: buildExportFileName('考勤報表', startDate, endDate),
+          fileName: buildExportFileName(exportPrefix, startDate, endDate),
           csvContent: buildAttendanceExportCsv(report.records, [], {
-            templateId: 'payroll',
+            templateId,
             customFieldIds: getAttendanceExportCustomFields()
           })
         }

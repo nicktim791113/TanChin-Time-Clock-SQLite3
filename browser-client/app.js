@@ -141,6 +141,7 @@ const attendanceExportTemplateLabels = {
     payroll: "薪資系統",
     anomaly: "異常稽核",
     analysis: "報表分析",
+    payroll_leave: "薪資含請假明細",
     full: "完整格式",
     custom: "自訂格式"
 };
@@ -1669,23 +1670,35 @@ function renderAdminReportRows(reportState) {
                         <th>班別</th>
                         <th>類型</th>
                         <th>狀態</th>
+                        <th>請假區段</th>
+                        <th>請假時數</th>
                         <th>來源</th>
                     </tr>
                 </thead>
                 <tbody>
-                    ${reportState.records.map((record) => `
-                        <tr>
-                            <td>${escapeHtml(record.employeeId || "-")}</td>
-                            <td>${escapeHtml(record.employeeName || "-")}</td>
-                            <td>${escapeHtml(record.department || "-")}</td>
-                            <td>${escapeHtml(record.dateText || "-")}</td>
-                            <td>${escapeHtml(record.timeText || "-")}</td>
-                            <td>${escapeHtml(record.shift || "-")}</td>
-                            <td>${escapeHtml(record.typeText || "-")}</td>
-                            <td>${escapeHtml(record.attendanceStatusText || "-")}</td>
-                            <td>${escapeHtml(record.sourceText || "-")}</td>
-                        </tr>
-                    `).join("")}
+                    ${reportState.records.map((record) => {
+                        const leaveWindow = record.recordKind === "leave" && record.leaveStartText
+                            ? `${record.leaveStartText || "-"} ~ ${record.leaveEndText || "-"}`
+                            : "-";
+                        const leaveHours = record.recordKind === "leave" && record.leaveDurationHours !== undefined && record.leaveDurationHours !== null
+                            ? `${record.leaveDurationHours} 小時`
+                            : "-";
+                        return `
+                            <tr>
+                                <td>${escapeHtml(record.employeeId || "-")}</td>
+                                <td>${escapeHtml(record.employeeName || "-")}</td>
+                                <td>${escapeHtml(record.department || "-")}</td>
+                                <td>${escapeHtml(record.dateText || "-")}</td>
+                                <td>${escapeHtml(record.timeText || "-")}</td>
+                                <td>${escapeHtml(record.shift || "-")}</td>
+                                <td>${escapeHtml(record.typeText || "-")}</td>
+                                <td>${escapeHtml(record.attendanceStatusText || "-")}</td>
+                                <td>${escapeHtml(leaveWindow)}</td>
+                                <td>${escapeHtml(leaveHours)}</td>
+                                <td>${escapeHtml(record.sourceText || "-")}</td>
+                            </tr>
+                        `;
+                    }).join("")}
                 </tbody>
             </table>
         </div>
@@ -1745,6 +1758,7 @@ function renderAdminReportSection(datasets) {
                         </div>
                         <div class="inline-actions">
                             <button class="secondary-btn" type="button" data-action="export-admin-report">匯出目前結果 CSV</button>
+                            <button class="outline-btn" type="button" data-action="export-admin-report" data-template="payroll_leave">匯出薪資請假明細 CSV</button>
                         </div>
                     </div>
                 </form>
@@ -3459,6 +3473,7 @@ async function handleDashboardClick(event) {
         }
         if (action === "export-admin-report") {
             const reportState = ensureAdminReportState();
+            const templateId = actionTarget.dataset.template || "payroll";
             if (!reportState.queried) {
                 throw new Error("請先查詢考勤報表，再進行匯出。");
             }
@@ -3470,12 +3485,13 @@ async function handleDashboardClick(event) {
                 body: {
                     employeeId: reportState.filters.employeeId || "",
                     startDate: reportState.filters.startDate,
-                    endDate: reportState.filters.endDate
+                    endDate: reportState.filters.endDate,
+                    templateId
                 },
                 auth: true
             });
             downloadTextFile(result.data.fileName, result.data.csvContent);
-            setMessage(ui.dashboardMessage, "考勤報表已匯出為 CSV。", "success");
+            setMessage(ui.dashboardMessage, templateId === "payroll_leave" ? "薪資請假明細已匯出為 CSV。" : "考勤報表已匯出為 CSV。", "success");
             return;
         }
         if (action === "reset-employee-form") return resetEmployeeForm();

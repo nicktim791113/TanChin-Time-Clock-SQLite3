@@ -528,9 +528,17 @@ const queryLeaveRequests = (filters = {}) => {
             params.push(String(filters.status));
         }
     }
-    const limit = Math.max(1, Math.min(Number(filters.limit) || 100, 500));
+    if (filters.overlapStartAt !== undefined && filters.overlapEndAt !== undefined) {
+        clauses.push('start_at <= ? AND end_at > ?');
+        params.push(Number(filters.overlapEndAt) || 0, Number(filters.overlapStartAt) || 0);
+    }
+    const shouldLimit = filters.limit !== null && filters.limit !== false && filters.limit !== 'all';
+    const maxLimit = Math.max(1, Number(filters.maxLimit) || 500);
+    const limit = shouldLimit ? Math.max(1, Math.min(Number(filters.limit) || 100, maxLimit)) : null;
     const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-    return all(`SELECT * FROM leave_requests ${whereSql} ORDER BY created_at DESC LIMIT ?`, ...params, limit).map(mapLeaveRequestRow);
+    const limitSql = shouldLimit ? ' LIMIT ?' : '';
+    const queryParams = shouldLimit ? [...params, limit] : params;
+    return all(`SELECT * FROM leave_requests ${whereSql} ORDER BY created_at DESC${limitSql}`, ...queryParams).map(mapLeaveRequestRow);
 };
 
 const hasOverlappingLeaveRequest = (employeeId, startAt, endAt, excludeId = '') => {

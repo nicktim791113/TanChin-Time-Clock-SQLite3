@@ -9,7 +9,13 @@ const ATTENDANCE_EXPORT_FIELD_DEFINITIONS = [
   { id: 'shift', label: '班別', description: '此次打卡所屬班別' },
   { id: 'typeText', label: '打卡類型', description: '上班 / 下班' },
   { id: 'attendanceStatusText', label: '系統狀態', description: '正常 / 重複打卡等系統判斷結果' },
-  { id: 'sourceText', label: '來源', description: '現場感應、密碼輸入、手動補登、遠端介接、瀏覽器打卡' }
+  { id: 'sourceText', label: '來源', description: '現場感應、密碼輸入、手動補登、遠端介接、瀏覽器打卡' },
+  { id: 'recordKindText', label: '紀錄類型', description: '打卡 / 請假，用來讓薪資與 ERP 分流解析' },
+  { id: 'leaveTypeName', label: '假別', description: '請假紀錄的假別名稱，非請假紀錄留空' },
+  { id: 'leaveStartText', label: '請假開始', description: '請假當日區段開始時間' },
+  { id: 'leaveEndText', label: '請假結束', description: '請假當日區段結束時間' },
+  { id: 'leaveDurationHours', label: '請假時數', description: '請假當日區段核准時數，可含 0.5 小時' },
+  { id: 'leaveRequestId', label: '假單編號', description: '對應原始請假申請單號' }
 ];
 
 const ATTENDANCE_EXPORT_TARGETS = [
@@ -20,7 +26,19 @@ const ATTENDANCE_EXPORT_TARGETS = [
 ];
 
 const DEFAULT_ATTENDANCE_EXPORT_TEMPLATE_ID = 'full';
-const DEFAULT_CUSTOM_EXPORT_FIELDS = ATTENDANCE_EXPORT_FIELD_DEFINITIONS.map((field) => field.id);
+const DEFAULT_CUSTOM_EXPORT_FIELDS = [
+  'employeeId',
+  'employeeName',
+  'department',
+  'jobTitle',
+  'dateText',
+  'timeText',
+  'timestamp',
+  'shift',
+  'typeText',
+  'attendanceStatusText',
+  'sourceText'
+];
 
 const ATTENDANCE_SOURCE_LABELS = {
   auto: '現場感應',
@@ -51,9 +69,15 @@ const ATTENDANCE_EXPORT_TEMPLATE_DEFINITIONS = [
     fieldIds: ['employeeId', 'employeeName', 'department', 'jobTitle', 'dateText', 'timeText', 'shift', 'typeText', 'attendanceStatusText', 'sourceText']
   },
   {
+    id: 'payroll_leave',
+    label: '薪資含請假明細',
+    description: '保留薪資系統既有欄位，並追加假別、起訖、時數與假單編號。',
+    fieldIds: ['employeeId', 'employeeName', 'department', 'jobTitle', 'dateText', 'timeText', 'shift', 'typeText', 'attendanceStatusText', 'sourceText', 'recordKindText', 'leaveTypeName', 'leaveStartText', 'leaveEndText', 'leaveDurationHours', 'leaveRequestId']
+  },
+  {
     id: 'full',
     label: '完整格式',
-    description: '輸出全部支援欄位，適合完整封存與複雜整合。',
+    description: '輸出既有完整欄位，保持舊版 ERP 解析相容。',
     fieldIds: DEFAULT_CUSTOM_EXPORT_FIELDS
   },
   {
@@ -134,6 +158,9 @@ function getAttendanceStatusLabel(status) {
   if (normalizedStatus === 'duplicate' || normalizedStatus === '重複打卡') {
     return '重複打卡';
   }
+  if (normalizedStatus === 'approved_leave' || normalizedStatus === '已核准請假') {
+    return '已核准請假';
+  }
   return normalizedStatus;
 }
 
@@ -203,9 +230,17 @@ function normalizeAttendanceRecord(record, employeeMap) {
     timeText: String(record?.timeText ?? (timestamp !== null ? formatCsvTime(timestamp) : '')),
     timestamp: timestamp !== null ? String(timestamp) : '',
     shift: String(record?.shift ?? ''),
-    typeText: String(record?.type ? getAttendanceTypeLabel(record.type) : (record?.typeText ?? '')),
-    attendanceStatusText: String(record?.status ? getAttendanceStatusLabel(record.status) : (record?.attendanceStatusText ?? getAttendanceStatusLabel())),
-    sourceText: String(record?.source ? getAttendanceSourceLabel(record.source) : (record?.sourceText ?? getAttendanceSourceLabel()))
+    typeText: String(record?.typeText ?? (record?.type ? getAttendanceTypeLabel(record.type) : '')),
+    attendanceStatusText: String(record?.attendanceStatusText ?? (record?.status ? getAttendanceStatusLabel(record.status) : getAttendanceStatusLabel())),
+    sourceText: String(record?.sourceText ?? (record?.source ? getAttendanceSourceLabel(record.source) : getAttendanceSourceLabel())),
+    recordKindText: String(record?.recordKindText ?? (record?.recordKind === 'leave' || record?.type === 'leave' ? '請假' : '打卡')),
+    leaveTypeName: String(record?.leaveTypeName ?? ''),
+    leaveStartText: String(record?.leaveStartText ?? ''),
+    leaveEndText: String(record?.leaveEndText ?? ''),
+    leaveDurationHours: record?.leaveDurationHours === undefined || record?.leaveDurationHours === null
+      ? ''
+      : String(record.leaveDurationHours),
+    leaveRequestId: String(record?.leaveRequestId ?? '')
   };
 }
 
