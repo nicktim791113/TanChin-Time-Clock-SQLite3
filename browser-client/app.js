@@ -1032,6 +1032,117 @@ function getScheduleDayText(days) {
         .join("、") || "-";
 }
 
+const dataTableDensityState = {
+    frame: 0,
+    canvas: typeof document !== "undefined" ? document.createElement("canvas") : null
+};
+
+function getDataTableMeasureContext() {
+    return dataTableDensityState.canvas?.getContext?.("2d") || null;
+}
+
+function normalizeColumnWidthText(value) {
+    return String(value || "")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+function getFormControlWidthText(control) {
+    if (!control) return "";
+    const tagName = control.tagName;
+    if (tagName === "SELECT") {
+        return Array.from(control.options || [])
+            .map((option) => option.textContent || option.value || "")
+            .sort((left, right) => right.length - left.length)[0] || "";
+    }
+    if (tagName === "TEXTAREA" || tagName === "INPUT") {
+        return control.value || control.getAttribute("placeholder") || "";
+    }
+    return control.textContent || "";
+}
+
+function getCellWidthText(cell) {
+    if (!cell) return "";
+    const controls = Array.from(cell.querySelectorAll("input, select, textarea, button"));
+    if (controls.length) {
+        return controls.map(getFormControlWidthText).join("  ");
+    }
+    return cell.textContent || "";
+}
+
+function measureCellContentWidth(cell) {
+    const context = getDataTableMeasureContext();
+    const styles = window.getComputedStyle(cell);
+    const text = normalizeColumnWidthText(getCellWidthText(cell));
+    const padding = (parseFloat(styles.paddingLeft) || 0) + (parseFloat(styles.paddingRight) || 0);
+    const border = (parseFloat(styles.borderLeftWidth) || 0) + (parseFloat(styles.borderRightWidth) || 0);
+    const visualBuffer = cell.matches("td.actions, .actions") ? 28 : 18;
+    if (!context) {
+        return Math.max(cell.scrollWidth || 0, cell.offsetWidth || 0, padding + border + visualBuffer);
+    }
+
+    context.font = styles.font || `${styles.fontWeight || "400"} ${styles.fontSize || "14px"} ${styles.fontFamily || "sans-serif"}`;
+    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const candidates = lines.length ? lines : [text || "MM"];
+    const textWidth = Math.max(...candidates.map((line) => context.measureText(line).width), 0);
+    return textWidth + padding + border + visualBuffer;
+}
+
+function getColumnWidthLimits(table, columnIndex) {
+    const cells = Array.from(table.querySelectorAll("tr"))
+        .map((row) => row.cells?.[columnIndex])
+        .filter(Boolean);
+    const hasActions = cells.some((cell) => cell.matches("td.actions, .actions") || cell.querySelector("button"));
+    const hasMultiline = cells.some((cell) => cell.matches(".multiline-cell") || cell.querySelector("textarea"));
+    if (hasActions) return { min: 108, max: 280 };
+    if (hasMultiline) return { min: 150, max: 420 };
+    return { min: 72, max: 340 };
+}
+
+function fitDataTableColumnsForTable(table) {
+    if (!table?.rows?.length) return;
+    const columnCount = Math.max(...Array.from(table.rows).map((row) => row.cells.length), 0);
+    if (!columnCount) return;
+
+    let colgroup = table.querySelector(":scope > colgroup[data-density-columns]");
+    if (!colgroup) {
+        colgroup = document.createElement("colgroup");
+        colgroup.dataset.densityColumns = "true";
+        table.prepend(colgroup);
+    }
+
+    while (colgroup.children.length < columnCount) colgroup.appendChild(document.createElement("col"));
+    while (colgroup.children.length > columnCount) colgroup.lastElementChild.remove();
+
+    for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+        const columnCells = Array.from(table.querySelectorAll("tr"))
+            .map((row) => row.cells?.[columnIndex])
+            .filter((cell) => cell && cell.colSpan === 1);
+        const measured = Math.max(...columnCells.map(measureCellContentWidth), 0);
+        const limits = getColumnWidthLimits(table, columnIndex);
+        const width = Math.min(Math.max(Math.ceil(measured * 1.1), limits.min), limits.max);
+        const col = colgroup.children[columnIndex];
+        col.style.width = `${width}px`;
+    }
+
+    table.dataset.columnFit = "ready";
+}
+
+function fitDataTableColumns(root = document) {
+    const tables = root?.matches?.("table.data-table")
+        ? [root]
+        : Array.from(root?.querySelectorAll?.("table.data-table") || []);
+    tables.forEach(fitDataTableColumnsForTable);
+}
+
+function scheduleDataTableColumnFit(root = document) {
+    if (dataTableDensityState.frame) window.cancelAnimationFrame(dataTableDensityState.frame);
+    dataTableDensityState.frame = window.requestAnimationFrame(() => {
+        dataTableDensityState.frame = 0;
+        fitDataTableColumns(root);
+    });
+}
+
 function renderInsightTable(headers, rows, emptyText = "目前沒有資料。") {
     if (!rows.length) return renderEmptyState(emptyText);
     return `
@@ -1319,6 +1430,7 @@ function refreshAdminDashboardInsightModal() {
     if (!state.activeInsightKey || !ui.dashboardInsightModal || ui.dashboardInsightModal.classList.contains("hidden")) return;
     ui.dashboardInsightTitle.textContent = getAdminInsightTitle(state.activeInsightKey);
     ui.dashboardInsightContent.innerHTML = renderAdminDashboardInsightContent(state.activeInsightKey);
+    scheduleDataTableColumnFit(ui.dashboardInsightContent);
 }
 
 function openAdminDashboardInsight(key) {
@@ -1327,6 +1439,7 @@ function openAdminDashboardInsight(key) {
     ui.dashboardInsightTitle.textContent = getAdminInsightTitle(key);
     ui.dashboardInsightContent.innerHTML = renderAdminDashboardInsightContent(key);
     ui.dashboardInsightModal?.classList.remove("hidden");
+    scheduleDataTableColumnFit(ui.dashboardInsightContent);
 }
 
 function buildAdminDashboardStatModel(dashboard = state.dashboard) {
@@ -1823,6 +1936,7 @@ function refreshEmployeeDirectoryView() {
 
     if (host) {
         host.innerHTML = renderEmployeeRows(filteredEmployees, filters.visibleRows);
+        scheduleDataTableColumnFit(host);
     }
     if (summary) {
         summary.textContent = `目前顯示 ${filteredEmployees.length} / ${datasets.employees.length} 位員工。`;
@@ -2729,6 +2843,7 @@ function postRenderSetup() {
     syncAutomationFormVisibility();
     updateThemePreviewFromForm();
     setupCollapsibleSections();
+    scheduleDataTableColumnFit(ui.dashboardContent);
 }
 
 function setupCollapsibleSections() {
@@ -9154,8 +9269,13 @@ function initialize() {
             filterAccountAccessRows();
             return;
         }
+        const dataTable = event.target.closest(".data-table");
+        if (dataTable) {
+            scheduleDataTableColumnFit(dataTable);
+        }
         if (event.target.closest("#custom-theme-form")) updateThemePreviewFromForm();
     });
+    window.addEventListener("resize", () => scheduleDataTableColumnFit(document));
 
     setActiveRole(state.activeRole);
     syncHeroHeader();

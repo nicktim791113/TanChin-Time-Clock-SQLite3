@@ -2406,3 +2406,493 @@ textarea:disabled {
 .account-permission-group .employee-column-option {
     min-height: 42px;
 }
+
+/* Dense browser workspace */
+:root {
+    --shadow: 0 10px 24px rgba(92, 125, 149, 0.1);
+    --dense-radius: 8px;
+    --dense-gap-xs: 4px;
+    --dense-gap-sm: 8px;
+    --dense-gap-md: 10px;
+    --dense-panel-pad: 12px;
+    font-size: 15px;
+}
+
+body {
+    background:
+        linear-gradient(160deg, var(--bg) 0%, var(--bg-accent) 46%, var(--bg-depth) 100%);
+}
+
+body::before,
+body::after {
+    opacity: 0.18;
+}
+
+.page-shell {
+    width: min(1480px, calc(100% - 20px));
+    padding: 12px 0 22px;
+}
+
+.hero-card,
+.panel,
+.stat-card,
+.suggest-card,
+.info-card,
+.record-card,
+.workspace-card,
+.sub-panel,
+.list-card,
+.table-card,
+.clock-panel,
+.preview-card,
+.theme-preview-stage,
+.theme-preview-page,
+.theme-preview-surface,
+.theme-preview-field,
+.theme-preview-message,
+.theme-image-control,
+.form-section-card,
+.leave-type-editor-panel,
+.employee-column-panel,
+.data-table-wrap,
+.record-item,
+.list-item,
+.endpoint-item,
+.record-empty,
+.empty-state,
+.status-box,
+.security-meta-grid div,
+.account-access-row {
+    border-radius: var(--dense-radius);
+}
+
+.hero-card,
+.panel {
+    padding: 14px;
+}
+
+.panel-wide {
+    min-height: auto;
+}
+
+.hero-card {
+    margin-bottom: 12px;
+}
+
+.hero-card h1,
+.panel h2,
+.workspace-title {
+    font-size: clamp(1.35rem, 2vw, 2rem);
+    letter-spacing: 0.02em;
+}
+
+.hero-copy {
+    margin-top: 8px;
+    max-width: 96ch;
+    line-height: 1.45;
+}
+
+.eyebrow,
+.section-kicker,
+.sub-kicker {
+    margin-bottom: 4px;
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+}
+
+.main-grid,
+.dashboard-layout,
+.workspace-stack,
+.workspace-shell,
+.split-panels,
+.theme-editor-layout,
+.theme-editor-panel,
+.theme-preview-stack,
+.preview-shell,
+.leave-type-editor,
+.leave-type-editor-panels,
+.security-record-list,
+.account-access-detail,
+.account-permission-group {
+    gap: var(--dense-gap-md);
+}
+
+.panel-header,
+.dashboard-topbar {
+    margin-bottom: 12px;
+}
+
+.panel-header,
+.dashboard-topbar,
+.stats-grid,
+.suggest-grid,
+.record-list,
+.quick-actions,
+.section-nav,
+.workspace-grid,
+.field-grid,
+.compact-grid,
+.checkbox-grid,
+.theme-grid,
+.form-section-grid,
+.theme-preview-fields,
+.theme-preview-actions,
+.theme-image-grid,
+.card-capture-result {
+    gap: var(--dense-gap-sm);
+}
+
+.info-card,
+.suggest-card,
+.record-card,
+.workspace-card,
+.sub-panel,
+.table-card,
+.list-card,
+.stat-card,
+.form-section-card,
+.employee-column-panel,
+.leave-type-editor-panel,
+.theme-image-control,
+.card-capture-panel,
+.punch-diagnostic-panel {
+    padding: var(--dense-panel-pad);
+}
+
+.info-grid,
+.stats-grid,
+.quick-actions,
+.record-list,
+.suggest-grid,
+.theme-preview-fields,
+.theme-preview-actions {
+    margin-top: 10px;
+}
+
+.info-grid div,
+.record-item,
+.list-item,
+.endpoint-item,
+.record-empty,
+.empty-state,
+.status-box,
+.security-meta-grid div {
+    padding: 9px 10px;
+}
+
+.record-empty,
+.empty-state {
+    text-align: left;
+}
+
+.role-selector,
+.section-nav,
+.dashboard-actions,
+.form-toolbar,
+.list-toolbar,
+.upload-row,
+.badge-row,
+.collapsible-header,
+.collapsible-controls,
+.table-actions,
+.inline-actions {
+    gap: var(--dense-gap-sm);
+}
+
+.role-selector {
+    margin-bottom: 10px;
+}
+
+.login-form,
+.stack-form {
+    gap: var(--dense-gap-sm);
+    margin-top: 10px;
+}
+
+.field,
+.field-inline,
+.dense-form .field,
+.theme-preview-field label {
+    gap: var(--dense-gap-xs);
+}
+
+.field input,
+.field select,
+.field textarea,
+.field-inline input,
+.field-inline select,
+.field-inline textarea,
+.data-table input,
+.data-table select,
+.data-table textarea,
+.dense-form .field input,
+.dense-form .field select,
+.dense-form .field textarea,
+.theme-preview-field .preview-input,
+.theme-preview-field .preview-select {
+    min-height: 34px;
+    padding: 7px 9px;
+    border-radius: var(--dense-radius);
+}
+
+.field textarea,
+.field-inline textarea,
+.data-table textarea {
+    min-height: 72px;
+}
+
+.role-chip,
+.ghost-btn,
+.secondary-btn,
+.section-tab,
+.outline-btn,
+.mini-btn,
+.danger-btn,
+.primary-btn,
+.dense-form .primary-btn,
+.dense-form .secondary-btn,
+.dense-form .outline-btn,
+.collapsible-toggle,
+.collapsible-pin,
+.preview-card .preview-button,
+.theme-preview-action {
+    min-height: 34px;
+    padding: 7px 10px;
+    border-radius: var(--dense-radius);
+    letter-spacing: 0.01em;
+}
+
+.mini-btn {
+    font-size: 0.86rem;
+}
+
+.collapsible-pin {
+    width: 34px;
+    padding-inline: 0;
+}
+
+.identity-pill,
+.status-pill,
+.live-pill,
+.pill,
+.badge {
+    min-height: 30px;
+    padding: 5px 9px;
+    font-size: 0.84rem;
+}
+
+.clock-panel {
+    padding: 14px;
+}
+
+.clock-time {
+    margin: 2px 0 4px;
+    font-size: clamp(1.8rem, 3vw, 2.5rem);
+    letter-spacing: 0.04em;
+}
+
+.stat-card-button {
+    min-height: 88px;
+}
+
+.stat-label {
+    margin-bottom: 6px;
+}
+
+.stat-value {
+    font-size: 1.4rem;
+}
+
+.stat-subtext {
+    margin-top: 6px;
+    line-height: 1.3;
+}
+
+.collapsible-content {
+    margin-top: 10px;
+}
+
+.data-table-wrap {
+    max-width: 100%;
+}
+
+.data-table-wrap:has(.data-table[data-column-fit="ready"]) {
+    width: max-content;
+    max-width: 100%;
+}
+
+.data-table {
+    width: max-content;
+    min-width: 100%;
+    table-layout: auto;
+}
+
+.data-table[data-column-fit="ready"] {
+    width: max-content;
+    min-width: max-content;
+}
+
+.data-table th,
+.data-table td {
+    padding: 7px 9px;
+    font-size: 0.88rem;
+    line-height: 1.28;
+    overflow-wrap: normal;
+    word-break: normal;
+}
+
+.data-table th {
+    font-size: 0.82rem;
+    white-space: nowrap;
+}
+
+.data-table td {
+    max-width: 30rem;
+}
+
+.data-table td.actions,
+.data-table .nowrap-cell {
+    white-space: nowrap;
+}
+
+.data-table .multiline-cell {
+    min-width: 10rem;
+    max-width: 26rem;
+}
+
+.data-table td.actions.has-review-comment,
+.review-action-stack {
+    min-width: 11rem;
+}
+
+.review-comment-input {
+    min-height: 32px;
+    padding: 6px 8px;
+}
+
+.supervisor-hint {
+    max-width: 14rem;
+    padding: 2px 6px;
+    font-size: 0.72rem;
+}
+
+.employee-filter-grid {
+    grid-template-columns: minmax(220px, 1.8fr) minmax(150px, 1fr) minmax(150px, 1fr);
+    margin-bottom: 8px;
+}
+
+.employee-column-panel {
+    margin-bottom: 8px;
+}
+
+.employee-column-grid {
+    gap: var(--dense-gap-xs);
+}
+
+.employee-column-option {
+    padding: 4px 6px;
+    border-radius: 6px;
+}
+
+.account-access-filter {
+    max-width: 430px;
+}
+
+.account-access-row,
+.account-access-detail {
+    gap: var(--dense-gap-sm);
+}
+
+.account-access-detail {
+    padding-top: 8px;
+}
+
+.account-access-row .field {
+    max-width: 300px;
+}
+
+.theme-preview-stage,
+.theme-preview-page,
+.theme-preview-surface,
+.theme-preview-clock,
+.theme-preview-field,
+.theme-preview-message,
+.theme-image-control,
+.preview-card,
+.preview-card .preview-clock {
+    padding: 12px;
+}
+
+.theme-preview-header,
+.theme-preview-clock,
+.theme-preview-message,
+.theme-preview-actions,
+.theme-preview-fields {
+    margin-top: 10px;
+}
+
+.theme-preview-header {
+    margin-bottom: 10px;
+}
+
+.theme-preview-title-banner {
+    padding: 8px 12px;
+    border-radius: var(--dense-radius);
+}
+
+.theme-preview-clock-time {
+    font-size: 1.8rem;
+}
+
+.modal-backdrop {
+    padding: 14px;
+}
+
+.modal-card {
+    width: min(100%, 860px);
+    max-height: min(88vh, 780px);
+    padding: 14px;
+}
+
+.insight-modal-card {
+    width: min(100%, 1180px);
+}
+
+.modal-header {
+    gap: var(--dense-gap-sm);
+    margin-bottom: 8px;
+}
+
+.insight-section {
+    gap: var(--dense-gap-sm);
+    padding: 10px 0;
+}
+
+@media (max-width: 640px) {
+    .page-shell {
+        width: min(100% - 12px, 1480px);
+        padding-top: 8px;
+    }
+
+    .panel,
+    .hero-card,
+    .workspace-card,
+    .sub-panel,
+    .table-card,
+    .list-card {
+        padding: 10px;
+        border-radius: var(--dense-radius);
+    }
+
+    .data-table {
+        min-width: 100%;
+    }
+
+    .field-grid,
+    .form-section-grid,
+    .theme-editor-panel .form-section-grid,
+    .developer-system-settings,
+    .insight-two-column {
+        grid-template-columns: 1fr;
+    }
+}
