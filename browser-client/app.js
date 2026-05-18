@@ -9455,6 +9455,491 @@ handleRealtimeSyncMessage = async function handleRealtimeSyncMessageAccountAcces
     return originalHandleRealtimeSyncMessageWithAccountAccess(payload);
 };
 
+const workspaceSubnavBaseRenderers = {
+    admin: {
+        people: renderAdminPeopleSection,
+        security: renderAdminSecuritySection,
+        shifts: renderAdminShiftSection,
+        manualPunch: renderAdminManualPunchSection,
+        reports: renderAdminReportSection,
+        leave: renderAdminLeaveSection,
+        system: renderAdminSystemSection,
+        bells: renderAdminBellSection,
+        themes: renderAdminThemeSection
+    },
+    developer: {
+        automation: renderDeveloperAutomationSection,
+        automationLogs: renderDeveloperAutomationLogSection,
+        auditLogs: renderDeveloperAuditSection,
+        systemSettings: renderDeveloperSystemSettingsSection,
+        export: renderDeveloperExportSection,
+        status: renderDeveloperStatusSection
+    }
+};
+
+const workspaceSubnavConfigs = {
+    admin: {
+        people: {
+            introIndexes: [0],
+            removeSelectors: ["#employee-import-file"],
+            appendHtml: `<input id="employee-import-file" type="file" accept=".csv,text/csv" class="hidden">`,
+            groups: [
+                {
+                    label: "人員主檔",
+                    items: [
+                        { id: "form", label: "新增 / 編輯員工", panelIndex: 1 },
+                        {
+                            id: "roster",
+                            label: "員工名冊與欄位",
+                            panelIndex: 2,
+                            badge: (datasets) => `${filterAdminEmployees(datasets.employees || []).length}/${(datasets.employees || []).length}`
+                        }
+                    ]
+                }
+            ]
+        },
+        security: {
+            introIndexes: [0],
+            groups: [
+                {
+                    label: "安全政策",
+                    items: [
+                        { id: "settings", label: "遠端打卡規則", panelIndex: 1 },
+                        { id: "devices", label: "裝置綁定清單", panelIndex: 2 },
+                        { id: "recent", label: "最近安全紀錄", panelIndex: 3 }
+                    ]
+                }
+            ]
+        },
+        shifts: {
+            introIndexes: [0],
+            groups: [
+                {
+                    label: "班表基礎",
+                    items: [
+                        { id: "editor", label: "班別時間設定", panelIndex: 1 }
+                    ]
+                }
+            ]
+        },
+        manualPunch: {
+            introIndexes: [0],
+            groups: [
+                {
+                    label: "考勤修正",
+                    items: [
+                        { id: "form", label: "補登打卡表單", panelIndex: 1 }
+                    ]
+                }
+            ]
+        },
+        reports: {
+            introIndexes: [0],
+            groups: [
+                {
+                    label: "查詢輸出",
+                    items: [
+                        { id: "query", label: "查詢條件 / 匯出", panelIndex: 1 },
+                        { id: "summary", label: "查詢摘要", panelIndex: 2 },
+                        { id: "details", label: "考勤明細", panelIndex: 3 }
+                    ]
+                }
+            ]
+        },
+        leave: {
+            introIndexes: [0],
+            groups: [
+                {
+                    label: "審核作業",
+                    items: [
+                        {
+                            id: "pending",
+                            label: "管理部待複核",
+                            panelIndex: 1,
+                            badge: (datasets) => String(datasets.leave?.pendingAdmin?.length || 0)
+                        },
+                        {
+                            id: "records",
+                            label: "請假紀錄",
+                            panelIndex: 2,
+                            badge: (datasets) => String(datasets.leave?.requests?.length || 0)
+                        }
+                    ]
+                },
+                {
+                    label: "制度設定",
+                    items: [
+                        { id: "types", label: "假別設定", panelIndex: 3 },
+                        { id: "routes", label: "主管審核路徑", panelIndex: 4 }
+                    ]
+                }
+            ]
+        },
+        system: {
+            introIndexes: [0],
+            groups: [
+                {
+                    label: "系統資料",
+                    items: [
+                        { id: "display", label: "主畫面資料", panelIndex: 1 },
+                        { id: "password", label: "管理者密碼", panelIndex: 2 },
+                        { id: "greetings", label: "問候語管理", panelIndex: 3 }
+                    ]
+                }
+            ]
+        },
+        bells: {
+            introIndexes: [0],
+            groups: [
+                {
+                    label: "響鈴作業",
+                    items: [
+                        { id: "schedules", label: "響鈴場景", panelIndex: 1 },
+                        { id: "sounds", label: "聲音庫", panelIndex: 2 },
+                        { id: "history", label: "響鈴歷史", panelIndex: 3 }
+                    ]
+                }
+            ]
+        },
+        themes: {
+            introIndexes: [0],
+            groups: [
+                {
+                    label: "視覺排程",
+                    items: [
+                        { id: "effects", label: "節日特效", panelIndex: 1 },
+                        { id: "schedules", label: "主題排程", panelIndex: 2 }
+                    ]
+                },
+                {
+                    label: "主題設計",
+                    items: [
+                        { id: "editor", label: "自訂主題編輯器", panelIndex: 3 }
+                    ]
+                }
+            ]
+        }
+    },
+    developer: {
+        automation: {
+            introIndexes: [0],
+            groups: [
+                {
+                    label: "任務作業",
+                    items: [
+                        { id: "form", label: "任務設定", panelIndex: 1 },
+                        {
+                            id: "tasks",
+                            label: "目前任務清單",
+                            panelIndex: 2,
+                            badge: (datasets) => String((datasets.automationTasks || []).length)
+                        }
+                    ]
+                }
+            ]
+        },
+        automationLogs: {
+            introIndexes: [],
+            groups: [
+                {
+                    label: "執行紀錄",
+                    items: [
+                        {
+                            id: "logs",
+                            label: "自動化日誌",
+                            panelIndex: 0,
+                            badge: (datasets) => String((datasets.automationLog || []).length)
+                        }
+                    ]
+                }
+            ]
+        },
+        auditLogs: {
+            introIndexes: [],
+            groups: [
+                {
+                    label: "稽核追蹤",
+                    items: [
+                        { id: "query", label: "查詢條件與紀錄", panelIndex: 0 }
+                    ]
+                }
+            ]
+        },
+        systemSettings: {
+            introIndexes: [],
+            groups: [
+                {
+                    label: "系統權限",
+                    items: [
+                        { id: "password", label: "系統密碼", panelIndex: 0 },
+                        { id: "impersonation", label: "角色切換設定", panelIndex: 1 },
+                        { id: "accountAccess", label: "帳號權限管理", panelIndex: 2 }
+                    ]
+                }
+            ]
+        },
+        export: {
+            introIndexes: [0],
+            groups: [
+                {
+                    label: "匯出設定",
+                    items: [
+                        { id: "directory", label: "自動化匯出資料夾", panelIndex: 1 },
+                        { id: "archive", label: "稽核封存策略", panelIndex: 2 },
+                        { id: "templates", label: "內建模板", panelIndex: 3 },
+                        { id: "custom", label: "自訂格式", panelIndex: 4 }
+                    ]
+                }
+            ]
+        },
+        status: {
+            introIndexes: [],
+            groups: [
+                {
+                    label: "服務監控",
+                    items: [
+                        { id: "overview", label: "系統健康總覽", panelIndex: 0 },
+                        { id: "details", label: "同步與紀錄狀態", panelIndex: 1 },
+                        { id: "apiCatalog", label: "API 目錄", panelStartIndex: 2, panelEndIndex: Infinity, emptyText: "目前沒有 API 清單資料。" }
+                    ]
+                }
+            ]
+        }
+    }
+};
+
+function ensureWorkspaceSubnavState(role) {
+    if (!state.activeSubSections) state.activeSubSections = {};
+    if (!state.activeSubSections[role]) state.activeSubSections[role] = {};
+    return state.activeSubSections[role];
+}
+
+function flattenWorkspaceSubnavGroups(groups = []) {
+    return groups.flatMap((group) => Array.isArray(group.items) ? group.items : []);
+}
+
+function getWorkspaceSubnavItemPanelHtml(panels, item) {
+    const safePanels = Array.isArray(panels) ? panels : [];
+    if (Number.isInteger(item.panelIndex)) return safePanels[item.panelIndex] || "";
+    if (Array.isArray(item.panelIndexes)) {
+        return item.panelIndexes.map((index) => safePanels[index] || "").filter(Boolean).join("");
+    }
+    if (Number.isInteger(item.panelStartIndex)) {
+        const endIndex = item.panelEndIndex === Infinity ? safePanels.length : Number(item.panelEndIndex);
+        return safePanels.slice(item.panelStartIndex, Number.isFinite(endIndex) ? endIndex : safePanels.length).filter(Boolean).join("");
+    }
+    return "";
+}
+
+function warnMissingWorkspaceSubnavPanel(item, panelCount) {
+    if (!item || item.panelHtml || item.emptyText) return;
+    console.warn("Workspace subsection panel is missing.", {
+        subsection: item.id,
+        label: item.label,
+        panelIndex: item.panelIndex,
+        panelIndexes: item.panelIndexes,
+        panelStartIndex: item.panelStartIndex,
+        panelCount
+    });
+}
+
+function parseWorkspaceSubnavPanels(baseHtml, config = {}) {
+    if (typeof document === "undefined") return { panels: [], introHtml: "" };
+    const template = document.createElement("template");
+    template.innerHTML = String(baseHtml || "").trim();
+    (config.removeSelectors || []).forEach((selector) => {
+        template.content.querySelectorAll(selector).forEach((node) => node.remove());
+    });
+
+    const stack = template.content.querySelector(".workspace-stack") || template.content;
+    const panelNodes = Array.from(stack.children).flatMap((child) => {
+        if (child.matches?.("article")) return [child];
+        if (child.matches?.(".split-panels")) {
+            return Array.from(child.children).filter((node) => node.matches?.("article"));
+        }
+        return [];
+    });
+
+    panelNodes.forEach((node) => node.setAttribute("data-no-collapsible", "true"));
+    const panels = panelNodes.map((node) => node.outerHTML);
+    const introIndexes = Array.isArray(config.introIndexes) ? config.introIndexes : [0];
+    const introHtml = introIndexes.map((index) => panels[index] || "").filter(Boolean).join("");
+    return { panels, introHtml };
+}
+
+function prepareWorkspaceSubnavGroups(config, panels, datasets) {
+    return (config.groups || []).map((group) => {
+        const items = (group.items || []).map((item) => {
+            const html = getWorkspaceSubnavItemPanelHtml(panels, item);
+            const preparedItem = {
+                ...item,
+                badgeText: typeof item.badge === "function" ? item.badge(datasets || {}) : item.badge,
+                panelHtml: html || (item.emptyText ? renderEmptyState(item.emptyText) : "")
+            };
+            warnMissingWorkspaceSubnavPanel(preparedItem, panels.length);
+            return preparedItem;
+        }).filter((item) => item.panelHtml);
+        return { ...group, items };
+    }).filter((group) => group.items.length);
+}
+
+function getActiveWorkspaceSubnavItem(role, sectionId, groups) {
+    const items = flattenWorkspaceSubnavGroups(groups);
+    const scopedState = ensureWorkspaceSubnavState(role);
+    if (!items.length) return null;
+    if (!items.some((item) => item.id === scopedState[sectionId])) {
+        scopedState[sectionId] = items[0].id;
+    }
+    return items.find((item) => item.id === scopedState[sectionId]) || items[0];
+}
+
+function renderWorkspaceSubnav(role, sectionId, groups, activeItem) {
+    return `
+        <aside class="workspace-subnav-sidebar" aria-label="${escapeHtml(sectionId)} 子導覽">
+            <div class="workspace-subnav-card">
+                ${groups.map((group) => `
+                    <div class="workspace-subnav-group">
+                        <p class="workspace-subnav-group-title">${escapeHtml(group.label || "")}</p>
+                        <div class="workspace-subnav-items">
+                            ${(group.items || []).map((item) => `
+                                <button
+                                    type="button"
+                                    class="workspace-subnav-item ${activeItem?.id === item.id ? "is-active" : ""}"
+                                    data-action="switch-workspace-subsection"
+                                    data-role="${escapeHtml(role)}"
+                                    data-section="${escapeHtml(sectionId)}"
+                                    data-subsection="${escapeHtml(item.id)}"
+                                    aria-current="${activeItem?.id === item.id ? "page" : "false"}"
+                                >
+                                    <span>${escapeHtml(item.label || "")}</span>
+                                    ${item.badgeText ? `<span class="workspace-subnav-badge">${escapeHtml(item.badgeText)}</span>` : ""}
+                                </button>
+                            `).join("")}
+                        </div>
+                    </div>
+                `).join("")}
+            </div>
+        </aside>
+    `;
+}
+
+function renderWorkspaceSubnavSection(role, sectionId, datasets, config, baseRenderer) {
+    if (!config || typeof baseRenderer !== "function") return typeof baseRenderer === "function" ? baseRenderer(datasets) : "";
+    const baseHtml = baseRenderer(datasets);
+    const { panels, introHtml } = parseWorkspaceSubnavPanels(baseHtml, config);
+    const groups = prepareWorkspaceSubnavGroups(config, panels, datasets);
+    const activeItem = getActiveWorkspaceSubnavItem(role, sectionId, groups);
+    if (!activeItem) return baseHtml;
+
+    return `
+        <div class="workspace-stack workspace-subnav-stack" data-workspace-role="${escapeHtml(role)}" data-workspace-section="${escapeHtml(sectionId)}">
+            ${introHtml}
+            <div class="workspace-subnav-layout">
+                ${renderWorkspaceSubnav(role, sectionId, groups, activeItem)}
+                <section class="workspace-subnav-content" aria-live="polite">
+                    ${activeItem.panelHtml}
+                </section>
+            </div>
+            ${config.appendHtml || ""}
+        </div>
+    `;
+}
+
+Object.entries(workspaceSubnavConfigs.admin).forEach(([sectionId, config]) => {
+    const baseRenderer = workspaceSubnavBaseRenderers.admin[sectionId];
+    if (typeof baseRenderer !== "function") return;
+    if (sectionId === "people") {
+        renderAdminPeopleSection = (datasets) => renderWorkspaceSubnavSection("admin", sectionId, datasets, config, baseRenderer);
+    } else if (sectionId === "security") {
+        renderAdminSecuritySection = (datasets) => renderWorkspaceSubnavSection("admin", sectionId, datasets, config, baseRenderer);
+    } else if (sectionId === "shifts") {
+        renderAdminShiftSection = (datasets) => renderWorkspaceSubnavSection("admin", sectionId, datasets, config, baseRenderer);
+    } else if (sectionId === "manualPunch") {
+        renderAdminManualPunchSection = (datasets) => renderWorkspaceSubnavSection("admin", sectionId, datasets, config, baseRenderer);
+    } else if (sectionId === "reports") {
+        renderAdminReportSection = (datasets) => renderWorkspaceSubnavSection("admin", sectionId, datasets, config, baseRenderer);
+    } else if (sectionId === "leave") {
+        renderAdminLeaveSection = (datasets) => renderWorkspaceSubnavSection("admin", sectionId, datasets, config, baseRenderer);
+    } else if (sectionId === "system") {
+        renderAdminSystemSection = (datasets) => renderWorkspaceSubnavSection("admin", sectionId, datasets, config, baseRenderer);
+    } else if (sectionId === "bells") {
+        renderAdminBellSection = (datasets) => renderWorkspaceSubnavSection("admin", sectionId, datasets, config, baseRenderer);
+    } else if (sectionId === "themes") {
+        renderAdminThemeSection = (datasets) => renderWorkspaceSubnavSection("admin", sectionId, datasets, config, baseRenderer);
+    }
+});
+
+Object.entries(workspaceSubnavConfigs.developer).forEach(([sectionId, config]) => {
+    const baseRenderer = workspaceSubnavBaseRenderers.developer[sectionId];
+    if (typeof baseRenderer !== "function") return;
+    if (sectionId === "automation") {
+        renderDeveloperAutomationSection = (datasets) => renderWorkspaceSubnavSection("developer", sectionId, datasets, config, baseRenderer);
+    } else if (sectionId === "automationLogs") {
+        renderDeveloperAutomationLogSection = (datasets) => renderWorkspaceSubnavSection("developer", sectionId, datasets, config, baseRenderer);
+    } else if (sectionId === "auditLogs") {
+        renderDeveloperAuditSection = (datasets) => renderWorkspaceSubnavSection("developer", sectionId, datasets, config, baseRenderer);
+    } else if (sectionId === "systemSettings") {
+        renderDeveloperSystemSettingsSection = (datasets) => renderWorkspaceSubnavSection("developer", sectionId, datasets, config, baseRenderer);
+    } else if (sectionId === "export") {
+        renderDeveloperExportSection = (datasets) => renderWorkspaceSubnavSection("developer", sectionId, datasets, config, baseRenderer);
+    } else if (sectionId === "status") {
+        renderDeveloperStatusSection = (datasets) => renderWorkspaceSubnavSection("developer", sectionId, datasets, config, baseRenderer);
+    }
+});
+
+function activateWorkspaceSubsection(role, sectionId, subsectionId) {
+    if (!role || !sectionId || !subsectionId) return;
+    ensureWorkspaceSubnavState(role)[sectionId] = subsectionId;
+}
+
+const workspaceSubnavEditRoutes = {
+    "edit-employee": { role: "admin", section: "people", subsection: "form", run: (target) => fillEmployeeForm(target.dataset.id) },
+    "edit-greeting": { role: "admin", section: "system", subsection: "greetings", run: (target) => fillGreetingForm(target.dataset.id) },
+    "edit-bell": { role: "admin", section: "bells", subsection: "schedules", run: (target) => fillBellForm(target.dataset.id) },
+    "edit-effect": { role: "admin", section: "themes", subsection: "effects", run: (target) => fillEffectForm(target.dataset.id) },
+    "edit-theme-schedule": { role: "admin", section: "themes", subsection: "schedules", run: (target) => fillThemeScheduleForm(target.dataset.id) },
+    "edit-custom-theme": { role: "admin", section: "themes", subsection: "editor", run: (target) => fillCustomThemeForm(target.dataset.id) },
+    "edit-automation-task": { role: "developer", section: "automation", subsection: "form", run: (target) => fillAutomationForm(target.dataset.id) }
+};
+
+const originalHandleDashboardClickWithWorkspaceSubnav = handleDashboardClick;
+handleDashboardClick = async function handleDashboardClickWorkspaceSubnavOverride(event) {
+    const actionTarget = event.target?.closest?.("[data-action]");
+    if (!actionTarget) return originalHandleDashboardClickWithWorkspaceSubnav(event);
+    const action = actionTarget.dataset.action;
+
+    if (action === "switch-workspace-subsection") {
+        event.preventDefault();
+        activateWorkspaceSubsection(actionTarget.dataset.role, actionTarget.dataset.section, actionTarget.dataset.subsection);
+        renderDashboard(state.dashboard);
+        return;
+    }
+
+    if (action === "jump-leave-routes") {
+        activateWorkspaceSubsection("admin", "leave", "routes");
+        return originalHandleDashboardClickWithWorkspaceSubnav(event);
+    }
+
+    const editRoute = workspaceSubnavEditRoutes[action];
+    if (editRoute) {
+        event.preventDefault();
+        activateWorkspaceSubsection(editRoute.role, editRoute.section, editRoute.subsection);
+        state.activeSections[editRoute.role] = editRoute.section;
+        renderDashboard(state.dashboard);
+        requestAnimationFrame(() => {
+            try {
+                editRoute.run(actionTarget);
+            } catch (error) {
+                console.error("Failed to run workspace subsection edit action.", error);
+                setMessage(ui.dashboardMessage, error.message || "切換到編輯表單時發生錯誤。", "error");
+            }
+        });
+        return;
+    }
+
+    return originalHandleDashboardClickWithWorkspaceSubnav(event);
+};
+
 function initialize() {
     ui.roleSelector.addEventListener("click", (event) => {
         const button = event.target.closest("[data-role]");
