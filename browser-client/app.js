@@ -9510,7 +9510,7 @@ const workspaceSubnavConfigs = {
                         { id: "form", label: "新增 / 編輯員工", panelIndex: 1 },
                         {
                             id: "roster",
-                            label: "員工名冊與欄位",
+                            label: "員工名冊資料",
                             panelIndex: 2,
                             badge: (datasets) => `${filterAdminEmployees(datasets.employees || []).length}/${(datasets.employees || []).length}`
                         }
