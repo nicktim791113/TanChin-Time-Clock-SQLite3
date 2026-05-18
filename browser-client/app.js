@@ -162,6 +162,7 @@ const state = {
     developerAudit: null,
     syncEventSource: null,
     activeInsightKey: "",
+    employeeWorkspacePanel: "",
     collapsibleStates: {},
     collapsibleDefaults: loadCollapsibleDefaults(),
     adminDashboardScope: loadAdminDashboardScope(),
@@ -2857,6 +2858,7 @@ function setupCollapsibleSections() {
     ].join(","));
 
     cards.forEach((card, index) => {
+        if (card.dataset.noCollapsible === "true" || card.closest(".employee-workbench")) return;
         if (card.dataset.collapsibleReady === "true") return;
 
         const title = card.querySelector("h3");
@@ -3372,6 +3374,7 @@ async function handleLogout(isSilent = false) {
     state.token = "";
     state.dashboard = null;
     state.adminReport = null;
+    state.employeeWorkspacePanel = "";
     state.adminPeopleFilters = createDefaultAdminPeopleFilterState();
     state.activeSections.admin = "people";
     state.activeSections.developer = "automation";
@@ -3426,6 +3429,12 @@ async function handleDashboardClick(event) {
     try {
         if (action === "employee-punch") return handleEmployeePunch();
         if (action === "refresh-dashboard") return reloadDashboard("資料已更新。");
+        if (action === "select-employee-workspace-panel") {
+            const panelId = actionTarget.dataset.panel || "";
+            state.employeeWorkspacePanel = state.employeeWorkspacePanel === panelId ? "" : panelId;
+            renderDashboard(state.dashboard);
+            return;
+        }
         if (action === "switch-section") {
             state.activeSections[actionTarget.dataset.role] = actionTarget.dataset.section;
             renderDashboard(state.dashboard);
@@ -8298,6 +8307,214 @@ renderEmployeeDashboard = function renderEmployeeDashboardLeaveOverride(dashboar
     return `${baseHtml.slice(0, closingIndex)}${leaveHtml}${baseHtml.slice(closingIndex)}`;
 };
 
+function renderEmployeeLeaveApplicationPanel(dashboard) {
+    const leave = dashboard.leave || {};
+    const leaveTypes = leave.leaveTypes || [];
+    const today = formatDateInputValue(new Date());
+    return `
+        <article class="workspace-card employee-workbench-panel" data-no-collapsible="true">
+            <div class="list-toolbar">
+                <div>
+                    <h3>請假申請</h3>
+                    <p class="helper-text">填寫假別、時間與原因後送出申請。</p>
+                </div>
+                ${renderBadge(`可用假別 ${leaveTypes.length} 種`, "success")}
+            </div>
+            <form id="employee-leave-form" class="stack-form">
+                <div class="field-grid dense-form">
+                    <label class="field">
+                        <span>假別</span>
+                        <select name="leaveTypeId" required>${renderLeaveTypeOptions(leaveTypes)}</select>
+                    </label>
+                    <label class="field">
+                        <span>開始日期</span>
+                        <input name="startDate" type="date" value="${today}" required>
+                    </label>
+                    <label class="field">
+                        <span>開始時間</span>
+                        <input name="startTime" type="time" value="09:00" required>
+                    </label>
+                    <label class="field">
+                        <span>結束日期</span>
+                        <input name="endDate" type="date" value="${today}" required>
+                    </label>
+                    <label class="field">
+                        <span>結束時間</span>
+                        <input name="endTime" type="time" value="18:00" required>
+                    </label>
+                    <label class="field">
+                        <span>請假時數</span>
+                        <input name="durationHours" type="number" min="0.5" step="0.5" placeholder="可留空由時間推算">
+                    </label>
+                    <label class="field span-2">
+                        <span>請假原因</span>
+                        <textarea name="reason" rows="3" placeholder="請簡述請假原因"></textarea>
+                    </label>
+                </div>
+                <div class="form-toolbar dense-toolbar">
+                    <button class="primary-btn" type="submit">送出請假申請</button>
+                    <p class="helper-text">送出後會依照主管審核與管理部終審流程更新狀態。</p>
+                </div>
+                <div class="inline-message" data-form-message-for="employee-leave-form" aria-live="polite"></div>
+            </form>
+        </article>
+    `;
+}
+
+function renderEmployeeLeaveRecordsPanel(dashboard) {
+    const leave = dashboard.leave || {};
+    return `
+        <div class="workspace-stack employee-leave-record-stack">
+            ${leave.supervisorQueue?.length ? `
+                <article class="table-card employee-workbench-panel" data-no-collapsible="true">
+                    <div class="list-toolbar">
+                        <div>
+                            <h3>待我審核</h3>
+                            <p class="helper-text">主管身分可在這裡處理部門員工的請假申請。</p>
+                        </div>
+                        ${renderBadge(`${leave.supervisorQueue.length} 筆待審`, "warning")}
+                    </div>
+                    ${renderEmployeeLeaveRequestRows(leave.supervisorQueue, { showEmployee: true, reviewMode: "supervisor" })}
+                </article>
+            ` : ""}
+            <article class="table-card employee-workbench-panel" data-no-collapsible="true">
+                <div class="list-toolbar">
+                    <div>
+                        <h3>我的請假紀錄</h3>
+                        <p class="helper-text">查看自己的請假申請、審核狀態與可撤回項目。</p>
+                    </div>
+                    ${renderBadge(`${leave.myRequests?.length || 0} 筆`)}
+                </div>
+                ${renderEmployeeLeaveRequestRows(leave.myRequests || [])}
+            </article>
+        </div>
+    `;
+}
+
+function renderEmployeeWorkspaceItems(dashboard) {
+    const leave = dashboard.leave || {};
+    const summary = dashboard.summary || {};
+    const records = Array.isArray(dashboard.recentRecords) ? dashboard.recentRecords : [];
+    const security = dashboard.security || {};
+    return [
+        {
+            id: "private",
+            label: "私人資訊",
+            meta: dashboard.user?.department || dashboard.user?.job_title || "個人資料",
+            html: `
+                <article class="info-card employee-workbench-panel" data-no-collapsible="true">
+                    <h3>私人資訊</h3>
+                    <p class="hero-copy">查看聯絡資訊、地址與其他個人資料。</p>
+                    ${buildEmployeePrivateInfoGrid(dashboard.user)}
+                </article>
+            `
+        },
+        {
+            id: "records",
+            label: "近 7 日打卡紀錄",
+            meta: `${summary.weekRecordCount ?? records.length ?? 0} 筆`,
+            html: `
+                <article class="record-card employee-workbench-panel" data-no-collapsible="true">
+                    <h3>近 7 日打卡紀錄</h3>
+                    <p class="hero-copy">查看最近 7 日內的打卡時間、班別與來源。</p>
+                    ${renderRecords(records)}
+                </article>
+            `
+        },
+        {
+            id: "security",
+            label: "遠端打卡安全",
+            meta: security.currentDeviceTrusted ? "目前裝置已信任" : "需要確認裝置",
+            html: dashboard.security
+                ? renderEmployeeSecurityCard(dashboard.security).replace("<article class=\"info-card employee-security-card\">", "<article class=\"info-card employee-security-card employee-workbench-panel\" data-no-collapsible=\"true\">")
+                : `
+                    <article class="info-card employee-workbench-panel" data-no-collapsible="true">
+                        <h3>遠端打卡安全</h3>
+                        ${renderEmptyState("目前沒有遠端打卡安全資料。")}
+                    </article>
+                `
+        },
+        {
+            id: "leave-request",
+            label: "請假申請",
+            meta: `${leave.leaveTypes?.length || 0} 種假別`,
+            html: renderEmployeeLeaveApplicationPanel(dashboard)
+        },
+        {
+            id: "leave-history",
+            label: "我的請假紀錄",
+            meta: `${leave.myRequests?.length || 0} 筆`,
+            html: renderEmployeeLeaveRecordsPanel(dashboard)
+        }
+    ];
+}
+
+function renderEmployeeWorkspacePanel(dashboard) {
+    const items = renderEmployeeWorkspaceItems(dashboard);
+    const activeItem = items.find((item) => item.id === state.employeeWorkspacePanel);
+    return `
+        <section class="employee-workbench" style="grid-column: 1 / -1;">
+            <div class="employee-workbench-tabs" role="tablist" aria-label="員工工作台項目">
+                ${items.map((item) => {
+                    const isActive = activeItem?.id === item.id;
+                    return `
+                        <button
+                            class="employee-workbench-tab ${isActive ? "is-active" : ""}"
+                            type="button"
+                            role="tab"
+                            aria-selected="${isActive ? "true" : "false"}"
+                            aria-expanded="${isActive ? "true" : "false"}"
+                            data-action="select-employee-workspace-panel"
+                            data-panel="${escapeHtml(item.id)}">
+                            <span>${escapeHtml(item.label)}</span>
+                            <small>${escapeHtml(item.meta || "")}</small>
+                        </button>
+                    `;
+                }).join("")}
+            </div>
+            <div class="employee-workbench-content">
+                ${activeItem ? activeItem.html : renderEmptyState("請點選上方項目查看內容。")}
+            </div>
+        </section>
+    `;
+}
+
+renderEmployeeDashboard = function renderEmployeeDashboardWorkbenchOverride(dashboard) {
+    const lastPunchText = dashboard.summary.lastPunch
+        ? `${dashboard.summary.lastPunch.dateText} ${dashboard.summary.lastPunch.timeText} ${dashboard.summary.lastPunch.statusText}`
+        : "目前沒有打卡紀錄";
+
+    return `
+        <div class="dashboard-layout employee-layout">
+            <article class="info-card employee-summary-card" data-no-collapsible="true">
+                <h3>員工資料</h3>
+                <p class="hero-copy">查看目前登入員工、班別與近期打卡摘要。</p>
+                ${buildInfoGrid(dashboard.user)}
+                ${renderStatsGrid(dashboard.summary, {
+                    todayRecordCount: "今日紀錄數",
+                    validRecordCount: "有效打卡",
+                    weekRecordCount: "近 7 日紀錄",
+                    currentShiftName: "目前班別",
+                    nextPunchType: "下一次動作"
+                })}
+            </article>
+
+            <article class="clock-panel employee-clock-card">
+                <h3>目前時間</h3>
+                <p id="employee-live-clock" class="clock-time">--:--:--</p>
+                <p id="employee-clock-subtext" class="clock-subtext"></p>
+                <div class="quick-actions">
+                    <button data-action="employee-punch" class="primary-btn" type="button">${escapeHtml(dashboard.punchAction.label)}</button>
+                    <button data-action="refresh-dashboard" class="secondary-btn" type="button">重新整理</button>
+                </div>
+                <p class="punch-note">最後一次打卡：${escapeHtml(lastPunchText)}</p>
+            </article>
+
+            ${renderEmployeeWorkspacePanel(dashboard)}
+        </div>
+    `;
+};
+
 renderAdminDashboard = function renderAdminDashboardLeaveOverride(dashboard) {
     const sections = [
         { id: "people", label: "人員資料" },
@@ -8405,6 +8622,7 @@ setupCollapsibleSections = function setupCollapsibleSectionsPersistent() {
     ].join(","));
 
     cards.forEach((card, index) => {
+        if (card.dataset.noCollapsible === "true" || card.closest(".employee-workbench")) return;
         if (card.dataset.collapsibleReady === "true") return;
 
         const title = card.querySelector("h3");

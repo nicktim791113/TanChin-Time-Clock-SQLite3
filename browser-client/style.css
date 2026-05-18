@@ -2896,3 +2896,87 @@ body::after {
         grid-template-columns: 1fr;
     }
 }
+
+.employee-workbench {
+    display: grid;
+    gap: var(--dense-gap-md);
+    min-width: 0;
+}
+
+.employee-workbench-tabs {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: var(--dense-gap-sm);
+    min-width: 0;
+    overflow-x: auto;
+    padding: 2px 2px 6px;
+    scrollbar-width: thin;
+}
+
+.employee-workbench-tab {
+    flex: 1 1 0;
+    min-width: 145px;
+    min-height: 54px;
+    display: grid;
+    align-content: center;
+    gap: 3px;
+    padding: 8px 10px;
+    border: 1px solid rgba(118, 180, 214, 0.22);
+    border-radius: var(--dense-radius);
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(240, 248, 253, 0.96) 50%, rgba(226, 240, 249, 0.94) 100%);
+    color: #0f587b;
+    box-shadow:
+        0 8px 16px rgba(84, 121, 146, 0.1),
+        inset 0 1px 0 rgba(255, 255, 255, 0.86);
+    cursor: pointer;
+    font: inherit;
+    font-weight: 800;
+    text-align: left;
+}
+
+.employee-workbench-tab small {
+    min-width: 0;
+    color: var(--muted);
+    font-size: 0.74rem;
+    font-weight: 700;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.employee-workbench-tab.is-active {
+    border-color: rgba(92, 189, 232, 0.5);
+    background:
+        linear-gradient(180deg, rgba(248, 254, 255, 0.99), rgba(220, 243, 255, 0.98) 42%, rgba(189, 230, 248, 0.96) 100%);
+    color: #0b597c;
+    box-shadow:
+        0 12px 22px rgba(70, 139, 179, 0.14),
+        inset 0 1px 0 rgba(255, 255, 255, 0.92),
+        0 0 0 1px rgba(110, 212, 245, 0.14);
+}
+
+.employee-workbench-tab:hover,
+.employee-workbench-tab:focus-visible {
+    border-color: rgba(98, 196, 236, 0.44);
+    outline: none;
+}
+
+.employee-workbench-content {
+    min-width: 0;
+}
+
+.employee-workbench-panel {
+    grid-column: 1 / -1;
+}
+
+.employee-leave-record-stack {
+    gap: var(--dense-gap-sm);
+}
+
+@media (max-width: 720px) {
+    .employee-workbench-tab {
+        flex: 0 0 160px;
+    }
+}
