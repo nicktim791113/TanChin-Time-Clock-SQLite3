@@ -63,6 +63,17 @@ function init(dbFilePath) {
       updated_at INTEGER,
       updated_by TEXT
     );
+    CREATE TABLE IF NOT EXISTS workspace_nav_order (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      role TEXT NOT NULL,
+      nav_type TEXT NOT NULL DEFAULT 'main',
+      scope TEXT NOT NULL DEFAULT 'global',
+      employee_id TEXT NOT NULL DEFAULT '',
+      order_json TEXT NOT NULL DEFAULT '[]',
+      updated_at INTEGER,
+      updated_by TEXT,
+      UNIQUE(role, nav_type, scope, employee_id)
+    );
     CREATE TABLE IF NOT EXISTS special_effects ( id TEXT PRIMARY KEY, name TEXT, prefix TEXT, suffix TEXT, start_date TEXT, end_date TEXT, enabled INTEGER );
     CREATE TABLE IF NOT EXISTS theme_schedules ( id TEXT PRIMARY KEY, name TEXT, theme_name TEXT, start_date TEXT, end_date TEXT, enabled INTEGER );
     CREATE TABLE IF NOT EXISTS automation_tasks ( id TEXT PRIMARY KEY, frequency TEXT, day TEXT, time TEXT, task_type TEXT, target TEXT, export_template TEXT, export_directory TEXT, enabled INTEGER );
@@ -178,6 +189,7 @@ function init(dbFilePath) {
     CREATE INDEX IF NOT EXISTS idx_leave_requests_start_at ON leave_requests (start_at);
     CREATE INDEX IF NOT EXISTS idx_leave_approval_steps_request_id ON leave_approval_steps (request_id);
     CREATE INDEX IF NOT EXISTS idx_account_access_updated_at ON account_access (updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_workspace_nav_order_scope ON workspace_nav_order (role, nav_type, scope, employee_id);
   `);
   
   // --- 魔法加固區：自動升級寶庫結構 ---
@@ -811,6 +823,71 @@ const deleteAccountAccessByEmployee = (employeeId) => run(
     String(employeeId || '').trim()
 );
 
+function mapWorkspaceNavOrderRow(row = {}) {
+    return {
+        id: Number(row.id) || 0,
+        role: String(row.role || '').trim(),
+        nav_type: String(row.nav_type || 'main').trim() || 'main',
+        scope: String(row.scope || 'global').trim() || 'global',
+        employee_id: String(row.employee_id || '').trim(),
+        order: normalizeStringList(safeParseArray(row.order_json, [])),
+        updated_at: Number(row.updated_at) || 0,
+        updated_by: String(row.updated_by || '').trim()
+    };
+}
+
+function normalizeWorkspaceNavOrderForStorage(record = {}) {
+    return {
+        role: String(record.role || '').trim(),
+        nav_type: String(record.nav_type || record.navType || 'main').trim() || 'main',
+        scope: String(record.scope || 'global').trim() || 'global',
+        employee_id: String(record.employee_id || record.employeeId || '').trim(),
+        order_json: JSON.stringify(normalizeStringList(record.order || record.order_json || record.orderJson || [])),
+        updated_at: Number(record.updated_at || record.updatedAt) || Date.now(),
+        updated_by: String(record.updated_by || record.updatedBy || '').trim()
+    };
+}
+
+const loadWorkspaceNavOrderRecords = () => all(
+    'SELECT * FROM workspace_nav_order ORDER BY role, nav_type, scope, employee_id'
+).map(mapWorkspaceNavOrderRow);
+
+const getWorkspaceNavOrderRecord = (role, navType = 'main', scope = 'global', employeeId = '') => {
+    const row = get(
+        'SELECT * FROM workspace_nav_order WHERE role = ? AND nav_type = ? AND scope = ? AND employee_id = ?',
+        String(role || '').trim(),
+        String(navType || 'main').trim() || 'main',
+        String(scope || 'global').trim() || 'global',
+        String(employeeId || '').trim()
+    );
+    return row ? mapWorkspaceNavOrderRow(row) : null;
+};
+
+const saveWorkspaceNavOrderRecord = (record = {}) => {
+    const normalized = normalizeWorkspaceNavOrderForStorage(record);
+    if (!normalized.role) return;
+    run(
+        `INSERT OR REPLACE INTO workspace_nav_order (
+            role, nav_type, scope, employee_id, order_json, updated_at, updated_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        normalized.role,
+        normalized.nav_type,
+        normalized.scope,
+        normalized.employee_id,
+        normalized.order_json,
+        normalized.updated_at,
+        normalized.updated_by
+    );
+};
+
+const deleteWorkspaceNavOrderRecord = (role, navType = 'main', scope = 'global', employeeId = '') => run(
+    'DELETE FROM workspace_nav_order WHERE role = ? AND nav_type = ? AND scope = ? AND employee_id = ?',
+    String(role || '').trim(),
+    String(navType || 'main').trim() || 'main',
+    String(scope || 'global').trim() || 'global',
+    String(employeeId || '').trim()
+);
+
 function mapEmployeeDeviceRow(row) {
     return {
         ...row,
@@ -1158,6 +1235,8 @@ module.exports = {
   setSetting, getSetting,
   countAccountAccessRecords, loadAccountAccessRecords, getAccountAccessRecord,
   saveAccountAccessRecords, saveAccountAccessRecord, deleteAccountAccessByEmployee,
+  loadWorkspaceNavOrderRecords, getWorkspaceNavOrderRecord,
+  saveWorkspaceNavOrderRecord, deleteWorkspaceNavOrderRecord,
   loadEmployeeDevices, getEmployeeDevice, saveEmployeeDevice,
   deleteEmployeeDevice, deleteEmployeeDevicesByEmployee,
   saveSpecialEffects, loadSpecialEffects,

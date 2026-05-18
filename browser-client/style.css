@@ -3043,6 +3043,77 @@ body::after {
     min-width: 0;
 }
 
+.workspace-nav-order-panel {
+    gap: var(--dense-gap-sm);
+}
+
+.workspace-nav-order-meta {
+    grid-template-columns: minmax(170px, 0.8fr) minmax(170px, 1fr);
+}
+
+.workspace-nav-order-list {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+}
+
+.workspace-nav-order-item {
+    min-height: 38px;
+    display: grid;
+    grid-template-columns: 30px minmax(110px, 1fr) minmax(64px, 0.45fr) auto;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border: 1px solid rgba(118, 180, 214, 0.28);
+    border-radius: var(--dense-radius);
+    background: rgba(255, 255, 255, 0.9);
+    cursor: grab;
+}
+
+.workspace-nav-order-item.is-dragging {
+    opacity: 0.62;
+    cursor: grabbing;
+    box-shadow: 0 8px 18px rgba(84, 121, 146, 0.16);
+}
+
+.workspace-nav-order-index {
+    width: 26px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: rgba(11, 120, 159, 0.1);
+    color: var(--brand-dark);
+    font-size: 0.75rem;
+    font-weight: 850;
+}
+
+.workspace-nav-order-label,
+.workspace-nav-order-id {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.workspace-nav-order-label {
+    color: #17384d;
+    font-weight: 800;
+}
+
+.workspace-nav-order-id {
+    color: var(--muted);
+    font-size: 0.75rem;
+    font-family: Consolas, "Courier New", monospace;
+}
+
+.workspace-nav-order-actions {
+    display: inline-flex;
+    gap: 5px;
+    justify-content: flex-end;
+}
+
 @media (max-width: 860px) {
     .workspace-subnav-layout {
         grid-template-columns: 1fr;
@@ -3135,6 +3206,19 @@ body::after {
         min-height: 32px;
         padding: 6px 8px;
         font-size: 0.86rem;
+    }
+
+    .workspace-nav-order-meta,
+    .workspace-nav-order-item {
+        grid-template-columns: 1fr;
+    }
+
+    .workspace-nav-order-item {
+        gap: 5px;
+    }
+
+    .workspace-nav-order-actions {
+        justify-content: flex-start;
     }
 }
 

@@ -61,6 +61,25 @@ const ADMIN_SECTION_RULES = [
   { id: 'bells', label: '響鈴設定', permissions: ['admin.bells.manage'] },
   { id: 'themes', label: '主題特效', permissions: ['admin.themes.manage'] }
 ];
+const WORKSPACE_NAV_ROLE_DEFINITIONS = {
+  admin: {
+    id: 'admin',
+    label: '管理者工作台',
+    sections: ADMIN_SECTION_RULES.map(({ id, label }) => ({ id, label }))
+  },
+  developer: {
+    id: 'developer',
+    label: '開發者工作台',
+    sections: [
+      { id: 'automation', label: '自動化任務' },
+      { id: 'automationLogs', label: '自動化日誌' },
+      { id: 'auditLogs', label: '稽核紀錄' },
+      { id: 'systemSettings', label: '系統設定' },
+      { id: 'export', label: '匯出設定' },
+      { id: 'status', label: '系統狀態' }
+    ]
+  }
+};
 const ADMIN_PERMISSION_PRESETS = [
   {
     id: 'none',
@@ -238,6 +257,11 @@ const API_ROUTE_CATALOG = [
 ];
 
 API_ROUTE_CATALOG.push(
+  { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/workspace-nav-order/save', auth: '開發人員', description: '儲存主功能頁籤全域排序' },
+  { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/workspace-nav-order/reset', auth: '開發人員', description: '還原主功能頁籤預設排序' }
+);
+
+API_ROUTE_CATALOG.push(
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/automation-export-directory/select', auth: '開發人員', description: '開啟自動化匯出資料夾選擇器' },
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/automation-export-directory/save', auth: '開發人員', description: '儲存自動化匯出的預設資料夾' }
 );
@@ -380,6 +404,68 @@ function buildPermissionCatalog() {
     adminSections: ADMIN_SECTION_RULES,
     adminPermissions: ADMIN_PERMISSION_DEFINITIONS,
     adminPresets: ADMIN_PERMISSION_PRESETS
+  };
+}
+
+function getWorkspaceNavDefaultOrder(role) {
+  return (WORKSPACE_NAV_ROLE_DEFINITIONS[role]?.sections || []).map((section) => section.id);
+}
+
+function normalizeWorkspaceNavOrder(role, order = []) {
+  const defaultOrder = getWorkspaceNavDefaultOrder(role);
+  const allowedIds = new Set(defaultOrder);
+  const submittedOrder = normalizeStringList(order).filter((sectionId) => allowedIds.has(sectionId));
+  const submittedSet = new Set(submittedOrder);
+  return [
+    ...submittedOrder,
+    ...defaultOrder.filter((sectionId) => !submittedSet.has(sectionId))
+  ];
+}
+
+function buildWorkspaceNavOrderState(session = {}, options = {}) {
+  const includeDefinitions = Boolean(options.includeDefinitions);
+  const canManage = session?.role === 'developer';
+  const orders = Object.fromEntries(
+    Object.keys(WORKSPACE_NAV_ROLE_DEFINITIONS).map((role) => {
+      const record = dbModule.getWorkspaceNavOrderRecord(role, 'main', 'global', '');
+      const defaultOrder = getWorkspaceNavDefaultOrder(role);
+      const order = record ? normalizeWorkspaceNavOrder(role, record.order) : defaultOrder;
+      return [role, {
+        role,
+        navType: 'main',
+        scope: 'global',
+        order,
+        defaultOrder,
+        source: record ? 'custom' : 'default',
+        updatedAt: record?.updated_at || 0,
+        updatedBy: record?.updated_by || ''
+      }];
+    })
+  );
+
+  return {
+    canManage,
+    orders,
+    roles: includeDefinitions && canManage
+      ? Object.values(WORKSPACE_NAV_ROLE_DEFINITIONS)
+      : []
+  };
+}
+
+function validateWorkspaceNavOrderInput(body = {}, request) {
+  const role = String(body.role || '').trim();
+  if (!WORKSPACE_NAV_ROLE_DEFINITIONS[role]) {
+    throw createHttpError('主功能頁籤排序角色不正確。', 400);
+  }
+
+  return {
+    role,
+    nav_type: 'main',
+    scope: 'global',
+    employee_id: '',
+    order: normalizeWorkspaceNavOrder(role, body.order || []),
+    updated_at: Date.now(),
+    updated_by: request?.browserSession?.realEmployeeId || request?.browserSession?.employeeId || ''
   };
 }
 
@@ -1565,7 +1651,7 @@ function getAdminDatasets(session = {}) {
   };
 }
 
-function getDeveloperDatasets() {
+function getDeveloperDatasets(session = {}) {
   const settings = getSettingsSnapshot();
   const externalApiSettings = getExternalApiAccessSettings();
   const auditLogs = dbModule.queryAuditLogs({ limit: 100 });
@@ -1593,6 +1679,7 @@ function getDeveloperDatasets() {
     },
     employees: dbModule.loadEmployees().map(sanitizeEmployeeForProfile),
     accountAccess: buildAccountAccessState(),
+    workspaceNavOrder: buildWorkspaceNavOrderState(session, { includeDefinitions: true }),
     automationExport: getAutomationExportDirectorySettings(),
     attendanceExport: getAttendanceExportSettings(),
     systemHealth: getSystemHealthSnapshot(),
@@ -1613,6 +1700,7 @@ function buildEmployeeDashboard(employee, session = null) {
     role: 'employee',
     user: sanitizeEmployeeForProfile(employee),
     displaySettings: getBrowserDisplaySettings(),
+    workspaceNavOrder: buildWorkspaceNavOrderState(session),
     summary: {
       todayRecordCount,
       validRecordCount,
@@ -1786,6 +1874,7 @@ function buildManagerDashboard(employee, session = {}) {
     role: 'admin',
     user: sanitizeEmployeeForProfile(employee),
     displaySettings: getBrowserDisplaySettings(),
+    workspaceNavOrder: buildWorkspaceNavOrderState(session),
     permissions: {
       admin: adminPermissions,
       sections: adminSections
@@ -1810,14 +1899,15 @@ function buildManagerDashboard(employee, session = {}) {
   };
 }
 
-function buildDeveloperDashboard(employee) {
-  const datasets = getDeveloperDatasets();
+function buildDeveloperDashboard(employee, session = {}) {
+  const datasets = getDeveloperDatasets(session);
   const enabledTaskCount = datasets.automationTasks.filter((task) => task.enabled).length;
 
   return {
     role: 'developer',
     user: sanitizeEmployeeForProfile(employee),
     displaySettings: getBrowserDisplaySettings(),
+    workspaceNavOrder: buildWorkspaceNavOrderState(session, { includeDefinitions: true }),
     summary: {
       automationTaskCount: datasets.automationTasks.length,
       enabledTaskCount,
@@ -1897,7 +1987,7 @@ function buildDashboardForSession(session) {
 
   if (session.role === 'employee') return appendImpersonationState(buildEmployeeDashboard(employee, session), session);
   if (session.role === 'admin') return appendImpersonationState(buildManagerDashboard(employee, session), session);
-  return appendImpersonationState(buildDeveloperDashboard(employee), session);
+  return appendImpersonationState(buildDeveloperDashboard(employee, session), session);
 }
 
 function createHttpError(message, statusCode = 400) {
@@ -4583,6 +4673,57 @@ function attachBrowserRoutes(server) {
       message: '已返回開發人員頁面。',
       dashboard: buildDashboardForSession(session)
     });
+  });
+
+  server.post('/api/browser/developer/workspace-nav-order/save', requireBrowserSession, requireBrowserRole('developer'), (request, response) => {
+    try {
+      const record = validateWorkspaceNavOrderInput(request.body || {}, request);
+      const previousRecord = dbModule.getWorkspaceNavOrderRecord(record.role, record.nav_type, record.scope, record.employee_id);
+      dbModule.saveWorkspaceNavOrderRecord(record);
+      writeBrowserAuditLog(request, {
+        action: 'save',
+        target_type: 'workspace_nav_order',
+        target_id: record.role,
+        summary: `儲存 ${WORKSPACE_NAV_ROLE_DEFINITIONS[record.role]?.label || record.role} 主功能頁籤排序`,
+        before_data: previousRecord ? { order: previousRecord.order } : { order: getWorkspaceNavDefaultOrder(record.role), source: 'default' },
+        after_data: { order: record.order }
+      });
+      notifyDesktop('workspaceNavOrder', getBrowserSyncMeta(request));
+      response.json({
+        success: true,
+        message: '主功能頁籤排序已儲存。',
+        dashboard: buildDashboardForSession(request.browserSession)
+      });
+    } catch (error) {
+      response.status(error.statusCode || 400).json({ success: false, error: error.message });
+    }
+  });
+
+  server.post('/api/browser/developer/workspace-nav-order/reset', requireBrowserSession, requireBrowserRole('developer'), (request, response) => {
+    try {
+      const role = String(request.body?.role || '').trim();
+      if (!WORKSPACE_NAV_ROLE_DEFINITIONS[role]) {
+        throw createHttpError('主功能頁籤排序角色不正確。', 400);
+      }
+      const previousRecord = dbModule.getWorkspaceNavOrderRecord(role, 'main', 'global', '');
+      dbModule.deleteWorkspaceNavOrderRecord(role, 'main', 'global', '');
+      writeBrowserAuditLog(request, {
+        action: 'reset',
+        target_type: 'workspace_nav_order',
+        target_id: role,
+        summary: `還原 ${WORKSPACE_NAV_ROLE_DEFINITIONS[role]?.label || role} 主功能頁籤預設排序`,
+        before_data: previousRecord ? { order: previousRecord.order } : null,
+        after_data: { order: getWorkspaceNavDefaultOrder(role), source: 'default' }
+      });
+      notifyDesktop('workspaceNavOrder', getBrowserSyncMeta(request));
+      response.json({
+        success: true,
+        message: '主功能頁籤排序已還原預設。',
+        dashboard: buildDashboardForSession(request.browserSession)
+      });
+    } catch (error) {
+      response.status(error.statusCode || 400).json({ success: false, error: error.message });
+    }
   });
 
   server.post('/api/browser/developer/change-system-password', requireBrowserSession, requireBrowserRole('developer'), (request, response) => {

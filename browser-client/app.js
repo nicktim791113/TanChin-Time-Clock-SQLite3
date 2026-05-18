@@ -164,6 +164,7 @@ const state = {
     syncEventSource: null,
     activeInsightKey: "",
     employeeWorkspacePanel: "",
+    workspaceNavOrderRole: "admin",
     collapsibleStates: {},
     collapsibleDefaults: loadCollapsibleDefaults(),
     adminDashboardScope: loadAdminDashboardScope(),
@@ -172,6 +173,64 @@ const state = {
         developer: "automation"
     }
 };
+
+const WORKSPACE_NAV_ROLE_FALLBACKS = [
+    {
+        id: "admin",
+        label: "管理者工作台",
+        sections: [
+            { id: "people", label: "人員資料" },
+            { id: "security", label: "安全設定" },
+            { id: "shifts", label: "班別設定" },
+            { id: "manualPunch", label: "手動補登" },
+            { id: "reports", label: "考勤報表" },
+            { id: "leave", label: "請假管理" },
+            { id: "system", label: "系統設定" },
+            { id: "bells", label: "響鈴設定" },
+            { id: "themes", label: "主題特效" }
+        ]
+    },
+    {
+        id: "developer",
+        label: "開發者工作台",
+        sections: [
+            { id: "automation", label: "自動化任務" },
+            { id: "automationLogs", label: "自動化日誌" },
+            { id: "auditLogs", label: "稽核紀錄" },
+            { id: "systemSettings", label: "系統設定" },
+            { id: "export", label: "匯出設定" },
+            { id: "status", label: "系統狀態" }
+        ]
+    }
+];
+
+function getWorkspaceNavOrderState(dashboard = state.dashboard) {
+    return dashboard?.datasets?.workspaceNavOrder || dashboard?.workspaceNavOrder || {
+        canManage: false,
+        roles: [],
+        orders: {}
+    };
+}
+
+function getWorkspaceNavRoleDefinitions(navState = getWorkspaceNavOrderState()) {
+    const roles = Array.isArray(navState.roles) && navState.roles.length
+        ? navState.roles
+        : WORKSPACE_NAV_ROLE_FALLBACKS;
+    return roles.filter((role) => role?.id && Array.isArray(role.sections));
+}
+
+function orderWorkspaceMainSections(role, sections = [], dashboard = state.dashboard) {
+    const safeSections = Array.isArray(sections) ? sections : [];
+    const order = getWorkspaceNavOrderState(dashboard)?.orders?.[role]?.order || [];
+    if (!Array.isArray(order) || !order.length) return safeSections;
+    const orderMap = new Map(order.map((sectionId, index) => [sectionId, index]));
+    return [...safeSections].sort((a, b) => {
+        const aIndex = orderMap.has(a.id) ? orderMap.get(a.id) : Number.MAX_SAFE_INTEGER;
+        const bIndex = orderMap.has(b.id) ? orderMap.get(b.id) : Number.MAX_SAFE_INTEGER;
+        if (aIndex !== bIndex) return aIndex - bIndex;
+        return safeSections.indexOf(a) - safeSections.indexOf(b);
+    });
+}
 
 function padDatePart(value) {
     return String(value).padStart(2, "0");
@@ -1823,9 +1882,10 @@ function renderAdminReportSection(datasets) {
 
 function renderSectionTabs(role, items) {
     const activeSection = state.activeSections[role];
+    const orderedItems = orderWorkspaceMainSections(role, items);
     return `
         <div class="section-nav">
-            ${items.map((item) => `
+            ${orderedItems.map((item) => `
                 <button
                     type="button"
                     class="section-tab ${activeSection === item.id ? "active" : ""}"
@@ -7804,11 +7864,107 @@ function renderDeveloperSystemPasswordPanel() {
     `;
 }
 
+function getSelectedWorkspaceNavOrderRole(navState = getWorkspaceNavOrderState()) {
+    const roles = getWorkspaceNavRoleDefinitions(navState);
+    const roleIds = new Set(roles.map((role) => role.id));
+    if (!roleIds.has(state.workspaceNavOrderRole)) {
+        state.workspaceNavOrderRole = roles[0]?.id || "admin";
+    }
+    return state.workspaceNavOrderRole;
+}
+
+function getWorkspaceNavRoleDefinition(roleId, navState = getWorkspaceNavOrderState()) {
+    return getWorkspaceNavRoleDefinitions(navState).find((role) => role.id === roleId)
+        || WORKSPACE_NAV_ROLE_FALLBACKS.find((role) => role.id === roleId)
+        || WORKSPACE_NAV_ROLE_FALLBACKS[0];
+}
+
+function getOrderedWorkspaceNavSectionsForEditor(roleDefinition, navState = getWorkspaceNavOrderState()) {
+    const sections = Array.isArray(roleDefinition?.sections) ? roleDefinition.sections : [];
+    const order = navState?.orders?.[roleDefinition?.id]?.order || sections.map((section) => section.id);
+    const orderMap = new Map(order.map((sectionId, index) => [sectionId, index]));
+    return [...sections].sort((a, b) => {
+        const aIndex = orderMap.has(a.id) ? orderMap.get(a.id) : Number.MAX_SAFE_INTEGER;
+        const bIndex = orderMap.has(b.id) ? orderMap.get(b.id) : Number.MAX_SAFE_INTEGER;
+        if (aIndex !== bIndex) return aIndex - bIndex;
+        return sections.indexOf(a) - sections.indexOf(b);
+    });
+}
+
+function renderDeveloperWorkspaceNavOrderPanel(datasets = {}) {
+    const navState = getWorkspaceNavOrderState({ ...state.dashboard, datasets });
+    if (!navState.canManage) return "";
+
+    const roles = getWorkspaceNavRoleDefinitions(navState);
+    const selectedRole = getSelectedWorkspaceNavOrderRole(navState);
+    const roleDefinition = getWorkspaceNavRoleDefinition(selectedRole, navState);
+    const orderRecord = navState.orders?.[selectedRole] || {};
+    const orderedSections = getOrderedWorkspaceNavSectionsForEditor(roleDefinition, navState);
+    const sourceLabel = orderRecord.source === "custom" ? "自訂排序" : "預設排序";
+    const updatedText = orderRecord.updatedAt
+        ? new Date(orderRecord.updatedAt).toLocaleString("zh-TW", { hour12: false })
+        : "尚未修改";
+
+    return `
+        <article class="sub-panel workspace-nav-order-panel">
+            <div class="list-toolbar">
+                <div>
+                    <p class="sub-kicker">全域介面設定</p>
+                    <h3>主功能頁籤排序</h3>
+                    <p class="helper-text">開發者在這裡選擇要管理的工作台，儲存後會套用到該角色的上方主功能頁籤列。</p>
+                </div>
+                <div class="badge-row">
+                    ${renderBadge(sourceLabel, orderRecord.source === "custom" ? "success" : "info")}
+                    ${renderBadge(`${orderedSections.length} 個頁籤`)}
+                </div>
+            </div>
+            <form id="workspace-nav-order-form" class="stack-form dense-form" data-role="${escapeHtml(selectedRole)}">
+                <div class="field-grid dense-field-grid workspace-nav-order-meta">
+                    <label class="field">
+                        <span>目標工作台</span>
+                        <select id="workspace-nav-order-role" name="role">
+                            ${roles.map((role) => `
+                                <option value="${escapeHtml(role.id)}" ${role.id === selectedRole ? "selected" : ""}>${escapeHtml(role.label || role.id)}</option>
+                            `).join("")}
+                        </select>
+                    </label>
+                    <label class="field">
+                        <span>最後更新</span>
+                        <input type="text" value="${escapeHtml(updatedText)}" readonly>
+                    </label>
+                </div>
+                <div class="workspace-nav-order-list" data-workspace-nav-order-list>
+                    ${orderedSections.map((section, index) => `
+                        <div class="workspace-nav-order-item" draggable="true" data-workspace-nav-order-item data-section-id="${escapeHtml(section.id)}">
+                            <input type="hidden" name="order" value="${escapeHtml(section.id)}">
+                            <span class="workspace-nav-order-index">${index + 1}</span>
+                            <span class="workspace-nav-order-label">${escapeHtml(section.label || section.id)}</span>
+                            <span class="workspace-nav-order-id">${escapeHtml(section.id)}</span>
+                            <div class="workspace-nav-order-actions">
+                                <button class="mini-btn" type="button" data-action="move-workspace-nav-item" data-direction="up" aria-label="上移 ${escapeHtml(section.label || section.id)}">上移</button>
+                                <button class="mini-btn" type="button" data-action="move-workspace-nav-item" data-direction="down" aria-label="下移 ${escapeHtml(section.label || section.id)}">下移</button>
+                            </div>
+                        </div>
+                    `).join("")}
+                </div>
+                <div class="form-toolbar">
+                    <div class="inline-actions">
+                        <button class="primary-btn" type="submit">儲存排序</button>
+                        <button class="outline-btn" type="button" data-action="reset-workspace-nav-order">還原預設</button>
+                    </div>
+                </div>
+                <div class="inline-message" data-form-message-for="workspace-nav-order-form" aria-live="polite"></div>
+            </form>
+        </article>
+    `;
+}
+
 function renderDeveloperSystemSettingsSection(datasets = {}) {
     return `
         <div class="workspace-stack developer-system-settings">
             ${renderDeveloperSystemPasswordPanel()}
             ${renderDeveloperImpersonationPanel(datasets)}
+            ${renderDeveloperWorkspaceNavOrderPanel(datasets)}
         </div>
     `;
 }
@@ -9458,9 +9614,147 @@ handleDashboardSubmit = async function handleDashboardSubmitSystemAdminOverride(
     }
 };
 
+function refreshWorkspaceNavOrderIndexes(list = document.querySelector("[data-workspace-nav-order-list]")) {
+    if (!list) return;
+    Array.from(list.querySelectorAll("[data-workspace-nav-order-item]")).forEach((item, index) => {
+        const indexNode = item.querySelector(".workspace-nav-order-index");
+        if (indexNode) indexNode.textContent = String(index + 1);
+    });
+}
+
+function moveWorkspaceNavOrderItem(button) {
+    const item = button?.closest?.("[data-workspace-nav-order-item]");
+    const list = item?.closest?.("[data-workspace-nav-order-list]");
+    if (!item || !list) return;
+    const direction = button.dataset.direction;
+    if (direction === "up" && item.previousElementSibling) {
+        list.insertBefore(item, item.previousElementSibling);
+    }
+    if (direction === "down" && item.nextElementSibling) {
+        list.insertBefore(item.nextElementSibling, item);
+    }
+    refreshWorkspaceNavOrderIndexes(list);
+}
+
+function collectWorkspaceNavOrderForm(form) {
+    return {
+        role: form?.dataset?.role || form?.elements?.role?.value || "admin",
+        order: Array.from(form?.querySelectorAll?.('input[name="order"]') || []).map((input) => input.value)
+    };
+}
+
+async function resetWorkspaceNavOrder(button) {
+    const form = button?.closest?.("form");
+    if (!form) return;
+    const role = form.dataset.role || form.elements.role?.value || "admin";
+    setFormMessage("workspace-nav-order-form", "");
+    try {
+        const result = await requestJson("/api/browser/developer/workspace-nav-order/reset", {
+            method: "POST",
+            auth: true,
+            body: { role }
+        });
+        if (result.dashboard) renderDashboard(result.dashboard);
+        setMessage(ui.dashboardMessage, result.message || "主功能頁籤排序已還原預設。", "success");
+        setFormMessage("workspace-nav-order-form", result.message || "主功能頁籤排序已還原預設。", "success");
+    } catch (error) {
+        setMessage(ui.dashboardMessage, error.message, "error");
+        setFormMessage("workspace-nav-order-form", error.message, "error");
+    }
+}
+
+SAVE_FEEDBACK_FORM_IDS.add("workspace-nav-order-form");
+
+const originalHandleDashboardChangeWithWorkspaceNavOrder = handleDashboardChange;
+handleDashboardChange = async function handleDashboardChangeWorkspaceNavOrderOverride(event) {
+    if (event.target?.id === "workspace-nav-order-role") {
+        state.workspaceNavOrderRole = event.target.value || "admin";
+        renderDashboard(state.dashboard);
+        return;
+    }
+    return originalHandleDashboardChangeWithWorkspaceNavOrder(event);
+};
+
+const originalHandleDashboardClickWithWorkspaceNavOrder = handleDashboardClick;
+handleDashboardClick = async function handleDashboardClickWorkspaceNavOrderOverride(event) {
+    const actionTarget = event.target?.closest?.("[data-action]");
+    if (actionTarget?.dataset.action === "move-workspace-nav-item") {
+        event.preventDefault();
+        moveWorkspaceNavOrderItem(actionTarget);
+        return;
+    }
+    if (actionTarget?.dataset.action === "reset-workspace-nav-order") {
+        event.preventDefault();
+        await resetWorkspaceNavOrder(actionTarget);
+        return;
+    }
+    return originalHandleDashboardClickWithWorkspaceNavOrder(event);
+};
+
+const originalHandleDashboardSubmitWithWorkspaceNavOrder = handleDashboardSubmit;
+handleDashboardSubmit = async function handleDashboardSubmitWorkspaceNavOrderOverride(event) {
+    const form = event.target instanceof HTMLFormElement
+        ? event.target
+        : event.target?.closest?.("form");
+    const formId = form?.getAttribute?.("id") || "";
+    if (formId !== "workspace-nav-order-form") {
+        return originalHandleDashboardSubmitWithWorkspaceNavOrder(event);
+    }
+
+    event.preventDefault();
+    setFormMessage(formId, "");
+    try {
+        const result = await requestJson("/api/browser/developer/workspace-nav-order/save", {
+            method: "POST",
+            auth: true,
+            body: collectWorkspaceNavOrderForm(form)
+        });
+        if (result.dashboard) renderDashboard(result.dashboard);
+        setMessage(ui.dashboardMessage, result.message || "主功能頁籤排序已儲存。", "success");
+        setFormMessage(formId, result.message || "主功能頁籤排序已儲存。", "success");
+    } catch (error) {
+        setMessage(ui.dashboardMessage, error.message, "error");
+        setFormMessage(formId, error.message, "error");
+    }
+};
+
+function handleWorkspaceNavOrderDragStart(event) {
+    const item = event.target?.closest?.("[data-workspace-nav-order-item]");
+    if (!item) return;
+    event.dataTransfer?.setData("text/plain", item.dataset.sectionId || "");
+    event.dataTransfer?.setDragImage?.(item, 12, 12);
+    item.classList.add("is-dragging");
+}
+
+function handleWorkspaceNavOrderDragOver(event) {
+    const list = event.target?.closest?.("[data-workspace-nav-order-list]");
+    const target = event.target?.closest?.("[data-workspace-nav-order-item]");
+    const dragging = list?.querySelector?.(".is-dragging");
+    if (!list || !target || !dragging || target === dragging) return;
+    event.preventDefault();
+    const box = target.getBoundingClientRect();
+    const insertAfter = event.clientY > box.top + box.height / 2;
+    list.insertBefore(dragging, insertAfter ? target.nextElementSibling : target);
+    refreshWorkspaceNavOrderIndexes(list);
+}
+
+function handleWorkspaceNavOrderDrop(event) {
+    const list = event.target?.closest?.("[data-workspace-nav-order-list]");
+    if (!list) return;
+    event.preventDefault();
+    refreshWorkspaceNavOrderIndexes(list);
+}
+
+function handleWorkspaceNavOrderDragEnd() {
+    document.querySelectorAll("[data-workspace-nav-order-item].is-dragging").forEach((item) => {
+        item.classList.remove("is-dragging");
+    });
+}
+
 const originalGetRealtimeSyncLabelWithAccountAccess = getRealtimeSyncLabel;
 getRealtimeSyncLabel = function getRealtimeSyncLabelAccountAccessOverride(type) {
     if (type === "accountAccess") return "帳號權限設定";
+    if (type === "workspaceNavOrder") return "主功能頁籤排序";
     return originalGetRealtimeSyncLabelWithAccountAccess(type);
 };
 
@@ -9470,6 +9764,10 @@ handleRealtimeSyncMessage = async function handleRealtimeSyncMessageAccountAcces
     const role = state.dashboard?.role;
     if (type === "accountAccess" && ["developer", "system_admin"].includes(role)) {
         await reloadDashboard("帳號權限設定已更新。", "info");
+        return;
+    }
+    if (type === "workspaceNavOrder" && ["admin", "developer"].includes(role)) {
+        await reloadDashboard("主功能頁籤排序已更新。", "info");
         return;
     }
     return originalHandleRealtimeSyncMessageWithAccountAccess(payload);
@@ -9693,7 +9991,8 @@ const workspaceSubnavConfigs = {
                     items: [
                         { id: "password", label: "系統密碼", panelIndex: 0 },
                         { id: "impersonation", label: "角色切換設定", panelIndex: 1 },
-                        { id: "accountAccess", label: "帳號權限管理", panelIndex: 2 }
+                        { id: "navOrder", label: "主頁籤排序", panelIndex: 2 },
+                        { id: "accountAccess", label: "帳號權限管理", panelIndex: 3 }
                     ]
                 }
             ]
@@ -10027,6 +10326,10 @@ function initialize() {
     ui.logoutBtn.addEventListener("click", () => handleLogout());
     ui.dashboardContent.addEventListener("click", handleDashboardClick);
     ui.dashboardContent.addEventListener("change", handleDashboardChange);
+    ui.dashboardContent.addEventListener("dragstart", handleWorkspaceNavOrderDragStart);
+    ui.dashboardContent.addEventListener("dragover", handleWorkspaceNavOrderDragOver);
+    ui.dashboardContent.addEventListener("drop", handleWorkspaceNavOrderDrop);
+    ui.dashboardContent.addEventListener("dragend", handleWorkspaceNavOrderDragEnd);
     ui.dashboardContent.addEventListener("keydown", handleEmployeeCardCaptureKeydown);
     ui.dashboardContent.addEventListener("focusin", handleEmployeeCardCaptureFocus);
     // Use capture so dynamically-rendered forms always reach the shared submit handler.
