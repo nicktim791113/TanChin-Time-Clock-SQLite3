@@ -8022,6 +8022,69 @@ function renderAdminLeaveTypeRows(leaveTypes = []) {
     `).join("");
 }
 
+function renderAdminLeaveTypeEditorRows(leaveTypes = []) {
+    const existingRows = Array.isArray(leaveTypes) ? leaveTypes : [];
+    const newRow = {
+        id: "",
+        name: "",
+        description: "",
+        unit: "hour",
+        display_order: (existingRows.length + 1) * 10,
+        enabled: true,
+        isNew: true
+    };
+    const rows = [...existingRows, newRow];
+    const activeIndex = existingRows.length ? 0 : rows.length - 1;
+    const getRowId = (index) => `leave-type-editor-row-${index}`;
+    const renderEditorTab = (type, index, { isNew = false } = {}) => {
+        const rowId = getRowId(index);
+        const label = isNew ? "新增假別" : String(type.name || type.id || `假別 ${index + 1}`);
+        const isActive = index === activeIndex;
+        return `
+            <button class="outline-btn leave-type-tab ${isActive ? "is-active" : ""} ${isNew && existingRows.length ? "hidden" : ""}" type="button" data-action="select-leave-type-editor" data-target="${escapeHtml(rowId)}" ${isNew ? "data-new-tab=\"true\"" : ""} aria-pressed="${isActive ? "true" : "false"}">
+                ${escapeHtml(label)}
+            </button>
+        `;
+    };
+    const renderEditorPanel = (type, index) => {
+        const rowId = getRowId(index);
+        const isNew = Boolean(type.isNew);
+        const isActive = index === activeIndex;
+        return `
+            <div id="${escapeHtml(rowId)}" class="leave-type-row leave-type-editor-panel dense-form ${isActive ? "is-active" : "hidden"}" data-leave-type-panel ${isNew ? "data-new-row=\"true\"" : ""}>
+                <div class="leave-type-primary-row">
+                    <label class="field"><span>假別代碼</span><input name="id" value="${escapeHtml(type.id || "")}" placeholder="例如 annual"></label>
+                    <label class="field"><span>假別名稱</span><input name="name" value="${escapeHtml(type.name || "")}" placeholder="例如 特休"></label>
+                    <label class="field"><span>單位</span><select name="unit">
+                        <option value="hour" ${type.unit === "hour" ? "selected" : ""}>小時</option>
+                        <option value="day" ${type.unit === "day" ? "selected" : ""}>天</option>
+                        <option value="half_day" ${type.unit === "half_day" ? "selected" : ""}>半天</option>
+                    </select></label>
+                    <label class="field"><span>顯示順序</span><input name="display_order" type="number" value="${escapeHtml(type.display_order ?? type.displayOrder ?? "")}"></label>
+                </div>
+                <div class="leave-type-switch-row">
+                    <label class="switch-line"><input name="enabled" type="checkbox" ${type.enabled !== false ? "checked" : ""}>啟用</label>
+                    <label class="switch-line"><input name="paid" type="checkbox" ${type.paid ? "checked" : ""}>有薪</label>
+                    <label class="switch-line"><input name="deducts_balance" type="checkbox" ${type.deducts_balance || type.deductsBalance ? "checked" : ""}>扣額度</label>
+                    <label class="switch-line"><input name="requires_attachment" type="checkbox" ${type.requires_attachment || type.requiresAttachment ? "checked" : ""}>需附件</label>
+                </div>
+                <label class="field leave-type-description-row"><span>說明與備註</span><textarea name="description" rows="3" placeholder="假別規則與備註">${escapeHtml(type.description || "")}</textarea></label>
+            </div>
+        `;
+    };
+    return `
+        <div class="leave-type-editor">
+            <div class="leave-type-tabbar" role="list" aria-label="假別清單">
+                ${existingRows.map((type, index) => renderEditorTab(type, index)).join("")}
+                <button class="secondary-btn leave-type-add-btn ${existingRows.length ? "" : "is-active"}" type="button" data-action="add-leave-type-editor" data-target="${escapeHtml(getRowId(rows.length - 1))}" aria-pressed="${existingRows.length ? "false" : "true"}">新增假別</button>
+            </div>
+            <div class="leave-type-editor-panels">
+                ${rows.map((type, index) => renderEditorPanel(type, index)).join("")}
+            </div>
+        </div>
+    `;
+}
+
 function renderAdminLeaveRouteRows(routes = [], employees = []) {
     const rows = [...routes, { department: "", supervisor_id: "", enabled: true }];
     const employeeOptions = (selectedId = "") => employees.map((employee) => `
@@ -8083,7 +8146,7 @@ function renderAdminLeaveSection(datasets) {
                     </div>
                 </div>
                 <form id="admin-leave-types-form" class="stack-form">
-                    ${renderAdminLeaveTypeRows(leave.leaveTypes || [])}
+                    ${renderAdminLeaveTypeEditorRows(leave.leaveTypes || [])}
                     <div class="form-toolbar dense-toolbar">
                         <button class="primary-btn" type="submit">儲存假別設定</button>
                     </div>
@@ -8381,6 +8444,20 @@ function handleDashboardInsightChange(event) {
     }
 }
 
+function setActiveLeaveTypeEditorPanel(form, targetId) {
+    if (!form || !targetId) return;
+    form.querySelectorAll("[data-leave-type-panel]").forEach((panel) => {
+        const isActive = panel.id === targetId;
+        panel.classList.toggle("hidden", !isActive);
+        panel.classList.toggle("is-active", isActive);
+    });
+    form.querySelectorAll('[data-action="select-leave-type-editor"], [data-action="add-leave-type-editor"]').forEach((button) => {
+        const isActive = button.dataset.target === targetId;
+        button.classList.toggle("is-active", isActive);
+        button.setAttribute("aria-pressed", isActive ? "true" : "false");
+    });
+}
+
 function collectAdminLeaveTypes(form) {
     return Array.from(form.querySelectorAll(".leave-type-row")).map((row, index) => ({
         id: row.querySelector('[name="id"]')?.value?.trim() || "",
@@ -8461,6 +8538,15 @@ const originalHandleDashboardClickWithLeave = handleDashboardClick;
 handleDashboardClick = async function handleDashboardClickLeaveOverride(event) {
     const actionTarget = event.target.closest("[data-action]");
     const action = actionTarget?.dataset.action || "";
+    if (action === "select-leave-type-editor" || action === "add-leave-type-editor") {
+        const form = actionTarget.closest("#admin-leave-types-form");
+        const targetId = actionTarget.dataset.target || "";
+        if (action === "add-leave-type-editor") {
+            form?.querySelector('[data-new-row="true"]')?.classList.remove("hidden");
+        }
+        setActiveLeaveTypeEditorPanel(form, targetId);
+        return;
+    }
     if (!["leave-withdraw", "leave-supervisor-decision", "leave-admin-decision"].includes(action)) {
         return originalHandleDashboardClickWithLeave(event);
     }
