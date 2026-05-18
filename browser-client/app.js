@@ -957,6 +957,26 @@ function closeDashboardHelpModal() {
     ui.dashboardHelpModal?.classList.add("hidden");
 }
 
+function renderWorkspaceSummaryHelpContent(description) {
+    const paragraphs = String(description || "")
+        .split(/\n+/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+    if (!paragraphs.length) return renderEmptyState("目前沒有額外說明。");
+    return `
+        <div class="workspace-summary-help-content">
+            ${paragraphs.map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`).join("")}
+        </div>
+    `;
+}
+
+function openWorkspaceSummaryHelpModal(title, description) {
+    if (!ui.dashboardHelpModal) return;
+    ui.dashboardHelpTitle.textContent = `${title || "頁籤"}說明`;
+    ui.dashboardHelpContent.innerHTML = renderWorkspaceSummaryHelpContent(description);
+    ui.dashboardHelpModal.classList.remove("hidden");
+}
+
 function closeDashboardInsightModal() {
     ui.dashboardInsightModal?.classList.add("hidden");
     state.activeInsightKey = "";
@@ -9743,6 +9763,36 @@ function warnMissingWorkspaceSubnavPanel(item, panelCount) {
     });
 }
 
+function compactWorkspaceSummaryCard(card) {
+    if (!card?.matches?.("article.workspace-card")) return;
+    const helperNodes = Array.from(card.children).filter((child) => child.matches?.("p.helper-text"));
+    const description = helperNodes
+        .map((node) => String(node.textContent || "").trim())
+        .filter(Boolean)
+        .join("\n\n");
+    helperNodes.forEach((node) => node.remove());
+    card.classList.add("workspace-summary-card");
+    if (!description) return;
+
+    const toolbar = card.querySelector(":scope > .list-toolbar");
+    if (!toolbar) return;
+    const title = card.querySelector("h3")?.textContent?.trim() || "頁籤";
+    let actionHost = toolbar.querySelector(":scope > .badge-row");
+    if (!actionHost) {
+        actionHost = document.createElement("div");
+        actionHost.className = "badge-row";
+        toolbar.appendChild(actionHost);
+    }
+    const helpButton = document.createElement("button");
+    helpButton.type = "button";
+    helpButton.className = "outline-btn workspace-summary-help-btn";
+    helpButton.dataset.action = "open-workspace-summary-help";
+    helpButton.dataset.title = title;
+    helpButton.dataset.description = description;
+    helpButton.textContent = "說明";
+    actionHost.appendChild(helpButton);
+}
+
 function parseWorkspaceSubnavPanels(baseHtml, config = {}) {
     if (typeof document === "undefined") return { panels: [], introHtml: "" };
     const template = document.createElement("template");
@@ -9761,8 +9811,9 @@ function parseWorkspaceSubnavPanels(baseHtml, config = {}) {
     });
 
     panelNodes.forEach((node) => node.setAttribute("data-no-collapsible", "true"));
-    const panels = panelNodes.map((node) => node.outerHTML);
     const introIndexes = Array.isArray(config.introIndexes) ? config.introIndexes : [0];
+    introIndexes.forEach((index) => compactWorkspaceSummaryCard(panelNodes[index]));
+    const panels = panelNodes.map((node) => node.outerHTML);
     const introHtml = introIndexes.map((index) => panels[index] || "").filter(Boolean).join("");
     return { panels, introHtml };
 }
@@ -9912,6 +9963,12 @@ handleDashboardClick = async function handleDashboardClickWorkspaceSubnavOverrid
         event.preventDefault();
         activateWorkspaceSubsection(actionTarget.dataset.role, actionTarget.dataset.section, actionTarget.dataset.subsection);
         renderDashboard(state.dashboard);
+        return;
+    }
+
+    if (action === "open-workspace-summary-help") {
+        event.preventDefault();
+        openWorkspaceSummaryHelpModal(actionTarget.dataset.title || "", actionTarget.dataset.description || "");
         return;
     }
 
