@@ -4,18 +4,23 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TanChin Browser Portal</title>
-    <link rel="stylesheet" href="./style.css?v=20260519-version-pill">
+    <link rel="stylesheet" href="./style.css?v=20260519-hero-version">
 </head>
 <body>
     <div class="page-shell">
         <header class="hero-card" id="hero-card">
             <div class="hero-header-row">
-                <p class="eyebrow" id="hero-eyebrow">您的 AI 智慧好夥伴</p>
-                <div class="hero-actions hidden" id="hero-description-actions">
-                    <button id="hero-description-edit-btn" class="mini-btn" type="button">編輯說明</button>
+                <div class="hero-title-line">
+                    <h1 id="hero-title">震欣科技AI作息系統</h1>
+                    <p class="eyebrow hero-subtitle" id="hero-eyebrow">智慧好夥伴</p>
+                </div>
+                <div class="hero-meta-actions">
+                    <span id="hero-version-pill" class="version-pill hero-version-pill hidden" aria-live="polite"></span>
+                    <div class="hero-actions hidden" id="hero-description-actions">
+                        <button id="hero-description-edit-btn" class="mini-btn" type="button">編輯說明</button>
+                    </div>
                 </div>
             </div>
-            <h1 id="hero-title">震欣科技AI作息系統</h1>
             <p id="hero-description" class="hero-copy">透過瀏覽器快速查看打卡資料、管理設定與系統狀態。</p>
             <form id="hero-description-form" class="stack-form hero-inline-form hidden">
                 <label class="field">
@@ -79,7 +84,6 @@
                         <span id="dashboard-identity-pill" class="identity-pill hidden" aria-live="polite"></span>
                         <button id="dashboard-help-btn" class="outline-btn hidden" type="button">說明</button>
                         <button id="logout-btn" class="ghost-btn" type="button">登出</button>
-                        <span id="dashboard-version-pill" class="version-pill hidden" aria-live="polite"></span>
                     </div>
                 </div>
 
@@ -107,6 +111,6 @@
             <div id="dashboard-insight-content" class="modal-body"></div>
         </div>
     </div>
-    <script src="./app.js?v=20260519-version-pill" defer></script>
+    <script src="./app.js?v=20260519-hero-version" defer></script>
 </body>
 </html>

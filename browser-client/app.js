@@ -162,6 +162,7 @@ const state = {
     activeRole: "employee",
     token: sessionStorage.getItem("browserPortalToken") || "",
     dashboard: null,
+    appVersion: "",
     publicDisplaySettings: { ...defaultDisplaySettings },
     clockTimer: null,
     adminReport: null,
@@ -535,6 +536,7 @@ const ui = {
     heroDescriptionForm: document.getElementById("hero-description-form"),
     heroDescriptionInput: document.getElementById("hero-description-input"),
     heroDescriptionCancelBtn: document.getElementById("hero-description-cancel-btn"),
+    heroVersionPill: document.getElementById("hero-version-pill"),
     employeeIdLabel: document.getElementById("employee-id-label"),
     employeeIdInput: document.getElementById("employee-id-input"),
     secretLabel: document.getElementById("secret-label"),
@@ -545,7 +547,6 @@ const ui = {
     dashboardView: document.getElementById("dashboard-view"),
     dashboardTitle: document.getElementById("dashboard-title"),
     dashboardIdentityPill: document.getElementById("dashboard-identity-pill"),
-    dashboardVersionPill: document.getElementById("dashboard-version-pill"),
     dashboardMessage: document.getElementById("dashboard-message"),
     dashboardContent: document.getElementById("dashboard-content"),
     dashboardHelpBtn: document.getElementById("dashboard-help-btn"),
@@ -625,6 +626,9 @@ function getDisplaySettings(source = state.dashboard?.displaySettings || state.p
 
 function syncHeroHeader(dashboard = state.dashboard) {
     const displaySettings = getDisplaySettings(dashboard?.displaySettings || state.publicDisplaySettings);
+    if (dashboard?.appVersion || dashboard?.datasets?.systemHealth?.appVersion) {
+        state.appVersion = dashboard.appVersion || dashboard.datasets.systemHealth.appVersion;
+    }
 
     if (dashboard?.displaySettings) {
         state.publicDisplaySettings = { ...displaySettings };
@@ -644,6 +648,22 @@ function syncHeroHeader(dashboard = state.dashboard) {
     if (ui.heroDescriptionInput) {
         ui.heroDescriptionInput.value = displaySettings.heroDescription;
     }
+    syncHeroVersionPill();
+}
+
+function syncHeroVersionPill() {
+    if (!ui.heroVersionPill) return;
+    const version = String(state.appVersion || "").trim();
+    if (!version) {
+        ui.heroVersionPill.textContent = "";
+        ui.heroVersionPill.removeAttribute("title");
+        ui.heroVersionPill.classList.add("hidden");
+        return;
+    }
+    const normalizedVersion = version.replace(/^v/i, "");
+    ui.heroVersionPill.textContent = `v${normalizedVersion}`;
+    ui.heroVersionPill.title = `目前版本 v${normalizedVersion}`;
+    ui.heroVersionPill.classList.remove("hidden");
 }
 
 function startHeroDescriptionEdit() {
@@ -710,6 +730,7 @@ async function loadPublicDisplaySettings() {
     try {
         const result = await requestJson("/api/browser/public-settings");
         state.publicDisplaySettings = getDisplaySettings(result.data?.displaySettings || defaultDisplaySettings);
+        state.appVersion = String(result.data?.appVersion || state.appVersion || "").trim();
         syncHeroHeader();
     } catch (error) {
         console.error("Failed to load browser display settings:", error);
@@ -1005,21 +1026,6 @@ function syncDashboardIdentityPill(dashboard = state.dashboard) {
     const userLabel = dashboard.user?.name || dashboard.user?.id || "";
     ui.dashboardIdentityPill.textContent = `${roleLabel}：${userLabel}`;
     ui.dashboardIdentityPill.classList.remove("hidden");
-}
-
-function syncDashboardVersionPill(dashboard = state.dashboard) {
-    if (!ui.dashboardVersionPill) return;
-    const version = String(dashboard?.appVersion || dashboard?.datasets?.systemHealth?.appVersion || "").trim();
-    if (!version) {
-        ui.dashboardVersionPill.textContent = "";
-        ui.dashboardVersionPill.removeAttribute("title");
-        ui.dashboardVersionPill.classList.add("hidden");
-        return;
-    }
-    const normalizedVersion = version.replace(/^v/i, "");
-    ui.dashboardVersionPill.textContent = `v${normalizedVersion}`;
-    ui.dashboardVersionPill.title = `目前版本 v${normalizedVersion}`;
-    ui.dashboardVersionPill.classList.remove("hidden");
 }
 
 function openDashboardHelpModal() {
@@ -2925,7 +2931,6 @@ function renderDashboard(dashboard) {
                 ? "系統管理者工作台"
                 : "員工工作台";
     syncDashboardIdentityPill(dashboard);
-    syncDashboardVersionPill(dashboard);
     syncDashboardHelpButton(dashboard);
     ui.dashboardContent.innerHTML = dashboard.role === "employee"
         ? renderEmployeeDashboard(dashboard)
@@ -3511,7 +3516,6 @@ async function handleLogout(isSilent = false) {
     sessionStorage.removeItem("browserPortalToken");
     ui.dashboardContent.innerHTML = "";
     syncDashboardIdentityPill(null);
-    syncDashboardVersionPill(null);
     syncDashboardHelpButton(null);
     setMessage(ui.dashboardMessage, "");
     ui.dashboardView.classList.add("hidden");

@@ -206,8 +206,28 @@ body::after {
     gap: 12px;
 }
 
-.hero-header-row .eyebrow {
-    margin-bottom: 0;
+.hero-title-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px 12px;
+    min-width: 0;
+}
+
+.hero-subtitle {
+    margin: 0;
+    font-size: 0.78rem;
+    letter-spacing: 0.08em;
+    text-transform: none;
+    white-space: nowrap;
+}
+
+.hero-meta-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-left: auto;
 }
 
 .hero-actions {
@@ -376,6 +396,10 @@ body::after {
     font-weight: 700;
     line-height: 1;
     white-space: nowrap;
+}
+
+.hero-version-pill {
+    align-self: center;
 }
 
 .modal-backdrop {
@@ -1613,6 +1637,11 @@ textarea:disabled {
         align-items: flex-start;
     }
 
+    .hero-meta-actions {
+        margin-left: 0;
+        justify-content: flex-start;
+    }
+
     .employee-column-grid {
         grid-template-columns: repeat(6, minmax(0, 1fr));
     }
@@ -1657,6 +1686,11 @@ textarea:disabled {
     .theme-image-control-header {
         flex-direction: column;
         align-items: stretch;
+    }
+
+    .hero-meta-actions {
+        margin-left: 0;
+        justify-content: flex-end;
     }
 
     .list-toolbar > *,

@@ -3329,6 +3329,7 @@ function attachBrowserRoutes(server) {
     response.json({
       success: true,
       data: {
+        appVersion: app.getVersion(),
         displaySettings: getBrowserDisplaySettings()
       }
     });
