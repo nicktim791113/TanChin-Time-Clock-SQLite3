@@ -1,9 +1,13 @@
 // database.js
+const fs = require('fs');
+const path = require('path');
 const Database = require('better-sqlite3');
 let db = null;
+let currentDbFilePath = '';
 
 function init(dbFilePath) {
-  db = new Database(dbFilePath); 
+  currentDbFilePath = path.resolve(dbFilePath);
+  db = new Database(currentDbFilePath);
   console.log('[資料庫] 魔法寶庫已在路徑開啟:', dbFilePath);
 
   // ✨ 魔法修正：在 employees 資料表中新增 job_title 欄位
@@ -319,6 +323,117 @@ function init(dbFilePath) {
 function run(sql, ...params) { return db.prepare(sql).run(...params); }
 function get(sql, ...params) { return db.prepare(sql).get(...params); }
 function all(sql, ...params) { return db.prepare(sql).all(...params); }
+
+function getDatabasePath() {
+    return currentDbFilePath;
+}
+
+function ensureDatabaseOpen() {
+    if (!db || !db.open) {
+        throw new Error('資料庫尚未開啟，無法執行備份或還原。');
+    }
+}
+
+async function backupDatabase(destinationFilePath) {
+    ensureDatabaseOpen();
+    const destinationText = String(destinationFilePath || '').trim();
+    if (!destinationText) {
+        throw new Error('請提供資料庫備份檔案路徑。');
+    }
+    const resolvedDestination = path.resolve(destinationText);
+    fs.mkdirSync(path.dirname(resolvedDestination), { recursive: true });
+    await db.backup(resolvedDestination);
+    const stat = fs.statSync(resolvedDestination);
+    return {
+        filePath: resolvedDestination,
+        sizeBytes: stat.size
+    };
+}
+
+function validateBackupDatabaseFile(sourceFilePath) {
+    const sourceText = String(sourceFilePath || '').trim();
+    if (!sourceText) {
+        throw new Error('請提供要還原的資料庫備份檔案。');
+    }
+    const resolvedSource = path.resolve(sourceText);
+    if (!fs.existsSync(resolvedSource)) {
+        throw new Error(`找不到要還原的資料庫備份檔：${resolvedSource}`);
+    }
+    if (!fs.statSync(resolvedSource).isFile()) {
+        throw new Error('要還原的路徑不是資料庫備份檔案。');
+    }
+
+    const candidate = new Database(resolvedSource, { readonly: true, fileMustExist: true });
+    try {
+        const quickCheck = candidate.pragma('quick_check');
+        const quickCheckValue = Array.isArray(quickCheck)
+            ? String(Object.values(quickCheck[0] || {})[0] || '')
+            : String(quickCheck || '');
+        if (quickCheckValue.toLowerCase() !== 'ok') {
+            throw new Error(`SQLite quick_check 未通過：${quickCheckValue || 'unknown'}`);
+        }
+        const employeesTable = candidate.prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'employees'"
+        ).get();
+        const settingsTable = candidate.prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'settings'"
+        ).get();
+        if (!employeesTable || !settingsTable) {
+            throw new Error('備份檔缺少必要資料表，已停止還原。');
+        }
+    } finally {
+        candidate.close();
+    }
+    return { filePath: resolvedSource };
+}
+
+async function replaceDatabaseFromBackup(sourceFilePath, options = {}) {
+    const { filePath: resolvedSource } = validateBackupDatabaseFile(sourceFilePath);
+    const targetPath = currentDbFilePath;
+    if (!targetPath) {
+        throw new Error('目前資料庫路徑不存在，無法執行還原。');
+    }
+    if (path.resolve(resolvedSource).toLowerCase() === path.resolve(targetPath).toLowerCase()) {
+        throw new Error('還原來源不可直接指向目前正在使用的資料庫檔。');
+    }
+
+    const emergencyBackupPath = String(options.emergencyBackupPath || '').trim();
+    const emergencyBackup = emergencyBackupPath
+        ? await backupDatabase(emergencyBackupPath)
+        : null;
+
+    try {
+        if (db?.open) {
+            db.close();
+        }
+        db = null;
+        fs.copyFileSync(resolvedSource, targetPath);
+        for (const suffix of ['-wal', '-shm']) {
+            const sidecarPath = `${targetPath}${suffix}`;
+            if (fs.existsSync(sidecarPath)) {
+                fs.unlinkSync(sidecarPath);
+            }
+        }
+        init(targetPath);
+        return {
+            restoredPath: targetPath,
+            sourcePath: resolvedSource,
+            emergencyBackup
+        };
+    } catch (error) {
+        if (emergencyBackup?.filePath && fs.existsSync(emergencyBackup.filePath)) {
+            try {
+                fs.copyFileSync(emergencyBackup.filePath, targetPath);
+            } catch (rollbackError) {
+                error.rollbackError = rollbackError.message;
+            }
+        }
+        if (!db?.open) {
+            init(targetPath);
+        }
+        throw error;
+    }
+}
 
 const EMPLOYEE_TEXT_FIELDS = [
     'id', 'name', 'gender', 'nationality', 'department', 'job_title', 'card', 'password',
@@ -1224,6 +1339,7 @@ const countPunchFailureAuditLogsSince = (startTimestamp, excludedFailureCodes = 
 
 module.exports = {
   init,
+  getDatabasePath, backupDatabase, validateBackupDatabaseFile, replaceDatabaseFromBackup,
   saveEmployees, loadEmployees, deleteAllEmployees,
   addPunchRecord, loadPunchRecords,
   deletePunchRecordsByDateRange, deletePunchRecordsBySource,

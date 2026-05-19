@@ -6,6 +6,7 @@ const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
 const dbModule = require('./database');
+const databaseBackup = require('./database-backup');
 const {
   buildAttendanceExportCsv,
   normalizeAttendanceExportCustomFields
@@ -53,6 +54,7 @@ function getDbSyncType(operation, args) {
   if (operation === 'setSetting' && args[0] === 'systemPassword') return 'systemPassword';
   if (operation === 'setSetting' && args[0] === 'attendanceExportCustomFields') return 'attendanceExportSettings';
   if (operation === 'setSetting' && args[0] === 'automationExportDirectory') return 'automationExportDirectory';
+  if (operation === 'setSetting' && (args[0] === 'databaseBackupDirectory' || args[0] === 'databaseBackupRetentionCount')) return 'databaseBackup';
   if (operation === 'setSetting' && (args[0] === 'externalApiEnabled' || args[0] === 'externalApiKey')) return 'externalApiSettings';
   return null;
 }
@@ -80,6 +82,8 @@ const DESKTOP_AUDIT_TRACKED_SETTINGS = new Set([
   'systemPassword',
   'attendanceExportCustomFields',
   'automationExportDirectory',
+  'databaseBackupDirectory',
+  'databaseBackupRetentionCount',
   'externalApiEnabled',
   'externalApiKey'
 ]);
@@ -138,6 +142,8 @@ function getDesktopSettingLabel(key) {
   if (key === 'systemPassword') return '系統密碼';
   if (key === 'attendanceExportCustomFields') return '考勤匯出欄位設定';
   if (key === 'automationExportDirectory') return '自動化匯出資料夾';
+  if (key === 'databaseBackupDirectory') return '完整資料庫備份資料夾';
+  if (key === 'databaseBackupRetentionCount') return '完整資料庫備份保留數';
   if (key === 'externalApiEnabled') return '外部 API 保護開關';
   if (key === 'externalApiKey') return '外部 API 金鑰';
   return key;
@@ -716,6 +722,45 @@ function getAutomationExportDirectoryInfo(task = {}) {
     return { directoryPath: app.getPath('desktop'), sourceLabel: '桌面資料夾' };
 }
 
+function getDatabaseBackupDirectorySettings() {
+    const fallbackDirectory = databaseBackup.getDefaultDatabaseBackupDirectory(app.getPath('userData'));
+    const configuredDirectory = String(dbModule.getSetting('databaseBackupDirectory') || '').trim();
+    const defaultDirectory = configuredDirectory
+        ? databaseBackup.normalizeBackupDirectoryPath(configuredDirectory, fallbackDirectory)
+        : '';
+    const retentionCount = databaseBackup.normalizeRetentionCount(
+        dbModule.getSetting('databaseBackupRetentionCount'),
+        databaseBackup.DEFAULT_DATABASE_BACKUP_RETENTION_COUNT
+    );
+    const effectiveDirectory = defaultDirectory || databaseBackup.normalizeBackupDirectoryPath('', fallbackDirectory);
+    return {
+        defaultDirectory,
+        fallbackDirectory,
+        effectiveDirectory,
+        retentionCount,
+        usingFallback: !defaultDirectory
+    };
+}
+
+async function createDatabaseBackupFromTask(task = {}) {
+    const settings = getDatabaseBackupDirectorySettings();
+    const directoryPath = task.export_directory
+        ? databaseBackup.normalizeBackupDirectoryPath(task.export_directory, settings.fallbackDirectory)
+        : settings.effectiveDirectory;
+    return databaseBackup.createFullDatabaseBackup({
+        dbModule,
+        directoryPath,
+        fallbackDirectory: settings.fallbackDirectory,
+        retentionCount: settings.retentionCount,
+        reason: 'automation',
+        actor: 'desktop_scheduler',
+        metadata: {
+            taskId: task.id || '',
+            taskFrequency: task.frequency || ''
+        }
+    });
+}
+
 async function executeAutomationTask(task) {
     log.info(`Executing automation task: ${task.task_type} - ${task.target}`);
     let notificationType = null; 
@@ -757,6 +802,7 @@ async function executeAutomationTask(task) {
             case 'all_employees': descriptiveDateRange = `所有人員資料`; break;
             case 'all_bell_records': descriptiveDateRange = `全部響鈴紀錄`; break;
             case 'log': descriptiveDateRange = `系統日誌`; break;
+            case 'database_full': descriptiveDateRange = `完整資料庫備份`; break;
         }
 
         if (task.task_type === 'export') {
@@ -849,6 +895,16 @@ async function executeAutomationTask(task) {
                     message = `任務成功：已將 [${descriptiveDateRange}] 的 ${recordsToExport.length} 筆考勤紀錄匯出至 ${exportDirectoryInfo.sourceLabel}：${exportBasePath}`;
                     status = 'success';
                 }
+            }
+        } else if (task.task_type === 'backup') {
+            if (task.target !== 'database_full') {
+                message = `不支援的備份任務目標：${task.target}`;
+                status = 'error';
+            } else {
+                result = await createDatabaseBackupFromTask(task);
+                message = `任務成功：backup/database_full 完整資料庫備份已建立：${result.filePath}`;
+                notificationType = 'databaseBackup';
+                status = 'success';
             }
         } else if (task.task_type === 'delete') {
             switch (task.target) {

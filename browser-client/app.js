@@ -77,7 +77,8 @@ const automationFrequencyLabels = {
 
 const automationTaskLabels = {
     export: "匯出",
-    delete: "刪除"
+    delete: "刪除",
+    backup: "完整備份"
 };
 
 const automationTargetLabels = {
@@ -87,7 +88,8 @@ const automationTargetLabels = {
     all_records: "全部打卡紀錄",
     all_employees: "全部員工資料",
     all_bell_records: "全部響鈴紀錄",
-    log: "系統日誌"
+    log: "系統日誌",
+    database_full: "完整資料庫備份"
 };
 
 const auditRoleLabels = {
@@ -112,6 +114,8 @@ const auditActionLabels = {
     upload: "上傳",
     export: "匯出",
     execute: "立即執行",
+    backup: "備份",
+    restore: "還原",
     change_password: "變更密碼"
 };
 
@@ -129,6 +133,8 @@ const auditTargetTypeLabels = {
     custom_theme: "自訂主題",
     automation_task: "自動化任務",
     automation_log: "自動化日誌",
+    database: "資料庫",
+    database_backup_setting: "資料庫備份設定",
     audit_log: "操作稽核",
     audit_archive_setting: "稽核封存設定",
     setting: "系統設定",
@@ -490,6 +496,18 @@ function getAutomationExportConfig(datasets = getDatasets()) {
     };
 }
 
+function getDatabaseBackupConfig(datasets = getDatasets()) {
+    return datasets?.databaseBackup || {
+        defaultDirectory: "",
+        fallbackDirectory: "",
+        effectiveDirectory: "",
+        usingFallback: true,
+        retentionCount: 30,
+        recentBackups: [],
+        recentEmergencyBackups: []
+    };
+}
+
 function getAuditArchiveConfig(datasets = getDatasets()) {
     return datasets?.auditArchive || {
         retentionDays: 180,
@@ -821,7 +839,7 @@ async function handleRealtimeSyncMessage(payload) {
         "themeSchedules",
         "customThemes"
     ]);
-    const developerSyncTypes = new Set(["automationTasks", "automationLog", "systemPassword", "automationExportDirectory", "attendanceExportSettings", "displaySettings"]);
+    const developerSyncTypes = new Set(["automationTasks", "automationLog", "systemPassword", "automationExportDirectory", "databaseBackup", "systemHealth", "attendanceExportSettings", "displaySettings"]);
     if (!state.dashboard) return;
     if (payload.origin === "browser" && payload.sessionToken && payload.sessionToken === state.token) return;
 
@@ -5651,7 +5669,7 @@ handleDashboardSubmit = async function handleDashboardSubmitOverride(event) {
             export_template: isAttendanceExportTask(values.task_type, values.target)
                 ? (values.export_template || exportConfig.defaultTemplateId || "full")
                 : "full",
-            export_directory: values.task_type === "export" ? (values.export_directory?.trim() || "") : "",
+            export_directory: ["export", "backup"].includes(values.task_type) ? (values.export_directory?.trim() || "") : "",
             enabled: values.enabled === "true"
         };
 
@@ -6590,6 +6608,8 @@ handleRealtimeSyncMessage = async function handleRealtimeSyncMessageAuditOverrid
         "auditArchiveSettings",
         "systemPassword",
         "automationExportDirectory",
+        "databaseBackup",
+        "systemHealth",
         "attendanceExportSettings",
         "displaySettings"
     ]);
@@ -9773,6 +9793,473 @@ handleRealtimeSyncMessage = async function handleRealtimeSyncMessageAccountAcces
     return originalHandleRealtimeSyncMessageWithAccountAccess(payload);
 };
 
+function renderDatabaseBackupItems(items = [], emptyText = "目前沒有資料庫備份。") {
+    if (!Array.isArray(items) || !items.length) return renderEmptyState(emptyText);
+    return `
+        <div class="record-list">
+            ${items.map((item) => `
+                <div class="list-item">
+                    <div class="list-item-top">
+                        <span>${escapeHtml(item.fileName || item.databaseFileName || "資料庫備份")}</span>
+                        ${renderBadge(`${item.sizeMb ?? 0} MB`, "success")}
+                    </div>
+                    <div class="record-subline">建立時間：${escapeHtml(item.manifest?.createdAtText || item.createdText || "-")}</div>
+                    <div class="record-subline mono-text">${escapeHtml(item.filePath || item.databaseFilePath || "-")}</div>
+                    ${item.manifest?.sha256 ? `<div class="record-subline mono-text">SHA256 ${escapeHtml(item.manifest.sha256)}</div>` : ""}
+                </div>
+            `).join("")}
+        </div>
+    `;
+}
+
+renderAutomationTasks = function renderAutomationTasksWithDatabaseBackup(tasks, exportConfig = getAttendanceExportConfig(), automationExportConfig = getAutomationExportConfig(), databaseBackupConfig = getDatabaseBackupConfig()) {
+    if (!tasks.length) return renderEmptyState("目前沒有自動化任務。");
+    return `
+        <div class="record-list">
+            ${tasks.map((task) => {
+                const isBackupTask = task.task_type === "backup";
+                const directory = task.export_directory
+                    || (isBackupTask
+                        ? databaseBackupConfig.effectiveDirectory || databaseBackupConfig.fallbackDirectory || "系統預設資料夾"
+                        : automationExportConfig.defaultDirectory || automationExportConfig.fallbackDirectory || "桌面資料夾");
+                const directoryLabel = task.export_directory
+                    ? "任務專用"
+                    : isBackupTask
+                        ? (databaseBackupConfig.defaultDirectory ? "備份預設" : "系統預設")
+                        : (automationExportConfig.defaultDirectory ? "匯出預設" : "桌面預設");
+                return `
+                    <div class="list-item">
+                        <div class="list-item-top">
+                            <span>${escapeHtml(automationFrequencyLabels[task.frequency] || task.frequency)} / ${escapeHtml(automationTaskLabels[task.task_type] || task.task_type)}</span>
+                            <div class="inline-actions">
+                                <label class="switch-line"><input type="checkbox" data-action="toggle-automation-task" data-id="${escapeHtml(task.id)}" ${task.enabled ? "checked" : ""}>啟用</label>
+                                <button class="mini-btn" type="button" data-action="edit-automation-task" data-id="${escapeHtml(task.id)}">編輯</button>
+                                <button class="mini-btn" type="button" data-action="delete-automation-task" data-id="${escapeHtml(task.id)}">刪除</button>
+                            </div>
+                        </div>
+                        <div class="record-subline">
+                            目標：${escapeHtml(automationTargetLabels[task.target] || task.target)}
+                            ，時間：${escapeHtml(task.time || "立即執行")}
+                            ，週期日：${escapeHtml(task.day || "-")}
+                            ${isAttendanceExportTask(task.task_type, task.target)
+                                ? `，考勤模板：${escapeHtml(
+                                    exportConfig.templates.find((template) => template.id === task.export_template)?.label
+                                    || getAttendanceExportTemplateLabel(task.export_template)
+                                )}`
+                                : ""}
+                            ${["export", "backup"].includes(task.task_type)
+                                ? `，資料夾：${escapeHtml(directory)} (${escapeHtml(directoryLabel)})`
+                                : ""}
+                        </div>
+                    </div>
+                `;
+            }).join("")}
+        </div>
+    `;
+};
+
+renderDeveloperAutomationSection = function renderDeveloperAutomationSectionDatabaseBackupOverride(datasets) {
+    const exportConfig = getAttendanceExportConfig(datasets);
+    const automationExportConfig = getAutomationExportConfig(datasets);
+    const databaseBackupConfig = getDatabaseBackupConfig(datasets);
+    const templateOptions = exportConfig.templates.length
+        ? exportConfig.templates.map((template) => `<option value="${escapeHtml(template.id)}">${escapeHtml(template.label)}</option>`).join("")
+        : `<option value="full">完整欄位</option>`;
+    const targetOptions = Object.entries(automationTargetLabels)
+        .map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`)
+        .join("");
+
+    return `
+        <div class="workspace-stack">
+            <article class="workspace-card">
+                <div class="list-toolbar">
+                    <div>
+                        <p class="sub-kicker">開發者自動化</p>
+                        <h3>自動化任務</h3>
+                    </div>
+                    <div class="badge-row">
+                        ${renderBadge(`任務 ${datasets.automationTasks.length} 筆`, "success")}
+                        ${renderBadge(`日誌 ${datasets.automationLog.length} 筆`)}
+                    </div>
+                </div>
+                <p class="helper-text">自動化任務現在可排程匯出、清理資料，也可建立完整資料庫備份；備份會寫入 manifest 與雜湊值，方便之後查核與還原。</p>
+            </article>
+
+            <article class="sub-panel">
+                <div class="list-toolbar">
+                    <div>
+                        <h3>任務設定</h3>
+                        <p class="helper-text">完整備份任務會固定使用「完整資料庫備份」目標；資料夾可使用備份預設，也可針對單一任務指定。</p>
+                    </div>
+                </div>
+                <form id="automation-form" class="stack-form">
+                    <input type="hidden" name="editingId" value="">
+                    <div class="form-section-card">
+                        <div class="form-section-heading">
+                            <h4>排程</h4>
+                        </div>
+                        <div class="form-section-grid">
+                            <label class="field"><span>頻率</span><select name="frequency" id="automation-frequency"><option value="immediate">立即</option><option value="daily">每天</option><option value="weekly">每週</option><option value="monthly">每月</option></select></label>
+                            <label class="field"><span>時間</span><input name="time" id="automation-time" type="time"></label>
+                            <label class="field"><span>每週星期</span><select name="weeklyDay" id="automation-weekly-day">${dayLabels.map((day, index) => `<option value="${index}">${day}</option>`).join("")}</select></label>
+                            <label class="field"><span>每月日期</span><select name="monthlyDay" id="automation-monthly-day">${Array.from({ length: 31 }, (_, index) => `<option value="${index + 1}">${index + 1}</option>`).join("")}</select></label>
+                        </div>
+                    </div>
+
+                    <div class="form-section-card">
+                        <div class="form-section-heading">
+                            <h4>任務內容</h4>
+                        </div>
+                        <div class="form-section-grid">
+                            <label class="field"><span>任務類型</span><select name="task_type" id="automation-task-type"><option value="export">匯出</option><option value="delete">刪除</option><option value="backup">完整備份</option></select></label>
+                            <label class="field"><span>任務目標</span><select name="target" id="automation-target">${targetOptions}</select></label>
+                            <label class="field hidden span-2" id="automation-export-template-field"><span>考勤模板</span><select name="export_template" id="automation-export-template">${templateOptions}</select></label>
+                            <label class="field hidden span-2" id="automation-export-directory-field"><span>任務專用資料夾</span><input name="export_directory" id="automation-export-directory-input" type="text" placeholder="留空時使用該任務類型的預設資料夾"></label>
+                            <label class="field span-2"><span>啟用狀態</span><select name="enabled"><option value="true">啟用</option><option value="false">停用</option></select></label>
+                        </div>
+                        <div class="inline-actions hidden" id="automation-export-directory-actions">
+                            <button class="outline-btn" type="button" data-action="pick-automation-task-directory">選擇任務資料夾</button>
+                            <button class="outline-btn" type="button" data-action="clear-automation-task-directory">清空任務資料夾</button>
+                        </div>
+                        <div class="status-box">
+                            <strong>預設路徑</strong>
+                            <span class="mono-text">匯出：${escapeHtml(automationExportConfig.effectiveDirectory || "桌面")} / 備份：${escapeHtml(databaseBackupConfig.effectiveDirectory || "系統預設")}</span>
+                        </div>
+                    </div>
+
+                    <div class="form-toolbar">
+                        <button class="primary-btn" type="submit">儲存 / 執行任務</button>
+                        <button class="outline-btn" type="button" data-action="reset-automation-form">重設表單</button>
+                    </div>
+                    <div class="inline-message" data-form-message-for="automation-form" aria-live="polite"></div>
+                </form>
+            </article>
+
+            <article class="sub-panel">
+                <div class="list-toolbar">
+                    <div>
+                        <h3>目前任務清單</h3>
+                        <p class="helper-text">排程任務會由桌面主程式執行；立即任務會從目前開發者工作台執行。</p>
+                    </div>
+                </div>
+                ${renderAutomationTasks(datasets.automationTasks, exportConfig, automationExportConfig, databaseBackupConfig)}
+            </article>
+        </div>
+    `;
+};
+
+renderDeveloperExportSection = function renderDeveloperExportSectionDatabaseBackupOverride(datasets) {
+    const exportConfig = getAttendanceExportConfig(datasets);
+    const customTemplate = exportConfig.templates.find((template) => template.id === "custom");
+    const automationExportConfig = getAutomationExportConfig(datasets);
+    const databaseBackupConfig = getDatabaseBackupConfig(datasets);
+    const auditArchiveConfig = getAuditArchiveConfig(datasets);
+    const recentArchives = auditArchiveConfig.recentArchives || [];
+
+    return `
+        <div class="workspace-stack">
+            <article class="workspace-card">
+                <div class="list-toolbar">
+                    <div>
+                        <p class="sub-kicker">開發者資料管理</p>
+                        <h3>匯出、封存、備份與還原</h3>
+                    </div>
+                    <div class="badge-row">
+                        ${renderBadge(`備份 ${databaseBackupConfig.recentBackups?.length || 0} 筆`, "success")}
+                        ${renderBadge(`封存 ${recentArchives.length} 筆`)}
+                    </div>
+                </div>
+                <p class="helper-text">這裡集中管理自動化匯出路徑、完整資料庫備份、還原前緊急備份、稽核封存與考勤匯出欄位。</p>
+            </article>
+
+            <article class="sub-panel">
+                <h3>自動化匯出資料夾</h3>
+                ${buildKeyValueGrid([
+                    { label: "預設匯出資料夾", value: automationExportConfig.defaultDirectory || "(未設定)", mono: true },
+                    { label: "目前有效匯出位置", value: automationExportConfig.effectiveDirectory || "-", mono: true },
+                    { label: "桌面備援位置", value: automationExportConfig.fallbackDirectory || "-", mono: true },
+                    { label: "狀態", value: automationExportConfig.usingFallback ? "未設定預設資料夾，會使用桌面備援。" : "使用指定預設資料夾。" }
+                ])}
+                <form id="automation-export-directory-form" class="stack-form">
+                    <label class="field">
+                        <span>預設匯出資料夾</span>
+                        <input name="defaultDirectory" id="automation-default-directory" type="text" value="${escapeHtml(automationExportConfig.defaultDirectory || "")}" placeholder="留空時使用桌面">
+                    </label>
+                    <div class="form-toolbar">
+                        <button class="primary-btn" type="submit">儲存匯出資料夾</button>
+                        <button class="outline-btn" type="button" data-action="pick-automation-default-directory">選擇資料夾</button>
+                        <button class="outline-btn" type="button" data-action="clear-automation-default-directory">清空路徑</button>
+                    </div>
+                    <div class="inline-message" data-form-message-for="automation-export-directory-form" aria-live="polite"></div>
+                </form>
+            </article>
+
+            <article class="sub-panel">
+                <div class="list-toolbar">
+                    <div>
+                        <h3>完整資料庫備份與還原</h3>
+                        <p class="helper-text">備份會產生 SQLite 資料庫檔與 manifest；還原前會先建立緊急備份，避免誤還原後無法退回。</p>
+                    </div>
+                    <div class="badge-row">
+                        ${renderBadge(`保留 ${databaseBackupConfig.retentionCount || 30} 份`, "success")}
+                    </div>
+                </div>
+                ${buildKeyValueGrid([
+                    { label: "預設備份資料夾", value: databaseBackupConfig.defaultDirectory || "(未設定)", mono: true },
+                    { label: "目前有效備份位置", value: databaseBackupConfig.effectiveDirectory || "-", mono: true },
+                    { label: "系統備援位置", value: databaseBackupConfig.fallbackDirectory || "-", mono: true },
+                    { label: "最近一般備份", value: `${databaseBackupConfig.recentBackups?.length || 0} 筆` },
+                    { label: "最近緊急備份", value: `${databaseBackupConfig.recentEmergencyBackups?.length || 0} 筆` }
+                ])}
+                <form id="database-backup-settings-form" class="stack-form">
+                    <div class="field-grid">
+                        <label class="field">
+                            <span>預設備份資料夾</span>
+                            <input name="defaultDirectory" id="database-backup-directory" type="text" value="${escapeHtml(databaseBackupConfig.defaultDirectory || "")}" placeholder="留空時使用系統備援位置">
+                        </label>
+                        <label class="field">
+                            <span>保留份數</span>
+                            <input name="retentionCount" type="number" min="3" max="3650" step="1" value="${escapeHtml(String(databaseBackupConfig.retentionCount || 30))}">
+                        </label>
+                    </div>
+                    <div class="form-toolbar">
+                        <button class="primary-btn" type="submit">儲存備份設定</button>
+                        <button class="outline-btn" type="button" data-action="pick-database-backup-directory">選擇資料夾</button>
+                        <button class="outline-btn" type="button" data-action="clear-database-backup-directory">清空路徑</button>
+                        <button class="secondary-btn" type="button" data-action="run-database-backup-now">立即完整備份</button>
+                    </div>
+                    <div class="inline-message" data-form-message-for="database-backup-settings-form" aria-live="polite"></div>
+                </form>
+                <form id="database-restore-form" class="stack-form danger-zone">
+                    <div class="field-grid">
+                        <label class="field">
+                            <span>還原備份檔</span>
+                            <input name="sourceFilePath" id="database-restore-source-file" type="text" placeholder="選擇 .db / .sqlite / .sqlite3 備份檔">
+                        </label>
+                        <label class="field">
+                            <span>確認文字</span>
+                            <input name="confirmText" type="text" placeholder="輸入：還原資料庫">
+                        </label>
+                    </div>
+                    <div class="form-toolbar">
+                        <button class="outline-btn" type="button" data-action="pick-database-restore-file">選擇備份檔</button>
+                        <button class="danger-btn" type="submit">還原資料庫</button>
+                    </div>
+                    <div class="inline-message" data-form-message-for="database-restore-form" aria-live="polite"></div>
+                </form>
+                <h4>最近完整備份</h4>
+                ${renderDatabaseBackupItems(databaseBackupConfig.recentBackups || [])}
+                <h4>最近還原前緊急備份</h4>
+                ${renderDatabaseBackupItems(databaseBackupConfig.recentEmergencyBackups || [], "目前沒有還原前緊急備份。")}
+            </article>
+
+            <article class="sub-panel">
+                <h3>稽核封存設定</h3>
+                ${buildKeyValueGrid([
+                    { label: "保留天數", value: `${auditArchiveConfig.retentionDays || 180} 天` },
+                    { label: "預設封存資料夾", value: auditArchiveConfig.defaultDirectory || "(未設定)", mono: true },
+                    { label: "目前有效封存位置", value: auditArchiveConfig.effectiveDirectory || "-", mono: true },
+                    { label: "系統備援位置", value: auditArchiveConfig.fallbackDirectory || "-", mono: true }
+                ])}
+                <form id="audit-archive-settings-form" class="stack-form">
+                    <div class="field-grid">
+                        <label class="field">
+                            <span>保留天數</span>
+                            <input name="retentionDays" type="number" min="30" max="3650" step="1" value="${escapeHtml(String(auditArchiveConfig.retentionDays || 180))}">
+                        </label>
+                        <label class="field">
+                            <span>封存資料夾</span>
+                            <input name="archiveDirectory" type="text" value="${escapeHtml(auditArchiveConfig.defaultDirectory || "")}" placeholder="留空時使用系統預設封存資料夾">
+                        </label>
+                    </div>
+                    <div class="form-toolbar">
+                        <button class="primary-btn" type="submit">儲存封存設定</button>
+                        <button class="outline-btn" type="button" data-action="pick-audit-archive-directory">選擇資料夾</button>
+                        <button class="outline-btn" type="button" data-action="clear-audit-archive-directory">清空路徑</button>
+                        <button class="secondary-btn" type="button" data-action="run-audit-archive-now">立即封存</button>
+                    </div>
+                    <div class="inline-message" data-form-message-for="audit-archive-settings-form" aria-live="polite"></div>
+                </form>
+                <div class="record-list">
+                    ${recentArchives.length ? recentArchives.map((archive) => `
+                        <div class="list-item">
+                            <div class="list-item-top">
+                                <span>${escapeHtml(archive.archive_month || archive.fileName || "封存檔")}</span>
+                                ${renderBadge(`${archive.record_count || 0} 筆`, "success")}
+                            </div>
+                            <div class="record-subline">建立時間：${escapeHtml(archive.createdAtText || "-")}</div>
+                            <div class="record-subline mono-text">${escapeHtml(archive.file_path || "-")}</div>
+                        </div>
+                    `).join("") : renderEmptyState("目前沒有稽核封存紀錄。")}
+                </div>
+            </article>
+
+            <article class="sub-panel">
+                <h3>考勤匯出模板</h3>
+                <div class="record-list">
+                    ${exportConfig.templates.filter((template) => template.id !== "custom").map((template) => `
+                        <div class="list-item">
+                            <div class="list-item-top">
+                                <span>${escapeHtml(template.label)}</span>
+                                ${renderBadge(`${template.fields.length} 欄`, "success")}
+                            </div>
+                            <div class="record-subline">${escapeHtml(template.description)}</div>
+                            <div class="record-subline mono-text">${escapeHtml(template.fields.map((field) => field.label).join(" / "))}</div>
+                        </div>
+                    `).join("")}
+                </div>
+            </article>
+
+            <article class="sub-panel">
+                <h3>自訂考勤匯出欄位</h3>
+                <form id="attendance-export-settings-form" class="stack-form">
+                    <div class="checkbox-grid">
+                        ${exportConfig.fieldCatalog.map((field) => `
+                            <label class="checkbox-label">
+                                <input type="checkbox" name="customFields" value="${escapeHtml(field.id)}" ${exportConfig.customFields.includes(field.id) ? "checked" : ""}>
+                                ${escapeHtml(field.label)}
+                            </label>
+                        `).join("")}
+                    </div>
+                    <p class="helper-text">目前自訂模板已選 ${exportConfig.customFields.length} 欄。${escapeHtml(customTemplate?.description || "")}</p>
+                    <div class="form-toolbar">
+                        <button class="primary-btn" type="submit">儲存自訂模板</button>
+                        <button class="outline-btn" type="reset">還原表單</button>
+                    </div>
+                </form>
+                <div class="record-subline mono-text">${escapeHtml((customTemplate?.fields || []).map((field) => field.label).join(" / "))}</div>
+            </article>
+        </div>
+    `;
+};
+
+const previousSyncAutomationFormVisibilityWithBackup = syncAutomationFormVisibility;
+syncAutomationFormVisibility = function syncAutomationFormVisibilityDatabaseBackupOverride() {
+    previousSyncAutomationFormVisibilityWithBackup();
+    const form = document.getElementById("automation-form");
+    if (!form) return;
+    const taskType = form.elements.task_type?.value || "export";
+    const targetField = document.getElementById("automation-target")?.closest(".field");
+    const exportDirectoryField = document.getElementById("automation-export-directory-field");
+    const exportDirectoryActions = document.getElementById("automation-export-directory-actions");
+    const showDirectory = taskType === "export" || taskType === "backup";
+    if (taskType === "backup" && form.elements.target) {
+        form.elements.target.value = "database_full";
+    }
+    if (taskType !== "backup" && form.elements.target?.value === "database_full") {
+        form.elements.target.value = "last_week_records";
+    }
+    if (targetField) targetField.classList.toggle("hidden", taskType === "backup");
+    if (exportDirectoryField) exportDirectoryField.classList.toggle("hidden", !showDirectory);
+    if (exportDirectoryActions) exportDirectoryActions.classList.toggle("hidden", !showDirectory);
+};
+
+SAVE_FEEDBACK_FORM_IDS.add("database-backup-settings-form");
+SAVE_FEEDBACK_FORM_IDS.add("database-restore-form");
+
+const previousHandleDashboardClickWithDatabaseBackup = handleDashboardClick;
+handleDashboardClick = async function handleDashboardClickDatabaseBackupOverride(event) {
+    const actionTarget = event.target?.closest?.("[data-action]");
+    if (!actionTarget) return previousHandleDashboardClickWithDatabaseBackup(event);
+    const action = actionTarget.dataset.action;
+
+    try {
+        if (action === "pick-database-backup-directory") {
+            const form = document.getElementById("database-backup-settings-form");
+            if (!form) return;
+            const result = await requestJson("/api/browser/developer/database-backup-directory/select", {
+                method: "POST",
+                body: { defaultPath: form.elements.defaultDirectory?.value?.trim() || "" },
+                auth: true
+            });
+            form.elements.defaultDirectory.value = result.data?.path || "";
+            setFormMessage("database-backup-settings-form", result.message || "已選擇備份資料夾。", "info");
+            return;
+        }
+        if (action === "clear-database-backup-directory") {
+            const form = document.getElementById("database-backup-settings-form");
+            if (!form) return;
+            form.elements.defaultDirectory.value = "";
+            setFormMessage("database-backup-settings-form", "已清空備份資料夾，儲存後會使用系統備援位置。", "info");
+            return;
+        }
+        if (action === "run-database-backup-now") {
+            const result = await requestJson("/api/browser/developer/database-backup/run", {
+                method: "POST",
+                auth: true,
+                body: {}
+            });
+            if (result.dashboard) renderDashboard(result.dashboard);
+            setMessage(ui.dashboardMessage, result.message || "完整資料庫備份已建立。", "success");
+            setFormMessage("database-backup-settings-form", result.message || "完整資料庫備份已建立。", "success");
+            return;
+        }
+        if (action === "pick-database-restore-file") {
+            const form = document.getElementById("database-restore-form");
+            if (!form) return;
+            const result = await requestJson("/api/browser/developer/database-restore-file/select", {
+                method: "POST",
+                body: { defaultPath: form.elements.sourceFilePath?.value?.trim() || getDatabaseBackupConfig().effectiveDirectory || "" },
+                auth: true
+            });
+            form.elements.sourceFilePath.value = result.data?.path || "";
+            setFormMessage("database-restore-form", result.message || "備份檔已選擇。", "info");
+            return;
+        }
+    } catch (error) {
+        setMessage(ui.dashboardMessage, error.message, "error");
+        const formId = action?.includes("restore") ? "database-restore-form" : "database-backup-settings-form";
+        setFormMessage(formId, error.message, "error");
+        return;
+    }
+
+    return previousHandleDashboardClickWithDatabaseBackup(event);
+};
+
+const previousHandleDashboardSubmitWithDatabaseBackup = handleDashboardSubmit;
+handleDashboardSubmit = async function handleDashboardSubmitDatabaseBackupOverride(event) {
+    const form = event.target instanceof HTMLFormElement
+        ? event.target
+        : event.target?.closest?.("form");
+    const formId = form?.getAttribute("id") || "";
+
+    if (formId !== "database-backup-settings-form" && formId !== "database-restore-form") {
+        return previousHandleDashboardSubmitWithDatabaseBackup(event);
+    }
+
+    event.preventDefault();
+    if (!form) return;
+    setFormMessage(formId, "");
+
+    try {
+        const values = Object.fromEntries(new FormData(form).entries());
+        const endpoint = formId === "database-backup-settings-form"
+            ? "/api/browser/developer/database-backup-settings/save"
+            : "/api/browser/developer/database-restore/run";
+        const body = formId === "database-backup-settings-form"
+            ? {
+                defaultDirectory: values.defaultDirectory?.trim() || "",
+                retentionCount: Number(values.retentionCount) || 30
+            }
+            : {
+                sourceFilePath: values.sourceFilePath?.trim() || "",
+                confirmText: values.confirmText?.trim() || ""
+            };
+        const result = await requestJson(endpoint, {
+            method: "POST",
+            auth: true,
+            body
+        });
+        if (result.dashboard) renderDashboard(result.dashboard);
+        else await reloadDashboard(result.message || "資料庫備份設定已更新。");
+        setMessage(ui.dashboardMessage, result.message || "作業已完成。", "success");
+        setFormMessage(formId, result.message || "作業已完成。", "success");
+    } catch (error) {
+        setMessage(ui.dashboardMessage, error.message, "error");
+        setFormMessage(formId, error.message, "error");
+    }
+};
+
 const workspaceSubnavBaseRenderers = {
     admin: {
         people: renderAdminPeopleSection,
@@ -10004,9 +10491,10 @@ const workspaceSubnavConfigs = {
                     label: "匯出設定",
                     items: [
                         { id: "directory", label: "自動化匯出資料夾", panelIndex: 1 },
-                        { id: "archive", label: "稽核封存策略", panelIndex: 2 },
-                        { id: "templates", label: "內建模板", panelIndex: 3 },
-                        { id: "custom", label: "自訂格式", panelIndex: 4 }
+                        { id: "databaseBackup", label: "完整資料庫備份與還原", panelIndex: 2 },
+                        { id: "archive", label: "稽核封存策略", panelIndex: 3 },
+                        { id: "templates", label: "內建模板", panelIndex: 4 },
+                        { id: "custom", label: "自訂格式", panelIndex: 5 }
                     ]
                 }
             ]

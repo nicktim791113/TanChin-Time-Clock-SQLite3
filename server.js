@@ -4,6 +4,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { app, dialog } = require('electron');
 const dbModule = require('./database');
+const databaseBackup = require('./database-backup');
 const {
   ATTENDANCE_EXPORT_FIELD_DEFINITIONS,
   DEFAULT_ATTENDANCE_EXPORT_TEMPLATE_ID,
@@ -264,6 +265,14 @@ API_ROUTE_CATALOG.push(
 API_ROUTE_CATALOG.push(
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/automation-export-directory/select', auth: '開發人員', description: '開啟自動化匯出資料夾選擇器' },
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/automation-export-directory/save', auth: '開發人員', description: '儲存自動化匯出的預設資料夾' }
+);
+
+API_ROUTE_CATALOG.push(
+  { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/database-backup-directory/select', auth: '開發人員', description: '開啟完整資料庫備份資料夾選擇器' },
+  { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/database-backup-settings/save', auth: '開發人員', description: '儲存完整資料庫備份設定' },
+  { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/database-backup/run', auth: '開發人員', description: '立即建立完整資料庫備份' },
+  { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/database-restore-file/select', auth: '開發人員', description: '選擇完整資料庫備份檔' },
+  { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/database-restore/run', auth: '開發人員', description: '以備份檔還原資料庫' }
 );
 
 API_ROUTE_CATALOG.push(
@@ -718,6 +727,66 @@ function getAutomationExportDirectoryInfo(task = {}) {
   return { directoryPath: settings.fallbackDirectory, sourceLabel: '桌面資料夾' };
 }
 
+function normalizeDatabaseBackupDirectoryPath(directoryPath) {
+  const trimmed = String(directoryPath || '').trim();
+  if (!trimmed) return '';
+  return databaseBackup.normalizeBackupDirectoryPath(
+    trimmed,
+    databaseBackup.getDefaultDatabaseBackupDirectory(getUserDataPath())
+  );
+}
+
+function mapDatabaseBackupFile(file) {
+  const manifestPath = file.filePath.replace(/\.db$/i, '.manifest.json');
+  let manifest = null;
+  if (fs.existsSync(manifestPath)) {
+    try {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    } catch (error) {
+      manifest = null;
+    }
+  }
+  return {
+    ...file,
+    manifestPath,
+    manifest,
+    createdText: new Date(file.modifiedTime || file.createdTime || Date.now()).toLocaleString('zh-TW', { hour12: false }),
+    sizeMb: Math.round((fs.statSync(file.filePath).size / 1024 / 1024) * 100) / 100
+  };
+}
+
+function getDatabaseBackupSettings() {
+  const fallbackDirectory = databaseBackup.getDefaultDatabaseBackupDirectory(getUserDataPath());
+  const defaultDirectory = normalizeDatabaseBackupDirectoryPath(getSettingValue('databaseBackupDirectory', ''));
+  const retentionCount = databaseBackup.normalizeRetentionCount(
+    getSettingValue('databaseBackupRetentionCount', databaseBackup.DEFAULT_DATABASE_BACKUP_RETENTION_COUNT),
+    databaseBackup.DEFAULT_DATABASE_BACKUP_RETENTION_COUNT
+  );
+  const effectiveDirectory = defaultDirectory || databaseBackup.normalizeBackupDirectoryPath('', fallbackDirectory);
+  return {
+    retentionCount,
+    defaultDirectory,
+    fallbackDirectory,
+    effectiveDirectory,
+    usingFallback: !defaultDirectory,
+    recentBackups: databaseBackup.listBackupFiles(effectiveDirectory, 'standard').slice(0, 20).map(mapDatabaseBackupFile),
+    recentEmergencyBackups: databaseBackup.listBackupFiles(effectiveDirectory, 'emergency').slice(0, 10).map(mapDatabaseBackupFile)
+  };
+}
+
+async function createDatabaseBackup({ reason = 'manual', actor = 'developer', directoryPath = '', retentionCount = null, metadata = {} } = {}) {
+  const settings = getDatabaseBackupSettings();
+  return databaseBackup.createFullDatabaseBackup({
+    dbModule,
+    directoryPath: directoryPath || settings.effectiveDirectory,
+    fallbackDirectory: settings.fallbackDirectory,
+    retentionCount: retentionCount || settings.retentionCount,
+    reason,
+    actor,
+    metadata
+  });
+}
+
 async function openDirectoryPicker(defaultPath = '') {
   const normalizedDefaultPath = String(defaultPath || '').trim();
   const options = {
@@ -734,6 +803,32 @@ async function openDirectoryPicker(defaultPath = '') {
   const result = await dialogInvoker(options);
   if (result.canceled || !result.filePaths?.length) {
     return { success: false, canceled: true, message: '使用者取消選擇' };
+  }
+  return { success: true, path: path.resolve(result.filePaths[0]) };
+}
+
+async function openDatabaseBackupFilePicker(defaultPath = '') {
+  const normalizedDefaultPath = String(defaultPath || '').trim();
+  const options = {
+    title: '選擇要還原的資料庫備份檔',
+    properties: ['openFile'],
+    filters: [
+      { name: 'SQLite database backup', extensions: ['db', 'sqlite', 'sqlite3'] },
+      { name: 'All files', extensions: ['*'] }
+    ]
+  };
+  if (normalizedDefaultPath && fs.existsSync(normalizedDefaultPath)) {
+    options.defaultPath = fs.statSync(normalizedDefaultPath).isDirectory()
+      ? normalizedDefaultPath
+      : path.dirname(normalizedDefaultPath);
+  }
+
+  const dialogInvoker = mainWindowRef && !mainWindowRef.isDestroyed?.()
+    ? dialog.showOpenDialog.bind(dialog, mainWindowRef)
+    : dialog.showOpenDialog.bind(dialog);
+  const result = await dialogInvoker(options);
+  if (result.canceled || !result.filePaths?.length) {
+    return { success: false, canceled: true, message: '已取消選擇資料庫備份檔。' };
   }
   return { success: true, path: path.resolve(result.filePaths[0]) };
 }
@@ -1542,6 +1637,7 @@ function getSystemHealthSnapshot() {
   const auditArchiveCount = dbModule.countAuditArchives();
   const auditArchiveSettings = getAuditArchiveSettings();
   const automationExportSettings = getAutomationExportDirectorySettings();
+  const databaseBackupSettings = getDatabaseBackupSettings();
   const externalApiSettings = getExternalApiAccessSettings();
   const desktopWindowAttached = Boolean(mainWindowRef && !mainWindowRef.isDestroyed?.());
   const startedAt = serverStartedAt || Date.now();
@@ -1578,6 +1674,13 @@ function getSystemHealthSnapshot() {
     automationExportFallbackDirectory: automationExportSettings.fallbackDirectory,
     automationExportEffectiveDirectory: automationExportSettings.effectiveDirectory,
     automationExportUsingFallback: automationExportSettings.usingFallback,
+    databaseBackupDirectory: databaseBackupSettings.defaultDirectory,
+    databaseBackupFallbackDirectory: databaseBackupSettings.fallbackDirectory,
+    databaseBackupEffectiveDirectory: databaseBackupSettings.effectiveDirectory,
+    databaseBackupUsingFallback: databaseBackupSettings.usingFallback,
+    databaseBackupRetentionCount: databaseBackupSettings.retentionCount,
+    databaseBackupRecentCount: databaseBackupSettings.recentBackups.length,
+    databaseEmergencyBackupRecentCount: databaseBackupSettings.recentEmergencyBackups.length,
     externalApiEnabled: externalApiSettings.enabled,
     externalApiKeyConfigured: externalApiSettings.keyConfigured,
     externalApiAuthMode: externalApiSettings.enabled ? 'api_key' : 'disabled',
@@ -1681,6 +1784,7 @@ function getDeveloperDatasets(session = {}) {
     accountAccess: buildAccountAccessState(),
     workspaceNavOrder: buildWorkspaceNavOrderState(session, { includeDefinitions: true }),
     automationExport: getAutomationExportDirectorySettings(),
+    databaseBackup: getDatabaseBackupSettings(),
     attendanceExport: getAttendanceExportSettings(),
     systemHealth: getSystemHealthSnapshot(),
     apiCatalog: API_ROUTE_CATALOG
@@ -2535,8 +2639,9 @@ function normalizeCustomTheme(theme) {
 }
 
 function normalizeAutomationTask(task) {
-  const taskType = String(task.task_type || 'export');
-  const target = String(task.target || 'last_week_records');
+  const requestedTaskType = String(task.task_type || 'export');
+  const taskType = ['export', 'delete', 'backup'].includes(requestedTaskType) ? requestedTaskType : 'export';
+  const target = taskType === 'backup' ? 'database_full' : String(task.target || 'last_week_records');
   return {
     id: String(task.id || `auto_task_${Date.now()}`),
     frequency: String(task.frequency || 'immediate'),
@@ -2547,7 +2652,7 @@ function normalizeAutomationTask(task) {
     export_template: isAttendanceExportTarget(target) && taskType === 'export'
       ? normalizeAttendanceExportTemplateId(task.export_template)
       : DEFAULT_ATTENDANCE_EXPORT_TEMPLATE_ID,
-    export_directory: taskType === 'export'
+    export_directory: ['export', 'backup'].includes(taskType)
       ? String(task.export_directory || '').trim()
       : '',
     enabled: normalizeBoolean(task.enabled)
@@ -2916,6 +3021,9 @@ async function executeAutomationTask(task) {
     case 'log':
       descriptiveDateRange = '系統日誌';
       break;
+    case 'database_full':
+      descriptiveDateRange = '完整資料庫備份';
+      break;
     default:
       descriptiveDateRange = task.target;
       break;
@@ -3017,6 +3125,26 @@ async function executeAutomationTask(task) {
         message = `已匯出 ${recordsToExport.length} 筆 ${descriptiveDateRange} 至 ${exportDirectoryInfo.sourceLabel}：${exportBasePath}`;
         status = 'success';
       }
+    }
+  } else if (task.task_type === 'backup') {
+    if (task.target !== 'database_full') {
+      message = `不支援的備份任務目標：${task.target}`;
+      status = 'error';
+    } else {
+      const backupSettings = getDatabaseBackupSettings();
+      const backupResult = await createDatabaseBackup({
+        reason: 'automation',
+        actor: 'automation',
+        directoryPath: task.export_directory || backupSettings.effectiveDirectory,
+        retentionCount: backupSettings.retentionCount,
+        metadata: {
+          taskId: task.id,
+          taskFrequency: task.frequency
+        }
+      });
+      message = `完整資料庫備份已建立：${backupResult.filePath}`;
+      status = 'success';
+      notificationType = 'databaseBackup';
     }
   } else if (task.task_type === 'delete') {
     let result;
@@ -4495,6 +4623,161 @@ function attachBrowserRoutes(server) {
       });
     } catch (error) {
       response.status(400).json({ success: false, error: error.message });
+    }
+  });
+
+  server.post('/api/browser/developer/database-backup-directory/select', requireBrowserSession, requireBrowserRole('developer'), async (request, response) => {
+    try {
+      const pickerResult = await openDirectoryPicker(request.body?.defaultPath);
+      if (!pickerResult.success) {
+        response.status(400).json({ success: false, error: pickerResult.message || '已取消選擇資料庫備份資料夾。' });
+        return;
+      }
+      response.json({
+        success: true,
+        message: '已選擇資料庫備份資料夾。',
+        data: { path: pickerResult.path }
+      });
+    } catch (error) {
+      response.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  server.post('/api/browser/developer/database-backup-settings/save', requireBrowserSession, requireBrowserRole('developer'), (request, response) => {
+    try {
+      const previousSettings = getDatabaseBackupSettings();
+      const directory = normalizeDatabaseBackupDirectoryPath(request.body?.defaultDirectory);
+      const retentionCount = databaseBackup.normalizeRetentionCount(request.body?.retentionCount);
+      dbModule.setSetting('databaseBackupDirectory', directory);
+      dbModule.setSetting('databaseBackupRetentionCount', retentionCount);
+      writeBrowserAuditLog(request, {
+        action: 'update',
+        target_type: 'database_backup_setting',
+        target_id: 'databaseBackupSettings',
+        summary: '更新完整資料庫備份設定',
+        before_data: {
+          directory: previousSettings.defaultDirectory,
+          retentionCount: previousSettings.retentionCount
+        },
+        after_data: {
+          directory,
+          retentionCount
+        }
+      });
+      notifyDesktop('databaseBackup', getBrowserSyncMeta(request));
+      response.json({
+        success: true,
+        message: '完整資料庫備份設定已儲存。',
+        data: getDatabaseBackupSettings(),
+        dashboard: buildDashboardForSession(request.browserSession)
+      });
+    } catch (error) {
+      response.status(400).json({ success: false, error: error.message });
+    }
+  });
+
+  server.post('/api/browser/developer/database-backup/run', requireBrowserSession, requireBrowserRole('developer'), async (request, response) => {
+    try {
+      const settings = getDatabaseBackupSettings();
+      const result = await createDatabaseBackup({
+        reason: 'manual',
+        actor: request.browserSession.employeeId || request.browserSession.role || 'developer',
+        directoryPath: request.body?.directoryPath || settings.effectiveDirectory,
+        retentionCount: settings.retentionCount,
+        metadata: {
+          triggeredFrom: 'browser_developer_workspace'
+        }
+      });
+      const message = `完整資料庫備份已建立：${result.filePath}`;
+      dbModule.addAutomationLog({ timestamp: Date.now(), message, status: 'success' });
+      writeBrowserAuditLog(request, {
+        action: 'backup',
+        target_type: 'database',
+        target_id: 'app_data.db',
+        summary: message,
+        after_data: {
+          filePath: result.filePath,
+          manifestPath: result.manifestPath,
+          sizeBytes: result.sizeBytes,
+          sha256: result.sha256
+        }
+      });
+      notifyDesktop('databaseBackup', getBrowserSyncMeta(request));
+      notifyDesktop('automationLog', getBrowserSyncMeta(request));
+      response.json({
+        success: true,
+        message,
+        data: result,
+        dashboard: buildDashboardForSession(request.browserSession)
+      });
+    } catch (error) {
+      response.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  server.post('/api/browser/developer/database-restore-file/select', requireBrowserSession, requireBrowserRole('developer'), async (request, response) => {
+    try {
+      const pickerResult = await openDatabaseBackupFilePicker(request.body?.defaultPath);
+      if (!pickerResult.success) {
+        response.status(400).json({ success: false, error: pickerResult.message || '已取消選擇資料庫備份檔。' });
+        return;
+      }
+      databaseBackup.validateRestoreSourceFile(pickerResult.path);
+      dbModule.validateBackupDatabaseFile(pickerResult.path);
+      response.json({
+        success: true,
+        message: '備份檔已通過基本檢查。',
+        data: { path: pickerResult.path }
+      });
+    } catch (error) {
+      response.status(400).json({ success: false, error: error.message });
+    }
+  });
+
+  server.post('/api/browser/developer/database-restore/run', requireBrowserSession, requireBrowserRole('developer'), async (request, response) => {
+    try {
+      const confirmText = String(request.body?.confirmText || '').trim();
+      if (confirmText !== '還原資料庫') {
+        response.status(400).json({ success: false, error: '請輸入「還原資料庫」後才能執行還原。' });
+        return;
+      }
+      const settings = getDatabaseBackupSettings();
+      const result = await databaseBackup.restoreDatabaseFromBackup({
+        dbModule,
+        sourceFilePath: request.body?.sourceFilePath,
+        emergencyDirectoryPath: settings.effectiveDirectory,
+        fallbackDirectory: settings.fallbackDirectory,
+        emergencyRetentionCount: settings.retentionCount,
+        actor: request.browserSession.employeeId || request.browserSession.role || 'developer',
+        metadata: {
+          triggeredFrom: 'browser_developer_workspace'
+        }
+      });
+      const message = `資料庫已由備份還原：${result.sourceFilePath}`;
+      dbModule.addAutomationLog({ timestamp: Date.now(), message, status: 'success' });
+      writeBrowserAuditLog(request, {
+        action: 'restore',
+        target_type: 'database',
+        target_id: 'app_data.db',
+        summary: message,
+        after_data: {
+          sourceFilePath: result.sourceFilePath,
+          restoredPath: result.restoredPath,
+          emergencyBackupPath: result.emergencyBackup?.filePath || '',
+          emergencyManifestPath: result.emergencyBackup?.manifestPath || ''
+        }
+      });
+      ['databaseBackup', 'automationLog', 'employees', 'punchRecords', 'shifts', 'bellSchedules', 'bellHistory', 'customThemes', 'displaySettings', 'systemHealth'].forEach((type) => {
+        notifyDesktop(type, getBrowserSyncMeta(request));
+      });
+      response.json({
+        success: true,
+        message,
+        data: result,
+        dashboard: buildDashboardForSession(request.browserSession)
+      });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ success: false, error: error.message });
     }
   });
 
