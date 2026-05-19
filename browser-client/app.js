@@ -78,7 +78,7 @@ const automationFrequencyLabels = {
 const automationTaskLabels = {
     export: "匯出",
     delete: "刪除",
-    backup: "完整備份"
+    backup: "完整資料庫備份"
 };
 
 const automationTargetLabels = {
@@ -9888,6 +9888,7 @@ renderDeveloperAutomationSection = function renderDeveloperAutomationSectionData
         ? exportConfig.templates.map((template) => `<option value="${escapeHtml(template.id)}">${escapeHtml(template.label)}</option>`).join("")
         : `<option value="full">完整欄位</option>`;
     const targetOptions = Object.entries(automationTargetLabels)
+        .filter(([value]) => value !== "database_full")
         .map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`)
         .join("");
 
@@ -9911,7 +9912,7 @@ renderDeveloperAutomationSection = function renderDeveloperAutomationSectionData
                 <div class="list-toolbar">
                     <div>
                         <h3>任務設定</h3>
-                        <p class="helper-text">完整備份任務會固定使用「完整資料庫備份」目標；資料夾可使用備份預設，也可針對單一任務指定。</p>
+                        <p class="helper-text">完整資料庫備份任務會固定使用系統備份目標；資料夾可使用備份預設，也可針對單一任務指定。</p>
                     </div>
                 </div>
                 <form id="automation-form" class="stack-form">
@@ -9933,7 +9934,7 @@ renderDeveloperAutomationSection = function renderDeveloperAutomationSectionData
                             <h4>任務內容</h4>
                         </div>
                         <div class="form-section-grid">
-                            <label class="field"><span>任務類型</span><select name="task_type" id="automation-task-type"><option value="export">匯出</option><option value="delete">刪除</option><option value="backup">完整備份</option></select></label>
+                            <label class="field"><span>任務類型</span><select name="task_type" id="automation-task-type"><option value="export">匯出</option><option value="delete">刪除</option><option value="backup">完整資料庫備份</option></select></label>
                             <label class="field"><span>任務目標</span><select name="target" id="automation-target">${targetOptions}</select></label>
                             <label class="field hidden span-2" id="automation-export-template-field"><span>考勤模板</span><select name="export_template" id="automation-export-template">${templateOptions}</select></label>
                             <label class="field hidden span-2" id="automation-export-directory-field"><span>任務專用資料夾</span><input name="export_directory" id="automation-export-directory-input" type="text" placeholder="留空時使用該任務類型的預設資料夾"></label>
@@ -10165,10 +10166,7 @@ syncAutomationFormVisibility = function syncAutomationFormVisibilityDatabaseBack
     const exportDirectoryField = document.getElementById("automation-export-directory-field");
     const exportDirectoryActions = document.getElementById("automation-export-directory-actions");
     const showDirectory = taskType === "export" || taskType === "backup";
-    if (taskType === "backup" && form.elements.target) {
-        form.elements.target.value = "database_full";
-    }
-    if (taskType !== "backup" && form.elements.target?.value === "database_full") {
+    if (taskType !== "backup" && form.elements.target && (!form.elements.target.value || form.elements.target.value === "database_full")) {
         form.elements.target.value = "last_week_records";
     }
     if (targetField) targetField.classList.toggle("hidden", taskType === "backup");
