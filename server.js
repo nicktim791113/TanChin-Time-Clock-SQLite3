@@ -2077,9 +2077,16 @@ function appendImpersonationState(dashboard, session) {
   };
 }
 
+function appendDashboardMetadata(dashboard) {
+  return {
+    ...dashboard,
+    appVersion: app.getVersion()
+  };
+}
+
 function buildDashboardForSession(session) {
   if (isSystemAdminSession(session)) {
-    return buildSystemAdminDashboard(session);
+    return appendDashboardMetadata(buildSystemAdminDashboard(session));
   }
 
   const employee = getEmployeeById(session.employeeId);
@@ -2089,9 +2096,9 @@ function buildDashboardForSession(session) {
     throw employeeMissingError;
   }
 
-  if (session.role === 'employee') return appendImpersonationState(buildEmployeeDashboard(employee, session), session);
-  if (session.role === 'admin') return appendImpersonationState(buildManagerDashboard(employee, session), session);
-  return appendImpersonationState(buildDeveloperDashboard(employee, session), session);
+  if (session.role === 'employee') return appendDashboardMetadata(appendImpersonationState(buildEmployeeDashboard(employee, session), session));
+  if (session.role === 'admin') return appendDashboardMetadata(appendImpersonationState(buildManagerDashboard(employee, session), session));
+  return appendDashboardMetadata(appendImpersonationState(buildDeveloperDashboard(employee, session), session));
 }
 
 function createHttpError(message, statusCode = 400) {

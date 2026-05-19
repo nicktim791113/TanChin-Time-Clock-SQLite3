@@ -362,6 +362,22 @@ body::after {
     color: var(--brand-dark);
 }
 
+.version-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 24px;
+    padding: 3px 7px;
+    border: 1px solid rgba(108, 185, 222, 0.18);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.5);
+    color: rgba(18, 68, 98, 0.58);
+    font-size: 0.72rem;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+}
+
 .modal-backdrop {
     position: fixed;
     inset: 0;

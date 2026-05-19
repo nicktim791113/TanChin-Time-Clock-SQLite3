@@ -545,6 +545,7 @@ const ui = {
     dashboardView: document.getElementById("dashboard-view"),
     dashboardTitle: document.getElementById("dashboard-title"),
     dashboardIdentityPill: document.getElementById("dashboard-identity-pill"),
+    dashboardVersionPill: document.getElementById("dashboard-version-pill"),
     dashboardMessage: document.getElementById("dashboard-message"),
     dashboardContent: document.getElementById("dashboard-content"),
     dashboardHelpBtn: document.getElementById("dashboard-help-btn"),
@@ -1004,6 +1005,21 @@ function syncDashboardIdentityPill(dashboard = state.dashboard) {
     const userLabel = dashboard.user?.name || dashboard.user?.id || "";
     ui.dashboardIdentityPill.textContent = `${roleLabel}：${userLabel}`;
     ui.dashboardIdentityPill.classList.remove("hidden");
+}
+
+function syncDashboardVersionPill(dashboard = state.dashboard) {
+    if (!ui.dashboardVersionPill) return;
+    const version = String(dashboard?.appVersion || dashboard?.datasets?.systemHealth?.appVersion || "").trim();
+    if (!version) {
+        ui.dashboardVersionPill.textContent = "";
+        ui.dashboardVersionPill.removeAttribute("title");
+        ui.dashboardVersionPill.classList.add("hidden");
+        return;
+    }
+    const normalizedVersion = version.replace(/^v/i, "");
+    ui.dashboardVersionPill.textContent = `v${normalizedVersion}`;
+    ui.dashboardVersionPill.title = `目前版本 v${normalizedVersion}`;
+    ui.dashboardVersionPill.classList.remove("hidden");
 }
 
 function openDashboardHelpModal() {
@@ -2909,6 +2925,7 @@ function renderDashboard(dashboard) {
                 ? "系統管理者工作台"
                 : "員工工作台";
     syncDashboardIdentityPill(dashboard);
+    syncDashboardVersionPill(dashboard);
     syncDashboardHelpButton(dashboard);
     ui.dashboardContent.innerHTML = dashboard.role === "employee"
         ? renderEmployeeDashboard(dashboard)
@@ -3494,6 +3511,7 @@ async function handleLogout(isSilent = false) {
     sessionStorage.removeItem("browserPortalToken");
     ui.dashboardContent.innerHTML = "";
     syncDashboardIdentityPill(null);
+    syncDashboardVersionPill(null);
     syncDashboardHelpButton(null);
     setMessage(ui.dashboardMessage, "");
     ui.dashboardView.classList.add("hidden");
