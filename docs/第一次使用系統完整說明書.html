@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TanChin 第一次使用系統完整說明書</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f8fb;
+      --panel: #ffffff;
+      --ink: #12364b;
+      --muted: #557286;
+      --line: #d8e6ef;
+      --brand: #0f78a8;
+      --brand-dark: #09506f;
+      --accent: #0f9f7a;
+      --danger: #b83b52;
+      --warn: #ad6b00;
+      --soft: #eaf6fb;
+      --soft-green: #eaf9f2;
+      --soft-warn: #fff7e8;
+      --radius: 10px;
+      --shadow: 0 12px 30px rgba(31, 88, 121, 0.11);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Microsoft JhengHei", "Noto Sans TC", Arial, sans-serif;
+      line-height: 1.72;
+    }
+
+    .page {
+      width: min(1180px, calc(100% - 28px));
+      margin: 0 auto;
+      padding: 26px 0 48px;
+    }
+
+    header {
+      background: linear-gradient(135deg, #ffffff 0%, #e9f7fd 100%);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 26px;
+    }
+
+    .eyebrow {
+      margin: 0 0 6px;
+      color: var(--brand);
+      font-size: 0.86rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(1.75rem, 3vw, 2.6rem);
+      line-height: 1.22;
+    }
+
+    .subtitle {
+      max-width: 78ch;
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 1rem;
+    }
+
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid rgba(15, 120, 168, 0.22);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.75);
+      color: var(--brand-dark);
+      font-size: 0.82rem;
+      font-weight: 800;
+      line-height: 1;
+      padding: 7px 10px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 270px minmax(0, 1fr);
+      gap: 18px;
+      margin-top: 18px;
+      align-items: start;
+    }
+
+    nav {
+      position: sticky;
+      top: 14px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 14px;
+    }
+
+    nav strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--brand-dark);
+    }
+
+    nav a {
+      display: block;
+      color: var(--ink);
+      text-decoration: none;
+      border-radius: 8px;
+      padding: 7px 9px;
+      font-size: 0.92rem;
+    }
+
+    nav a:hover {
+      background: var(--soft);
+      color: var(--brand-dark);
+    }
+
+    main {
+      display: grid;
+      gap: 16px;
+    }
+
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 22px;
+    }
+
+    h2,
+    h3 {
+      margin: 0;
+      line-height: 1.35;
+    }
+
+    h2 {
+      font-size: 1.34rem;
+      color: var(--brand-dark);
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 14px;
+    }
+
+    h3 {
+      font-size: 1.08rem;
+      margin-top: 18px;
+      margin-bottom: 8px;
+    }
+
+    p {
+      margin: 8px 0;
+    }
+
+    ul,
+    ol {
+      margin: 8px 0 8px 1.35rem;
+      padding: 0;
+    }
+
+    li {
+      margin: 4px 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0;
+      overflow: hidden;
+      border-radius: 8px;
+    }
+
+    th,
+    td {
+      border: 1px solid var(--line);
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #eef7fb;
+      color: var(--brand-dark);
+      white-space: nowrap;
+    }
+
+    code {
+      font-family: Consolas, "Courier New", monospace;
+      background: #eef5f8;
+      color: #0f506f;
+      border-radius: 5px;
+      padding: 2px 5px;
+    }
+
+    pre {
+      overflow-x: auto;
+      background: #0f2636;
+      color: #e9f7fd;
+      border-radius: 8px;
+      padding: 13px;
+      line-height: 1.55;
+    }
+
+    .callout {
+      border-left: 4px solid var(--brand);
+      background: var(--soft);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin: 12px 0;
+    }
+
+    .callout.success {
+      border-left-color: var(--accent);
+      background: var(--soft-green);
+    }
+
+    .callout.warn {
+      border-left-color: var(--warn);
+      background: var(--soft-warn);
+    }
+
+    .callout.danger {
+      border-left-color: var(--danger);
+      background: #fff0f3;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfdff;
+      padding: 12px;
+    }
+
+    .checklist li {
+      list-style: none;
+      position: relative;
+      padding-left: 1.4rem;
+    }
+
+    .checklist li::before {
+      content: "□";
+      position: absolute;
+      left: 0;
+      color: var(--brand);
+      font-weight: 800;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    footer {
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      text-align: center;
+    }
+
+    @media (max-width: 900px) {
+      .layout,
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+
+      nav {
+        position: static;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <p class="eyebrow">TanChin-Time-Clock-SQLite3</p>
+      <h1>第一次使用系統完整說明書</h1>
+      <p class="subtitle">
+        本文件依照目前系統程式碼、資料表、網頁工作台與既有文件整理，使用最高權限維運視角撰寫。
+        目標是讓第一次接手系統的人，能從開機、登入、授權、建置基礎資料、備份還原，到日常稽核與 ERP 匯出，都有一套清楚可操作的流程。
+      </p>
+      <div class="meta-row">
+        <span class="pill">文件日期：2026-05-21</span>
+        <span class="pill">適用版本：v1.6.4</span>
+        <span class="pill">最高權限視角：系統管理者 + 開發人員</span>
+        <span class="pill">入口：<code>http://127.0.0.1:3000/browser/</code></span>
+      </div>
+    </header>
+
+    <div class="layout">
+      <nav>
+        <strong>目錄</strong>
+        <a href="#status">文件狀態</a>
+        <a href="#principle">最高權限原則</a>
+        <a href="#roles">角色與預設帳密</a>
+        <a href="#first-run">第一次開通順序</a>
+        <a href="#account-access">帳號權限管理</a>
+        <a href="#admin-setup">管理者基礎設定</a>
+        <a href="#attendance">考勤與請假</a>
+        <a href="#developer">開發者維運</a>
+        <a href="#backup">備份與還原</a>
+        <a href="#automation">自動化任務</a>
+        <a href="#api-erp">API 與 ERP 匯出</a>
+        <a href="#verification">首次驗收清單</a>
+        <a href="#evidence">系統證據</a>
+      </nav>
+
+      <main>
+        <section id="status">
+          <h2>1. 文件狀態</h2>
+          <div class="callout success">
+            <strong>檢查結果：</strong>目前專案內沒有找到一份完整的「第一次使用系統」HTML 說明書。
+            既有文件只有 <code>docs/快速部署還原說明.md</code> 與 <code>docs/更新紀錄.md</code>，
+            所以本文件是依照現有系統證據新建立的第一次使用完整手冊。
+          </div>
+          <p>本文件不是單純功能介紹，而是依照實務開通順序撰寫。第一次使用時，請照章節順序執行，避免先建立大量資料後才發現帳號、權限或備份策略沒有設定好。</p>
+        </section>
+
+        <section id="principle">
+          <h2>2. 最高權限原則</h2>
+          <p>本系統的最高權限不是單一帳號包辦全部工作，而是分成兩個核心權責：</p>
+          <div class="grid-2">
+            <div class="card">
+              <h3>系統管理者</h3>
+              <p>獨立於員工資料之外，主要管理「誰可以用哪些角色登入」以及「管理者可操作哪些功能」。這是帳號與權限的最高入口。</p>
+            </div>
+            <div class="card">
+              <h3>開發人員</h3>
+              <p>綁定員工帳號，負責系統密碼、自動化任務、操作稽核、完整資料庫備份還原、主功能頁籤排序、系統狀態與 API 目錄檢查。</p>
+            </div>
+          </div>
+          <div class="callout warn">
+            第一次使用時請先登入系統管理者，建立可信任的開發人員與完整管理者帳號，再由開發人員設定備份、自動化與系統密碼。不要把日常員工帳號直接當成最高權限共用帳號。
+          </div>
+        </section>
+
+        <section id="roles">
+          <h2>3. 角色與預設帳密</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>角色</th>
+                <th>登入方式</th>
+                <th>預設資訊</th>
+                <th>第一次使用後必做</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>系統管理者</td>
+                <td>登入入口選「系統管理者」，使用獨立帳號與密碼。</td>
+                <td><code>system-admin</code> / <code>TC-SYS-0000</code></td>
+                <td>立即修改系統管理者帳號或密碼，並記錄在公司內部安全保存位置。</td>
+              </tr>
+              <tr>
+                <td>開發人員</td>
+                <td>使用員工工號 + 系統密碼，且該員工必須被授權開發人員角色。</td>
+                <td>系統密碼預設 <code>0000</code></td>
+                <td>授權可信任員工為開發人員，登入後到系統設定修改系統密碼。</td>
+              </tr>
+              <tr>
+                <td>管理者</td>
+                <td>使用員工工號 + 管理者密碼，且該員工必須被授權管理者角色。</td>
+                <td>管理者密碼預設 <code>TC5128</code></td>
+                <td>指定完整管理者或分權管理者，並在安全設定中修改管理者密碼。</td>
+              </tr>
+              <tr>
+                <td>員工</td>
+                <td>使用員工編號 + 卡號登入。</td>
+                <td>卡號來自員工資料欄位。</td>
+                <td>確認員工工號、姓名、部門、職稱、卡號、密碼與個人資料正確。</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="callout danger">
+            預設密碼只適合第一次開通。正式使用前，至少要完成三個密碼更換：系統管理者密碼、系統密碼、管理者密碼。
+          </div>
+        </section>
+
+        <section id="first-run">
+          <h2>4. 第一次開通順序</h2>
+          <ol>
+            <li>啟動桌面系統或開發環境，確認 Express 服務正常運行在 <code>3000</code> 連接埠。</li>
+            <li>開啟網頁版入口：<code>http://127.0.0.1:3000/browser/</code>。</li>
+            <li>使用系統管理者預設帳號登入，先修改系統管理者帳號或密碼。</li>
+            <li>確認員工資料是否已存在。若沒有員工資料，先建立或匯入最基本的員工名冊。</li>
+            <li>在帳號權限管理中，指定至少一位完整管理者與一位開發人員。</li>
+            <li>使用開發人員登入，修改系統密碼，設定完整資料庫備份資料夾與保留份數。</li>
+            <li>使用管理者登入，修改管理者密碼，建立員工、班別、遠端打卡安全、請假與報表設定。</li>
+            <li>建立一筆測試員工登入與打卡紀錄，確認裝置綁定與 GPS 權限是否符合公司政策。</li>
+            <li>建立一次完整資料庫備份，確認備份檔與 manifest 可成功產生。</li>
+            <li>匯出一份考勤報表，確認欄位順序、請假紀錄與 ERP 預期格式相容。</li>
+          </ol>
+        </section>
+
+        <section id="account-access">
+          <h2>5. 帳號權限管理</h2>
+          <p>帳號權限可以由「系統管理者」或「開發人員」管理。系統管理者是最適合第一次開通時使用的入口，因為它不依賴任何員工帳號。</p>
+          <h3>可授權角色</h3>
+          <ul>
+            <li>員工：所有員工帳號預設都保留員工登入權限。</li>
+            <li>管理者：授權後可使用管理者密碼登入，但可用功能仍受管理者權限模板或自訂權限限制。</li>
+            <li>開發人員：授權後可使用系統密碼登入開發者工作台。</li>
+          </ul>
+          <h3>管理者權限模板</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>模板</th>
+                <th>用途</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>無管理者權限</td>
+                <td>員工只能使用員工工作台，不進入管理者功能。</td>
+              </tr>
+              <tr>
+                <td>完整管理者</td>
+                <td>可使用全部管理者功能，適合公司主要負責人或系統營運主管。</td>
+              </tr>
+              <tr>
+                <td>人資管理者</td>
+                <td>偏向人員資料、請假與報表查詢。</td>
+              </tr>
+              <tr>
+                <td>考勤管理者</td>
+                <td>偏向班別、手動補登、考勤報表與匯出。</td>
+              </tr>
+              <tr>
+                <td>報表檢視者</td>
+                <td>只查看報表，不做高風險異動。</td>
+              </tr>
+              <tr>
+                <td>系統外觀管理者</td>
+                <td>管理主畫面、問候語、響鈴、主題與視覺相關設定。</td>
+              </tr>
+              <tr>
+                <td>自訂權限</td>
+                <td>逐項勾選管理者功能，適合精細分工。</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="callout warn">
+            請至少保留一個系統管理者帳號、一個完整管理者帳號與一個開發人員帳號。不要刪除或取消最後一個可管理權限的入口。
+          </div>
+        </section>
+
+        <section id="admin-setup">
+          <h2>6. 管理者基礎設定</h2>
+          <p>完整管理者登入後，建議依序設定下列內容。管理者工作台的主功能頁籤包含人員資料、安全設定、班別設定、手動補登、考勤報表、請假管理、系統設定、響鈴設定與主題特效。</p>
+          <h3>人員資料</h3>
+          <ul>
+            <li>基本欄位包含工號、姓名、性別、部門、職稱、卡號、密碼、國籍、身分證字號、生日、到職日、離職日與備註。</li>
+            <li>延伸欄位包含銀行帳號、手機、緊急聯絡人、聯絡電話、戶籍地址、通訊地址與家庭狀態。</li>
+            <li>匯入前先整理 CSV 欄位，避免卡號重複或工號空白。</li>
+          </ul>
+          <h3>安全設定</h3>
+          <ul>
+            <li>裝置綁定預設啟用。員工第一次用網頁版登入與打卡時，系統會記錄裝置資訊。</li>
+            <li>遠端打卡可要求 GPS，預設最大 GPS 誤差為 300 公尺。</li>
+            <li>員工更換手機或瀏覽器時，管理者可解除舊裝置綁定。</li>
+          </ul>
+          <h3>班別與補登</h3>
+          <ul>
+            <li>先建立公司實際使用的班別名稱、上班時間與下班時間。</li>
+            <li>手動補登屬於高風險操作，應只開給考勤或完整管理者，並保留稽核紀錄。</li>
+          </ul>
+          <h3>系統顯示、響鈴與主題</h3>
+          <ul>
+            <li>系統設定可調整主標題、副標與登入頁說明文字。</li>
+            <li>響鈴設定可管理排程、自訂聲音與響鈴歷史。</li>
+            <li>主題特效可管理節日特效、主題排程與自訂主題圖片。</li>
+          </ul>
+        </section>
+
+        <section id="attendance">
+          <h2>7. 考勤與請假設定</h2>
+          <h3>打卡來源</h3>
+          <p>系統會保存桌面端、密碼、手動補登、API、瀏覽器與請假等來源。這些來源會影響稽核與報表判讀。</p>
+          <h3>請假流程</h3>
+          <ul>
+            <li>請假類型支援小時或天數單位，可設定是否需附件、是否扣假、是否給薪與啟用狀態。</li>
+            <li>請假路徑以部門對應主管，主管以員工身份登入審核，管理者再進行終審。</li>
+            <li>請假可支援半小時、半天、一天與跨時段情境，系統會保存開始、結束與時數。</li>
+          </ul>
+          <h3>考勤報表與 ERP</h3>
+          <p>考勤匯出模板包含薪資系統、異常稽核、報表分析、薪資含請假明細、完整格式與自訂格式。若要讓薪資與請假資料搭配得好，建議使用「薪資含請假明細」或自訂格式，並保留以下欄位：</p>
+          <ul>
+            <li>工號、姓名、部門、職稱、日期、時間、班別、打卡類型、考勤狀態、來源。</li>
+            <li>紀錄種類、假別、請假開始、請假結束、請假時數、請假單號。</li>
+          </ul>
+          <div class="callout success">
+            系統已設計讓核准請假也能成為考勤報表中的可查核紀錄，避免當天沒有打卡就完全沒有紀錄，方便後續 ERP 或薪資系統提取。
+          </div>
+        </section>
+
+        <section id="developer">
+          <h2>8. 開發者維運工作台</h2>
+          <p>開發者工作台是系統維運的核心。第一次使用時，請不要只做帳號授權，也要完成以下維運設定。</p>
+          <h3>系統設定</h3>
+          <ul>
+            <li>變更系統密碼。開發人員登入、管理者密碼變更與身份切換都會使用系統密碼做高風險驗證。</li>
+            <li>視需要啟用開發人員身份切換，用來測試管理者或員工流程。一般員工與管理者登入頁不接受系統密碼作為萬用密碼。</li>
+            <li>設定主功能頁籤排序。開發人員可以在開發者工作台調整管理者與開發者工作台的主功能頁籤全域排序，並可還原預設。</li>
+            <li>管理帳號權限。開發人員可和系統管理者一樣調整員工可登入角色與管理者功能權限。</li>
+          </ul>
+          <h3>稽核與系統狀態</h3>
+          <ul>
+            <li>操作稽核紀錄可查登入、權限、打卡失敗、備份還原、密碼變更等重要事件。</li>
+            <li>稽核封存可設定保留天數，預設保留 180 天。</li>
+            <li>系統狀態會顯示服務狀態、連接埠、版本、資料庫位置、資料量、備份狀態、API 數量與自動化狀態。</li>
+          </ul>
+        </section>
+
+        <section id="backup">
+          <h2>9. 完整資料庫備份與還原</h2>
+          <p>完整資料庫備份是第一次使用後一定要設定的保護機制。備份會產生 SQLite 資料庫檔與 manifest，manifest 會記錄檔案大小與 SHA256，方便日後查核。</p>
+          <h3>第一次備份設定</h3>
+          <ol>
+            <li>使用開發人員登入。</li>
+            <li>進入「匯出設定」的「完整資料庫備份與還原」。</li>
+            <li>設定完整資料庫備份資料夾。若未設定，系統會使用預設備份資料夾。</li>
+            <li>設定保留份數，預設為 30 份。</li>
+            <li>按下立即完整備份，確認最近完整備份清單出現新檔案。</li>
+          </ol>
+          <h3>還原規則</h3>
+          <ul>
+            <li>還原前系統會先建立還原前緊急備份。</li>
+            <li>來源檔需通過 SQLite 檢查與必要資料表檢查。</li>
+            <li>執行還原前必須輸入確認文字：<code>還原資料庫</code>。</li>
+            <li>還原會覆蓋目前使用中的資料庫，正式環境請先取得主管或系統負責人確認。</li>
+          </ul>
+          <h3>專案核心備份</h3>
+          <p>除了網頁內的資料庫備份，專案也提供核心資產備份腳本，可打包原始碼、文件、使用者資料庫與自訂素材。</p>
+          <pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\backup-core-assets.ps1"</code></pre>
+        </section>
+
+        <section id="automation">
+          <h2>10. 自動化任務</h2>
+          <p>自動化任務目前可處理匯出、刪除與完整資料庫備份。第一次設定時建議先做「完整資料庫備份」排程，再設定報表匯出。</p>
+          <table>
+            <thead>
+              <tr>
+                <th>任務類型</th>
+                <th>可用目標</th>
+                <th>建議用途</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>匯出</td>
+                <td>上週打卡紀錄、上月打卡紀錄、手動補登紀錄、全部打卡紀錄、全部員工資料、全部響鈴紀錄、系統日誌。</td>
+                <td>固定產生考勤、員工或系統資料，交給 ERP 或內部稽核使用。</td>
+              </tr>
+              <tr>
+                <td>刪除</td>
+                <td>依系統允許的清理目標執行。</td>
+                <td>清理特定歷史資料。正式使用前要先確認保留政策。</td>
+              </tr>
+              <tr>
+                <td>完整資料庫備份</td>
+                <td>任務目標欄位會隱藏，由系統固定使用完整資料庫備份目標。</td>
+                <td>每日或每週建立完整資料庫備份，是最重要的自動化保護任務。</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="callout success">
+            設計上「完整資料庫備份」不應出現在匯出或刪除的任務目標裡；只有任務類型選完整資料庫備份時，系統才會在後端固定使用備份目標。
+          </div>
+        </section>
+
+        <section id="api-erp">
+          <h2>11. API 與 ERP 匯出</h2>
+          <h3>API</h3>
+          <p>系統提供外部 API，可查詢員工、打卡紀錄、指定區間紀錄、指定員工紀錄，也可建立 API 打卡。這些 API 需要 API Key 保護。</p>
+          <h3>ERP 匯出建議</h3>
+          <ul>
+            <li>若 ERP 只吃每日考勤，請固定日期、工號、姓名、班別、打卡類型、狀態與來源欄位。</li>
+            <li>若 ERP 要算薪資與請假，請使用包含請假明細的模板，保留假別、請假起訖、請假時數與請假單號。</li>
+            <li>匯出前先用一小段日期測試，再讓 ERP 自動提取正式檔案。</li>
+            <li>自訂欄位順序後不要頻繁變更，避免 ERP 解析規則失效。</li>
+          </ul>
+        </section>
+
+        <section id="verification">
+          <h2>12. 首次驗收清單</h2>
+          <ul class="checklist">
+            <li>已可開啟 <code>http://127.0.0.1:3000/browser/</code>。</li>
+            <li>系統管理者已登入並修改預設密碼。</li>
+            <li>至少一位員工被授權為完整管理者。</li>
+            <li>至少一位員工被授權為開發人員。</li>
+            <li>管理者密碼與系統密碼均已修改。</li>
+            <li>員工名冊已建立或匯入，卡號與工號沒有重複或空白。</li>
+            <li>班別、遠端打卡 GPS 與裝置綁定政策已確認。</li>
+            <li>請假假別與部門主管審核路徑已建立。</li>
+            <li>員工可登入並完成一筆測試打卡。</li>
+            <li>管理者可查詢考勤報表並匯出 CSV。</li>
+            <li>請假核准後可在考勤匯出中看到請假紀錄。</li>
+            <li>完整資料庫備份可手動建立，且最近備份清單有紀錄。</li>
+            <li>自動化完整資料庫備份排程已建立。</li>
+            <li>操作稽核與自動化日誌可正常查看。</li>
+            <li>已將首次設定後的備份檔複製到非本機單一磁碟的位置。</li>
+          </ul>
+        </section>
+
+        <section id="evidence">
+          <h2>13. 系統證據來源</h2>
+          <p>本文件依照下列本機專案證據撰寫：</p>
+          <table>
+            <thead>
+              <tr>
+                <th>檔案</th>
+                <th>證據內容</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>server.js</code></td>
+                <td>預設系統管理者帳密、管理者密碼、系統密碼、四種登入角色、權限檢查、系統管理者帳號更新、開發者備份還原 API、API 目錄。</td>
+              </tr>
+              <tr>
+                <td><code>database.js</code></td>
+                <td>員工、打卡、帳號權限、主頁籤排序、自動化任務、請假假別、請假審核路徑、請假單與稽核資料表。</td>
+              </tr>
+              <tr>
+                <td><code>browser-client/app.js</code></td>
+                <td>員工、管理者、開發者、系統管理者工作台畫面、側邊子導覽、帳號權限管理、自動化任務、資料庫備份還原、系統狀態與稽核功能。</td>
+              </tr>
+              <tr>
+                <td><code>attendance-export.js</code></td>
+                <td>考勤匯出欄位、ERP 相關模板、請假紀錄欄位、來源與狀態標籤。</td>
+              </tr>
+              <tr>
+                <td><code>docs/快速部署還原說明.md</code></td>
+                <td>專案核心備份 zip 結構、還原路徑、備份腳本與還原注意事項。</td>
+              </tr>
+              <tr>
+                <td><code>docs/更新紀錄.md</code></td>
+                <td>近期功能變更，包含系統管理者、帳號權限、請假、考勤匯出、主頁籤排序、完整資料庫備份與還原。</td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="small">文件建立位置：<code>docs/第一次使用系統完整說明書.html</code></p>
+        </section>
+      </main>
+    </div>
+
+    <footer>
+      TanChin-Time-Clock-SQLite3 第一次使用系統完整說明書 | 依本機系統證據整理 | 2026-05-21
+    </footer>
+  </div>
+</body>
+</html>
