@@ -4845,6 +4845,7 @@ renderAdminPeopleSection = function renderAdminPeopleSectionTabsOverride(dataset
                                 </div>
                                 <div class="inline-actions">
                                     <button class="secondary-btn" type="button" data-action="start-card-capture">讀取卡片</button>
+                                    <button class="outline-btn" type="button" data-action="capture-card-from-audit">帶入最近刷卡失敗</button>
                                     <button class="outline-btn" type="button" data-action="clear-card-capture">清除讀卡結果</button>
                                 </div>
                             </div>
@@ -4932,6 +4933,9 @@ renderAdminPeopleSection = function renderAdminPeopleSectionTabsOverride(dataset
 
 let employeeCardCaptureTimer = null;
 let employeeCardCaptureAutoFinishTimer = null;
+let employeeCardCaptureAuditPollTimer = null;
+let employeeCardCaptureAuditPollStartedAt = 0;
+let employeeCardCaptureAuditPollInFlight = false;
 
 function clearEmployeeCardCaptureAutoFinishTimer() {
     if (!employeeCardCaptureAutoFinishTimer) return;
@@ -4939,8 +4943,16 @@ function clearEmployeeCardCaptureAutoFinishTimer() {
     employeeCardCaptureAutoFinishTimer = null;
 }
 
+function clearEmployeeCardCaptureAuditPollTimer() {
+    if (!employeeCardCaptureAuditPollTimer) return;
+    clearInterval(employeeCardCaptureAuditPollTimer);
+    employeeCardCaptureAuditPollTimer = null;
+    employeeCardCaptureAuditPollInFlight = false;
+}
+
 function clearEmployeeCardCaptureTimer() {
     clearEmployeeCardCaptureAutoFinishTimer();
+    clearEmployeeCardCaptureAuditPollTimer();
     if (!employeeCardCaptureTimer) return;
     clearTimeout(employeeCardCaptureTimer);
     employeeCardCaptureTimer = null;
@@ -5008,6 +5020,7 @@ function clearEmployeeCardCaptureResult() {
         input.readOnly = true;
         input.dataset.active = "";
         input.dataset.timedOut = "";
+        input.dataset.startedAt = "";
     }
     if (result) {
         result.classList.add("hidden");
@@ -5016,7 +5029,7 @@ function clearEmployeeCardCaptureResult() {
     setEmployeeCardCaptureMessage("尚未讀取卡片。");
 }
 
-function startEmployeeCardCapture() {
+function startEmployeeCardCapture(options = {}) {
     const { input, result } = getEmployeeCardCaptureNodes();
     if (!input) return;
     clearEmployeeCardCaptureTimer();
@@ -5024,12 +5037,15 @@ function startEmployeeCardCapture() {
     input.readOnly = false;
     input.dataset.active = "true";
     input.dataset.timedOut = "";
+    const auditLookbackMs = Math.max(0, Number(options.auditLookbackMs) || 0);
+    employeeCardCaptureAuditPollStartedAt = Date.now() - auditLookbackMs;
+    input.dataset.startedAt = String(employeeCardCaptureAuditPollStartedAt);
     input.value = "";
     if (result) {
         result.classList.add("hidden");
         result.innerHTML = "";
     }
-    setEmployeeCardCaptureMessage("正在等待讀卡，請感應卡片。若讀卡器以 Tab 結尾，系統也會自動接收。", "info");
+    setEmployeeCardCaptureMessage("正在等待讀卡，請感應卡片。若卡號被打卡入口先讀到，系統會嘗試從最新打卡失敗紀錄帶入。", "info");
     employeeCardCaptureTimer = setTimeout(() => {
         const { input: activeInput } = getEmployeeCardCaptureNodes();
         if (activeInput?.dataset.active === "true" && !String(activeInput.value || "").trim()) {
@@ -5045,12 +5061,57 @@ function startEmployeeCardCapture() {
     }, 15000);
     input.focus({ preventScroll: true });
     input.select();
+    startEmployeeCardCaptureAuditPolling();
     setTimeout(() => {
         if (document.activeElement !== input) input.focus({ preventScroll: true });
     }, 0);
 }
 
-async function finishEmployeeCardCapture(rawValue) {
+async function pullLatestEmployeeCardCaptureFromAudit({ manual = false } = {}) {
+    const { input } = getEmployeeCardCaptureNodes();
+    if (!input || employeeCardCaptureAuditPollInFlight) return false;
+    const since = Number(input.dataset.startedAt || employeeCardCaptureAuditPollStartedAt || 0) || Date.now() - 15000;
+    employeeCardCaptureAuditPollInFlight = true;
+
+    try {
+        const result = await requestJson("/api/browser/admin/card-reader-capture/latest", {
+            method: "POST",
+            auth: true,
+            body: { since }
+        });
+        const cardNumber = String(result.data?.cardNumber || "").trim();
+        if (result.data?.found && cardNumber) {
+            input.readOnly = false;
+            input.value = cardNumber;
+            await finishEmployeeCardCapture(cardNumber, { source: "audit" });
+            return true;
+        }
+        if (manual) {
+            setEmployeeCardCaptureMessage("目前還沒有找到這次讀卡後的打卡失敗紀錄，請再感應一次卡片。", "error");
+        }
+        return false;
+    } catch (error) {
+        if (manual) setEmployeeCardCaptureMessage(error.message, "error");
+        return false;
+    } finally {
+        employeeCardCaptureAuditPollInFlight = false;
+    }
+}
+
+function startEmployeeCardCaptureAuditPolling() {
+    clearEmployeeCardCaptureAuditPollTimer();
+    employeeCardCaptureAuditPollTimer = setInterval(() => {
+        const { input } = getEmployeeCardCaptureNodes();
+        if (input?.dataset.active !== "true") {
+            clearEmployeeCardCaptureAuditPollTimer();
+            return;
+        }
+        if (String(input.value || "").trim()) return;
+        void pullLatestEmployeeCardCaptureFromAudit();
+    }, 800);
+}
+
+async function finishEmployeeCardCapture(rawValue, options = {}) {
     clearEmployeeCardCaptureTimer();
     const { form, input, result } = getEmployeeCardCaptureNodes();
     const cardNumber = String(rawValue || "").trim();
@@ -5093,24 +5154,33 @@ async function finishEmployeeCardCapture(rawValue) {
     input.readOnly = true;
     input.dataset.active = "";
     input.dataset.timedOut = "";
+    input.dataset.startedAt = "";
     if (duplicateEmployee) {
         await writeEmployeeCardCaptureDiagnostic({
             success: true,
             code: "R003",
-            reason: "讀卡成功，但卡號已被其他員工使用。",
+            reason: options.source === "audit"
+                ? "從打卡失敗稽核帶入卡號，但卡號已被其他員工使用。"
+                : "讀卡成功，但卡號已被其他員工使用。",
             cardNumber,
             duplicateEmployee
         });
-        setEmployeeCardCaptureMessage(`已讀取卡片，但這張卡已被 ${duplicateEmployee.id} ${duplicateEmployee.name} 使用，請勿直接儲存。`, "error");
+        setEmployeeCardCaptureMessage(`已${options.source === "audit" ? "從打卡失敗紀錄帶入" : "讀取"}卡片，但這張卡已被 ${duplicateEmployee.id} ${duplicateEmployee.name} 使用，請勿直接儲存。`, "error");
         setFormMessage("employee-form", `卡號重複：${duplicateEmployee.id} ${duplicateEmployee.name}`, "error");
     } else {
         await writeEmployeeCardCaptureDiagnostic({
             success: true,
-            reason: "讀卡測試成功。",
+            reason: options.source === "audit"
+                ? "從打卡失敗稽核帶入卡號，讀卡測試成功。"
+                : "讀卡測試成功。",
             cardNumber
         });
-        setEmployeeCardCaptureMessage("已讀取並填入卡號欄位，請確認其它員工資料後儲存。", "success");
-        setFormMessage("employee-form", "卡號已由讀卡器填入，請確認後儲存員工資料。", "success");
+        setEmployeeCardCaptureMessage(options.source === "audit"
+            ? "已從最新打卡失敗紀錄帶入卡號欄位，請確認其它員工資料後儲存。"
+            : "已讀取並填入卡號欄位，請確認其它員工資料後儲存。", "success");
+        setFormMessage("employee-form", options.source === "audit"
+            ? "卡號已由最新打卡失敗紀錄帶入，請確認後儲存員工資料。"
+            : "卡號已由讀卡器填入，請確認後儲存員工資料。", "success");
     }
     cardField?.focus();
 }
@@ -7638,6 +7708,12 @@ handleDashboardClick = async function handleDashboardClickCardCaptureOverride(ev
     const action = actionTarget.dataset.action;
     if (action === "start-card-capture") {
         startEmployeeCardCapture();
+        return;
+    }
+    if (action === "capture-card-from-audit") {
+        const { input } = getEmployeeCardCaptureNodes();
+        if (input?.dataset.active !== "true") startEmployeeCardCapture({ auditLookbackMs: 30000 });
+        await pullLatestEmployeeCardCaptureFromAudit({ manual: true });
         return;
     }
     if (action === "clear-card-capture") {

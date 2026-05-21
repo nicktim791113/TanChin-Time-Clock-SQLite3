@@ -217,6 +217,7 @@ const API_ROUTE_CATALOG = [
 
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/employees/save', auth: '管理者', description: '整批覆寫員工資料' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/employee/save', auth: '管理者', description: '新增或更新單一員工' },
+  { category: '管理者 API', method: 'POST', path: '/api/browser/admin/card-reader-capture/latest', auth: '管理者', description: '從最新打卡失敗稽核帶回讀到的卡號' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/card-reader-test-log', auth: '管理者', description: '寫入讀卡測試診斷紀錄' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/employee/delete', auth: '管理者', description: '刪除單一員工' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/shifts/save', auth: '管理者', description: '儲存班別設定' },
@@ -2198,6 +2199,32 @@ function writePunchFailureAuditLog({
   notifyDesktop('auditLogs', request?.browserSession ? getBrowserSyncMeta(request) : { origin: channel });
 }
 
+function findLatestPunchFailureCredentialSince(startTimestamp) {
+  const normalizedStart = Math.max(0, Number(startTimestamp) || 0);
+  const logs = dbModule.queryAuditLogs({
+    action: 'punch',
+    targetType: 'punch_record',
+    success: 'false',
+    limit: 200
+  });
+  const matchedLog = logs.find((log) => {
+    if (Number(log.timestamp) < normalizedStart) return false;
+    return Boolean(String(log.after_data?.credential_input || '').trim());
+  });
+
+  if (!matchedLog) return null;
+  const cardNumber = String(matchedLog.after_data?.credential_input || '').trim();
+  return {
+    auditLogId: matchedLog.id,
+    timestamp: matchedLog.timestamp,
+    timestampText: new Date(matchedLog.timestamp).toLocaleString('zh-TW', { hour12: false }),
+    channel: matchedLog.channel || '',
+    failureCode: matchedLog.after_data?.failure_code || '',
+    failureReason: matchedLog.after_data?.failure_reason || matchedLog.summary || '',
+    cardNumber
+  };
+}
+
 function buildEmployeeDeviceRecord(employeeId, deviceInfo, request, existingDevice = null, options = {}) {
   const now = Date.now();
   const location = options.location || null;
@@ -3810,6 +3837,21 @@ function attachBrowserRoutes(server) {
     });
     notifyDesktop('employees', getBrowserSyncMeta(request));
     response.json({ success: true, message: '員工資料已儲存。' });
+  });
+
+  server.post('/api/browser/admin/card-reader-capture/latest', requireBrowserSession, requireAdminPermission('admin.people.edit'), (request, response) => {
+    const requestedSince = Number(request.body?.since || 0);
+    const since = Number.isFinite(requestedSince) && requestedSince > 0
+      ? requestedSince
+      : Date.now() - 15000;
+    const latest = findLatestPunchFailureCredentialSince(since);
+
+    response.json({
+      success: true,
+      data: latest
+        ? { found: true, ...latest }
+        : { found: false }
+    });
   });
 
   server.post('/api/browser/admin/card-reader-test-log', requireBrowserSession, requireAdminPermission('admin.people.edit'), (request, response) => {
