@@ -562,11 +562,39 @@ const ui = {
     audioPlayer: document.getElementById("browser-audio-player")
 };
 
+const DASHBOARD_TOAST_EXACT_EXCLUSIONS = new Set([
+    "登入成功。",
+    "已恢復上次登入狀態。",
+    "資料已更新。",
+    "考勤報表查詢完成。",
+    "考勤報表條件已重設。"
+]);
+const DASHBOARD_TOAST_PREFIX_EXCLUSIONS = [
+    "登入成功，並已將目前裝置綁定",
+    "已同步",
+    "正在取得",
+    "正在送出"
+];
+const DASHBOARD_TOAST_ACTION_PATTERN = /(完成|成功|已|匯出|匯入|撤回|核准|駁回|更新|儲存|解除|清除|上傳|建立|還原|返回|切換|執行|送出|重複打卡)/;
+
+function shouldShowDashboardToast(text, type = "info") {
+    const normalizedText = String(text || "").trim();
+    if (!normalizedText) return false;
+    if (DASHBOARD_TOAST_EXACT_EXCLUSIONS.has(normalizedText)) return false;
+    if (DASHBOARD_TOAST_PREFIX_EXCLUSIONS.some((prefix) => normalizedText.startsWith(prefix))) return false;
+    if (normalizedText.includes("查詢完成") && !normalizedText.includes("匯出")) return false;
+    if (type === "error") return true;
+    return DASHBOARD_TOAST_ACTION_PATTERN.test(normalizedText);
+}
+
 function setMessage(target, text, type = "info") {
     target.textContent = text || "";
     target.title = text || "";
     if (target.id === "dashboard-message") {
         target.className = text ? `status-pill ${type}` : "status-pill hidden";
+        if (shouldShowDashboardToast(text, type)) {
+            showFeedbackToast(text, type);
+        }
         return;
     }
     target.className = text ? `inline-message ${type}` : "inline-message";
@@ -5832,9 +5860,20 @@ function ensureFeedbackToastHost() {
     return host;
 }
 
+const recentFeedbackToasts = new Map();
+
 function showFeedbackToast(message, type = "info") {
     const normalizedMessage = String(message || "").trim();
     if (!normalizedMessage) return;
+
+    const now = Date.now();
+    const toastKey = `${type}:${normalizedMessage}`;
+    const lastShownAt = recentFeedbackToasts.get(toastKey) || 0;
+    if (now - lastShownAt < 1200) return;
+    recentFeedbackToasts.set(toastKey, now);
+    recentFeedbackToasts.forEach((timestamp, key) => {
+        if (now - timestamp > 4000) recentFeedbackToasts.delete(key);
+    });
 
     const host = ensureFeedbackToastHost();
     const toast = document.createElement("div");
