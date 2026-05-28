@@ -8833,6 +8833,7 @@ renderAdminDashboard = function renderAdminDashboardLeaveOverride(dashboard) {
         { id: "manualPunch", label: "手動補登" },
         { id: "reports", label: "考勤報表" },
         { id: "leave", label: "請假管理" },
+        { id: "overtime", label: "加班管理" },
         { id: "system", label: "系統設定" },
         { id: "bells", label: "響鈴設定" },
         { id: "themes", label: "主題特效" }
@@ -9256,6 +9257,373 @@ handleRealtimeSyncMessage = async function handleRealtimeSyncMessageLeaveOverrid
     return originalHandleRealtimeSyncMessageWithLeave(payload);
 };
 
+const overtimeStatusBadgeTypes = {
+    pending_supervisor: "warning",
+    approved: "success",
+    rejected: "danger",
+    withdrawn: "",
+    cancelled: ""
+};
+
+function getOvertimeStatusBadge(request) {
+    return renderBadge(request.statusText || request.status || "-", overtimeStatusBadgeTypes[request.status] || "");
+}
+
+function renderOvertimeEmployeeOptions(employees = [], selectedId = "") {
+    return employees.map((employee) => `
+        <option value="${escapeHtml(employee.id)}" ${employee.id === selectedId ? "selected" : ""}>
+            ${escapeHtml(employee.id)} / ${escapeHtml(employee.name || "-")} / ${escapeHtml(employee.department || "-")}${employee.isSelf ? " / 本人" : ""}
+        </option>
+    `).join("");
+}
+
+function renderOvertimeRequestRows(requests = [], { showEmployee = false, showApplicant = false, reviewMode = "", allowWithdraw = true } = {}) {
+    if (!requests.length) return renderEmptyState("目前沒有加班申請資料。");
+    return `
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        ${showEmployee ? "<th>加班員工</th>" : ""}
+                        ${showApplicant ? "<th>申請人</th>" : ""}
+                        <th>開始</th>
+                        <th>結束</th>
+                        <th>時數</th>
+                        <th>狀態</th>
+                        <th>流程</th>
+                        <th>原因</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${requests.map((request) => `
+                        <tr>
+                            ${showEmployee ? `<td>${escapeHtml(`${request.employeeId || "-"} / ${request.employeeName || "-"}`)}</td>` : ""}
+                            ${showApplicant ? `<td>${escapeHtml(`${request.applicantId || "-"} / ${request.applicantName || "-"}`)}</td>` : ""}
+                            <td>${escapeHtml(request.startText || "-")}</td>
+                            <td>${escapeHtml(request.endText || "-")}</td>
+                            <td>${escapeHtml(request.duration_hours ?? "-")}</td>
+                            <td>${getOvertimeStatusBadge(request)}</td>
+                            <td>${escapeHtml(request.approvalModeText || "-")}</td>
+                            <td class="multiline-cell">${escapeHtml(request.reason || "-")}</td>
+                            <td class="actions ${reviewMode ? "has-review-comment" : ""}">
+                                <div class="${reviewMode ? "review-action-stack" : "table-actions"}">
+                                    ${reviewMode ? `
+                                        <input class="review-comment-input" type="text" placeholder="審核備註（選填）" data-overtime-review-comment>
+                                    ` : ""}
+                                    <div class="table-actions">
+                                        ${reviewMode === "supervisor" ? `
+                                            <button class="mini-btn" type="button" data-action="overtime-supervisor-decision" data-id="${escapeHtml(request.id)}" data-decision="approved">核准</button>
+                                            <button class="mini-btn" type="button" data-action="overtime-supervisor-decision" data-id="${escapeHtml(request.id)}" data-decision="rejected">駁回</button>
+                                        ` : ""}
+                                        ${!reviewMode && allowWithdraw && request.status === "pending_supervisor" ? `
+                                            <button class="mini-btn" type="button" data-action="overtime-withdraw" data-id="${escapeHtml(request.id)}">撤回</button>
+                                        ` : ""}
+                                        ${!reviewMode && (!allowWithdraw || request.status !== "pending_supervisor") ? "<span>-</span>" : ""}
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                    `).join("")}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
+function renderEmployeeOvertimeApplicationPanel(dashboard) {
+    const overtime = dashboard.overtime || {};
+    const employees = overtime.eligibleEmployees?.length
+        ? overtime.eligibleEmployees
+        : [{ ...(dashboard.user || {}), isSelf: true }];
+    const today = formatDateInputValue(new Date());
+    return `
+        <article class="workspace-card employee-workbench-panel" data-no-collapsible="true">
+            <div class="list-toolbar">
+                <div>
+                    <h3>加班申請</h3>
+                    <p class="helper-text">本人申請會送主管審核；主管替直屬員工申請會直接核准，主管替自己申請仍需上層主管審核。</p>
+                </div>
+                ${renderBadge(`可申請 ${employees.length} 人`, "success")}
+            </div>
+            <form id="employee-overtime-form" class="stack-form">
+                <div class="field-grid dense-form">
+                    <label class="field span-2">
+                        <span>加班員工</span>
+                        <select name="employeeId" required>${renderOvertimeEmployeeOptions(employees, dashboard.user?.id || "")}</select>
+                    </label>
+                    <label class="field">
+                        <span>開始日期</span>
+                        <input name="startDate" type="date" value="${today}" required>
+                    </label>
+                    <label class="field">
+                        <span>開始時間</span>
+                        <input name="startTime" type="time" value="18:00" required>
+                    </label>
+                    <label class="field">
+                        <span>結束日期</span>
+                        <input name="endDate" type="date" value="${today}" required>
+                    </label>
+                    <label class="field">
+                        <span>結束時間</span>
+                        <input name="endTime" type="time" value="20:00" required>
+                    </label>
+                    <label class="field">
+                        <span>加班時數</span>
+                        <input name="durationHours" type="number" min="0.5" step="0.5" placeholder="可留空由時間推算">
+                    </label>
+                    <label class="field span-2">
+                        <span>加班原因</span>
+                        <textarea name="reason" rows="3" placeholder="請簡述加班原因"></textarea>
+                    </label>
+                </div>
+                <div class="form-toolbar dense-toolbar">
+                    <button class="primary-btn" type="submit">送出加班申請</button>
+                    <p class="helper-text">核准後只會提供查核與報表比對，不會直接修改打卡或出勤時間。</p>
+                </div>
+                <div class="inline-message" data-form-message-for="employee-overtime-form" aria-live="polite"></div>
+            </form>
+        </article>
+    `;
+}
+
+function renderEmployeeOvertimeRecordsPanel(dashboard) {
+    const overtime = dashboard.overtime || {};
+    return `
+        <div class="workspace-stack employee-overtime-record-stack">
+            ${overtime.supervisorQueue?.length ? `
+                <article class="table-card employee-workbench-panel" data-no-collapsible="true">
+                    <div class="list-toolbar">
+                        <div>
+                            <h3>待我審核</h3>
+                            <p class="helper-text">這裡顯示需要你以主管身分審核的加班申請。</p>
+                        </div>
+                        ${renderBadge(`${overtime.supervisorQueue.length} 筆待審`, "warning")}
+                    </div>
+                    ${renderOvertimeRequestRows(overtime.supervisorQueue, { showEmployee: true, showApplicant: true, reviewMode: "supervisor" })}
+                </article>
+            ` : ""}
+            <article class="table-card employee-workbench-panel" data-no-collapsible="true">
+                <div class="list-toolbar">
+                    <div>
+                        <h3>我的加班紀錄</h3>
+                        <p class="helper-text">查看自己提出、替員工提出，或自己被申請的加班紀錄。</p>
+                    </div>
+                    ${renderBadge(`${overtime.myRequests?.length || 0} 筆`)}
+                </div>
+                ${renderOvertimeRequestRows(overtime.myRequests || [], { showEmployee: true, showApplicant: true })}
+            </article>
+        </div>
+    `;
+}
+
+const originalRenderEmployeeWorkspaceItemsWithOvertime = renderEmployeeWorkspaceItems;
+renderEmployeeWorkspaceItems = function renderEmployeeWorkspaceItemsOvertimeOverride(dashboard) {
+    const items = originalRenderEmployeeWorkspaceItemsWithOvertime(dashboard);
+    if (!dashboard?.overtime) return items;
+    const overtime = dashboard.overtime || {};
+    const overtimeItems = [
+        {
+            id: "overtime-request",
+            label: "加班申請",
+            meta: `${overtime.eligibleEmployees?.length || 1} 人可申請`,
+            html: renderEmployeeOvertimeApplicationPanel(dashboard)
+        },
+        {
+            id: "overtime-history",
+            label: "我的加班紀錄",
+            meta: `${overtime.myRequests?.length || 0} 筆`,
+            html: renderEmployeeOvertimeRecordsPanel(dashboard)
+        }
+    ];
+    const insertIndex = items.findIndex((item) => item.id === "leave-history");
+    if (insertIndex === -1) return [...items, ...overtimeItems];
+    return [
+        ...items.slice(0, insertIndex + 1),
+        ...overtimeItems,
+        ...items.slice(insertIndex + 1)
+    ];
+};
+
+function renderOvertimeAlertRows(alerts = []) {
+    if (!alerts.length) return renderEmptyState("目前沒有加班與出勤比對警示。");
+    return `
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>警示</th>
+                        <th>員工</th>
+                        <th>時間</th>
+                        <th>加班單</th>
+                        <th>說明</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${alerts.map((alert) => `
+                        <tr>
+                            <td>${renderBadge(alert.alertText || "-", alert.severity === "danger" ? "danger" : "warning")}</td>
+                            <td>${escapeHtml(`${alert.employeeId || "-"} / ${alert.employeeName || "-"}`)}<div class="record-subline">${escapeHtml(alert.department || "")}</div></td>
+                            <td>${escapeHtml(alert.startText || "-")}${alert.endText && alert.endText !== alert.startText ? `<div class="record-subline">${escapeHtml(alert.endText)}</div>` : ""}</td>
+                            <td>${escapeHtml(alert.requestId || "-")}</td>
+                            <td class="multiline-cell">${escapeHtml(alert.detail || "-")}</td>
+                        </tr>
+                    `).join("")}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
+function renderAdminOvertimeSection(datasets) {
+    const overtime = datasets.overtime || {};
+    const alerts = overtime.alerts || [];
+    const requests = overtime.requests || [];
+    return `
+        <div class="workspace-stack">
+            <article class="workspace-card">
+                <div class="list-toolbar">
+                    <div>
+                        <p class="sub-kicker">管理者工作台</p>
+                        <h3>加班管理</h3>
+                    </div>
+                    <div class="badge-row">
+                        ${renderBadge(`待主管審核 ${overtime.pendingSupervisor?.length || 0} 筆`, overtime.pendingSupervisor?.length ? "warning" : "success")}
+                        ${renderBadge(`查核警示 ${alerts.length} 筆`, alerts.length ? "warning" : "success")}
+                        ${renderBadge(`加班申請 ${requests.length} 筆`)}
+                    </div>
+                </div>
+                <p class="helper-text">加班申請與請假分開保存；查核只做比對與警示，不會直接改動出勤打卡時間。</p>
+            </article>
+
+            <article class="table-card">
+                <div class="list-toolbar">
+                    <div>
+                        <h3>加班出勤查核</h3>
+                        <p class="helper-text">列出已核准加班卻沒有出勤，以及疑似加班出勤但沒有核准申請的紀錄。</p>
+                    </div>
+                    <button class="outline-btn" type="button" data-action="export-overtime-alerts">匯出查核 CSV</button>
+                </div>
+                ${renderOvertimeAlertRows(alerts)}
+            </article>
+
+            <article class="table-card">
+                <div class="list-toolbar">
+                    <div>
+                        <h3>加班申請紀錄</h3>
+                        <p class="helper-text">顯示最近 300 筆加班申請、審核狀態與代申請流程。</p>
+                    </div>
+                    <button class="outline-btn" type="button" data-action="export-overtime-requests">匯出申請 CSV</button>
+                </div>
+                ${renderOvertimeRequestRows(requests, { showEmployee: true, showApplicant: true, allowWithdraw: false })}
+            </article>
+        </div>
+    `;
+}
+
+const originalHandleDashboardSubmitWithOvertime = handleDashboardSubmit;
+handleDashboardSubmit = async function handleDashboardSubmitOvertimeOverride(event) {
+    const form = event.target instanceof HTMLFormElement
+        ? event.target
+        : event.target?.closest?.("form");
+    const formId = form?.getAttribute("id") || "";
+    if (formId !== "employee-overtime-form") {
+        return originalHandleDashboardSubmitWithOvertime(event);
+    }
+
+    event.preventDefault();
+    setFormMessage(formId, "");
+    try {
+        const values = Object.fromEntries(new FormData(form).entries());
+        const result = await requestJson("/api/browser/employee/overtime/request", {
+            method: "POST",
+            auth: true,
+            body: {
+                employeeId: values.employeeId,
+                startDate: values.startDate,
+                startTime: values.startTime,
+                endDate: values.endDate,
+                endTime: values.endTime,
+                durationHours: values.durationHours,
+                reason: values.reason?.trim() || ""
+            }
+        });
+        renderDashboard(result.data.dashboard);
+        setMessage(ui.dashboardMessage, result.message || "加班申請已送出。", "success");
+    } catch (error) {
+        setMessage(ui.dashboardMessage, error.message, "error");
+        setFormMessage(formId, error.message, "error");
+    }
+};
+
+const originalHandleDashboardClickWithOvertime = handleDashboardClick;
+handleDashboardClick = async function handleDashboardClickOvertimeOverride(event) {
+    const actionTarget = event.target.closest("[data-action]");
+    const action = actionTarget?.dataset.action || "";
+    if (!["overtime-withdraw", "overtime-supervisor-decision", "export-overtime-alerts", "export-overtime-requests"].includes(action)) {
+        return originalHandleDashboardClickWithOvertime(event);
+    }
+
+    try {
+        if (action === "overtime-withdraw") {
+            if (!window.confirm("確定要撤回這張加班申請嗎？")) return;
+            const result = await requestJson("/api/browser/employee/overtime/withdraw", {
+                method: "POST",
+                auth: true,
+                body: { requestId: actionTarget.dataset.id }
+            });
+            renderDashboard(result.data.dashboard);
+            setMessage(ui.dashboardMessage, result.message || "加班申請已撤回。", "success");
+            return;
+        }
+
+        if (action === "overtime-supervisor-decision") {
+            const decision = actionTarget.dataset.decision === "approved" ? "approved" : "rejected";
+            const comment = actionTarget.closest(".review-action-stack")?.querySelector("[data-overtime-review-comment]")?.value?.trim() || "";
+            const result = await requestJson("/api/browser/employee/overtime/supervisor-decision", {
+                method: "POST",
+                auth: true,
+                body: {
+                    requestId: actionTarget.dataset.id,
+                    decision,
+                    comment
+                }
+            });
+            renderDashboard(result.data.dashboard);
+            setMessage(ui.dashboardMessage, result.message || "加班審核完成。", "success");
+            return;
+        }
+
+        const reportType = action === "export-overtime-requests" ? "requests" : "alerts";
+        const result = await requestJson("/api/browser/admin/overtime/export", {
+            method: "POST",
+            auth: true,
+            body: { reportType }
+        });
+        downloadTextFile(result.data.fileName, result.data.csvContent);
+        setMessage(ui.dashboardMessage, result.message || "加班報表已匯出為 CSV。", "success");
+    } catch (error) {
+        setMessage(ui.dashboardMessage, error.message, "error");
+    }
+};
+
+const originalGetRealtimeSyncLabelWithOvertime = getRealtimeSyncLabel;
+getRealtimeSyncLabel = function getRealtimeSyncLabelOvertimeOverride(type) {
+    if (type === "overtimeRequests") return "加班申請";
+    return originalGetRealtimeSyncLabelWithOvertime(type);
+};
+
+const originalHandleRealtimeSyncMessageWithOvertime = handleRealtimeSyncMessage;
+handleRealtimeSyncMessage = async function handleRealtimeSyncMessageOvertimeOverride(payload) {
+    const type = payload?.type;
+    const role = state.dashboard?.role;
+    if (type === "overtimeRequests" && ["employee", "admin"].includes(role)) {
+        await reloadDashboard(`已同步${getRealtimeSyncLabel(type)}最新內容。`, "info");
+        return;
+    }
+    return originalHandleRealtimeSyncMessageWithOvertime(payload);
+};
+
 function getAdminPermissionSet(dashboard = state.dashboard) {
     return new Set(dashboard?.permissions?.admin || []);
 }
@@ -9289,6 +9657,7 @@ function renderAdminPermissionAwareContent(sectionId, datasets) {
     if (sectionId === "manualPunch") return renderAdminManualPunchSection(datasets);
     if (sectionId === "reports") return renderAdminReportSection(datasets);
     if (sectionId === "leave") return renderAdminLeaveSection(datasets);
+    if (sectionId === "overtime") return renderAdminOvertimeSection(datasets);
     if (sectionId === "system") return renderAdminSystemSection(datasets);
     if (sectionId === "bells") return renderAdminBellSection(datasets);
     if (sectionId === "themes") return renderAdminThemeSection(datasets);
@@ -10364,6 +10733,7 @@ const workspaceSubnavBaseRenderers = {
         manualPunch: renderAdminManualPunchSection,
         reports: renderAdminReportSection,
         leave: renderAdminLeaveSection,
+        overtime: renderAdminOvertimeSection,
         system: renderAdminSystemSection,
         bells: renderAdminBellSection,
         themes: renderAdminThemeSection
@@ -10472,6 +10842,28 @@ const workspaceSubnavConfigs = {
                     items: [
                         { id: "types", label: "假別設定", panelIndex: 3 },
                         { id: "routes", label: "主管審核路徑", panelIndex: 4 }
+                    ]
+                }
+            ]
+        },
+        overtime: {
+            introIndexes: [0],
+            groups: [
+                {
+                    label: "加班查核",
+                    items: [
+                        {
+                            id: "alerts",
+                            label: "出勤查核警示",
+                            panelIndex: 1,
+                            badge: (datasets) => String(datasets.overtime?.alerts?.length || 0)
+                        },
+                        {
+                            id: "records",
+                            label: "加班申請紀錄",
+                            panelIndex: 2,
+                            badge: (datasets) => String(datasets.overtime?.requests?.length || 0)
+                        }
                     ]
                 }
             ]
@@ -10794,6 +11186,8 @@ Object.entries(workspaceSubnavConfigs.admin).forEach(([sectionId, config]) => {
         renderAdminReportSection = (datasets) => renderWorkspaceSubnavSection("admin", sectionId, datasets, config, baseRenderer);
     } else if (sectionId === "leave") {
         renderAdminLeaveSection = (datasets) => renderWorkspaceSubnavSection("admin", sectionId, datasets, config, baseRenderer);
+    } else if (sectionId === "overtime") {
+        renderAdminOvertimeSection = (datasets) => renderWorkspaceSubnavSection("admin", sectionId, datasets, config, baseRenderer);
     } else if (sectionId === "system") {
         renderAdminSystemSection = (datasets) => renderWorkspaceSubnavSection("admin", sectionId, datasets, config, baseRenderer);
     } else if (sectionId === "bells") {

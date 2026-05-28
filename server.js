@@ -46,6 +46,7 @@ const ADMIN_PERMISSION_DEFINITIONS = [
   { code: 'admin.reports.export', category: '考勤報表', label: '匯出考勤報表', section: 'reports', highRisk: true },
   { code: 'admin.leave.review', category: '請假管理', label: '請假終審', section: 'leave' },
   { code: 'admin.leave.settings', category: '請假管理', label: '假別與審核路徑設定', section: 'leave' },
+  { code: 'admin.overtime.view', category: '加班管理', label: '查看加班申請、警示與匯出', section: 'overtime' },
   { code: 'admin.system.manage', category: '系統外觀與提醒', label: '主畫面與問候語設定', section: 'system' },
   { code: 'admin.bells.manage', category: '系統外觀與提醒', label: '響鈴與聲音設定', section: 'bells' },
   { code: 'admin.themes.manage', category: '系統外觀與提醒', label: '主題與特效設定', section: 'themes' }
@@ -58,6 +59,7 @@ const ADMIN_SECTION_RULES = [
   { id: 'manualPunch', label: '手動補登', permissions: ['admin.manualPunch.create'] },
   { id: 'reports', label: '考勤報表', permissions: ['admin.reports.view', 'admin.reports.export'] },
   { id: 'leave', label: '請假管理', permissions: ['admin.leave.review', 'admin.leave.settings'] },
+  { id: 'overtime', label: '加班管理', permissions: ['admin.overtime.view'] },
   { id: 'system', label: '系統設定', permissions: ['admin.system.manage'] },
   { id: 'bells', label: '響鈴設定', permissions: ['admin.bells.manage'] },
   { id: 'themes', label: '主題特效', permissions: ['admin.themes.manage'] }
@@ -97,12 +99,13 @@ const ADMIN_PERMISSION_PRESETS = [
   {
     id: 'hr_admin',
     label: '人事管理者',
-    description: '管理人員資料、請假與報表查詢。',
+    description: '管理人員資料、請假、加班與報表查詢。',
     permissions: [
       'admin.people.view',
       'admin.people.edit',
       'admin.leave.review',
       'admin.leave.settings',
+      'admin.overtime.view',
       'admin.reports.view'
     ]
   },
@@ -113,6 +116,7 @@ const ADMIN_PERMISSION_PRESETS = [
     permissions: [
       'admin.shifts.manage',
       'admin.manualPunch.create',
+      'admin.overtime.view',
       'admin.reports.view',
       'admin.reports.export'
     ]
@@ -213,6 +217,9 @@ const API_ROUTE_CATALOG = [
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/leave/request', auth: '員工', description: '員工送出請假申請' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/leave/withdraw', auth: '員工', description: '員工撤回尚未終審的請假申請' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/leave/supervisor-decision', auth: '員工主管', description: '主管審核部門員工請假申請' },
+  { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/overtime/request', auth: '員工', description: '員工或主管送出加班申請' },
+  { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/overtime/withdraw', auth: '員工', description: '員工撤回尚未核准的加班申請' },
+  { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/overtime/supervisor-decision', auth: '員工主管', description: '主管審核加班申請' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/logout', auth: 'Session', description: '登出目前瀏覽器 Session' },
 
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/employees/save', auth: '管理者', description: '整批覆寫員工資料' },
@@ -227,6 +234,7 @@ const API_ROUTE_CATALOG = [
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/final-decision', auth: '管理者', description: '管理部終審請假申請' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-types/save', auth: '管理者', description: '儲存請假假別設定' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-routes/save', auth: '管理者', description: '儲存請假主管審核路徑' },
+  { category: '管理者 API', method: 'POST', path: '/api/browser/admin/overtime/export', auth: '管理者', description: '匯出加班申請或加班出勤查核 CSV' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/data-settings', auth: '管理者', description: '更新主畫面標題與副標題' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/change-admin-password', auth: '管理者', description: '變更管理者密碼' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/greetings/save', auth: '管理者', description: '儲存問候語設定' },
@@ -1516,6 +1524,253 @@ function getAdminLeaveState(employees = dbModule.loadEmployees()) {
   };
 }
 
+const OVERTIME_STATUS_LABELS = {
+  pending_supervisor: '主管審核中',
+  approved: '已核准',
+  rejected: '已駁回',
+  withdrawn: '已撤回',
+  cancelled: '已取消'
+};
+
+const OVERTIME_APPROVAL_MODE_LABELS = {
+  self_request: '本人申請',
+  supervisor_proxy_auto_approved: '主管代申請自動核准'
+};
+
+function getOvertimeStatusText(status) {
+  return OVERTIME_STATUS_LABELS[status] || status || '-';
+}
+
+function getOvertimeApprovalModeText(mode) {
+  return OVERTIME_APPROVAL_MODE_LABELS[mode] || mode || '-';
+}
+
+function buildOvertimeLookup(employees = dbModule.loadEmployees()) {
+  return {
+    employeeMap: new Map(employees.map((employee) => [employee.id, employee]))
+  };
+}
+
+function formatOvertimeRequestForDashboard(request, lookup = buildOvertimeLookup()) {
+  const employee = lookup.employeeMap.get(request.employee_id) || {};
+  const applicant = lookup.employeeMap.get(request.applicant_id) || {};
+  const supervisor = lookup.employeeMap.get(request.supervisor_id) || {};
+  return {
+    ...request,
+    employeeId: request.employee_id,
+    employeeName: employee.name || '',
+    employeeDepartment: employee.department || '',
+    applicantId: request.applicant_id || '',
+    applicantName: applicant.name || '',
+    supervisorId: request.supervisor_id || '',
+    supervisorName: supervisor.name || '',
+    statusText: getOvertimeStatusText(request.status),
+    approvalModeText: getOvertimeApprovalModeText(request.approval_mode),
+    startText: formatDateTimeText(request.start_at),
+    endText: formatDateTimeText(request.end_at),
+    createdText: formatDateTimeText(request.created_at),
+    supervisorDecidedText: formatDateTimeText(request.supervisor_decided_at)
+  };
+}
+
+function getSupervisedEmployees(supervisorId, employees = dbModule.loadEmployees(), routes = dbModule.loadLeaveApprovalRoutes()) {
+  const normalizedSupervisorId = String(supervisorId || '').trim();
+  if (!normalizedSupervisorId) return [];
+  return employees.filter((employee) =>
+    employee.id !== normalizedSupervisorId &&
+    getLeaveSupervisorForEmployee(employee, routes) === normalizedSupervisorId
+  );
+}
+
+function getEmployeeOvertimeState(employee) {
+  const employees = dbModule.loadEmployees();
+  const routes = dbModule.loadLeaveApprovalRoutes();
+  const lookup = buildOvertimeLookup(employees);
+  const supervisedEmployees = getSupervisedEmployees(employee.id, employees, routes);
+  const eligibleEmployeeMap = new Map([employee, ...supervisedEmployees].map((item) => [item.id, item]));
+  return {
+    eligibleEmployees: [...eligibleEmployeeMap.values()].map((item) => ({
+      id: item.id,
+      name: item.name,
+      department: item.department,
+      job_title: item.job_title,
+      isSelf: item.id === employee.id
+    })),
+    myRequests: dbModule.queryOvertimeRequests({ employeeOrApplicantId: employee.id, limit: 80 })
+      .map((request) => formatOvertimeRequestForDashboard(request, lookup)),
+    supervisorQueue: dbModule.queryOvertimeRequests({
+      supervisorId: employee.id,
+      status: 'pending_supervisor',
+      limit: 100
+    }).map((request) => formatOvertimeRequestForDashboard(request, lookup))
+  };
+}
+
+function parseShiftTimeMinutes(timeText) {
+  const [hours, minutes] = String(timeText || '00:00').split(':').map(Number);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return 0;
+  return (hours * 60) + minutes;
+}
+
+function isTimestampInsideShift(timestamp, shift) {
+  const date = new Date(timestamp);
+  const currentMinutes = (date.getHours() * 60) + date.getMinutes();
+  const startMinutes = parseShiftTimeMinutes(shift.start);
+  const endMinutes = parseShiftTimeMinutes(shift.end);
+  if (endMinutes < startMinutes) return currentMinutes >= startMinutes || currentMinutes <= endMinutes;
+  return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+}
+
+function isPunchOutsideKnownShift(record, shifts = dbModule.loadShifts()) {
+  if (shifts.length) return !shifts.some((shift) => isTimestampInsideShift(record.timestamp, shift));
+  const hour = new Date(record.timestamp).getHours();
+  return hour >= 18 || hour < 8;
+}
+
+function isTimestampCoveredByApprovedOvertime(timestamp, employeeId, approvedRequests = []) {
+  return approvedRequests.some((request) =>
+    request.employee_id === employeeId &&
+    Number(request.start_at) <= timestamp &&
+    Number(request.end_at) >= timestamp
+  );
+}
+
+function buildOvertimeAttendanceAlerts({ employees = dbModule.loadEmployees(), rangeStartMs = null, rangeEndMs = null } = {}) {
+  const now = Date.now();
+  const effectiveEndMs = Number.isFinite(Number(rangeEndMs)) ? Number(rangeEndMs) : now;
+  const effectiveStartMs = Number.isFinite(Number(rangeStartMs))
+    ? Number(rangeStartMs)
+    : effectiveEndMs - (60 * 24 * 60 * 60 * 1000);
+  const employeeMap = new Map(employees.map((employee) => [employee.id, employee]));
+  const shifts = dbModule.loadShifts();
+  const approvedRequests = dbModule.queryOvertimeRequests({
+    status: 'approved',
+    overlapStartAt: effectiveStartMs,
+    overlapEndAt: effectiveEndMs,
+    limit: null
+  });
+  const punchRecords = dbModule.loadPunchRecords()
+    .filter((record) => record.timestamp >= effectiveStartMs && record.timestamp <= effectiveEndMs)
+    .filter((record) => record.status !== '重複打卡')
+    .filter((record) => record.type === 'in' || record.type === 'out');
+  const alerts = [];
+
+  approvedRequests
+    .filter((request) => Number(request.end_at) <= now)
+    .forEach((request) => {
+      const hasPunchInWindow = punchRecords.some((record) =>
+        record.id === request.employee_id &&
+        Number(record.timestamp) >= Number(request.start_at) &&
+        Number(record.timestamp) <= Number(request.end_at)
+      );
+      if (hasPunchInWindow) return;
+      const employee = employeeMap.get(request.employee_id) || {};
+      alerts.push({
+        id: `ot_no_attendance_${request.id}`,
+        alertType: 'approved_without_attendance',
+        alertText: '已核准加班但區間內沒有出勤打卡',
+        severity: 'warning',
+        employeeId: request.employee_id,
+        employeeName: employee.name || '',
+        department: employee.department || '',
+        requestId: request.id,
+        startAt: request.start_at,
+        endAt: request.end_at,
+        startText: formatDateTimeText(request.start_at),
+        endText: formatDateTimeText(request.end_at),
+        durationHours: request.duration_hours,
+        detail: '加班單已核准，但加班起訖時間內找不到上班或下班打卡紀錄。'
+      });
+    });
+
+  punchRecords
+    .filter((record) => isPunchOutsideKnownShift(record, shifts))
+    .filter((record) => !isTimestampCoveredByApprovedOvertime(record.timestamp, record.id, approvedRequests))
+    .forEach((record) => {
+      const employee = employeeMap.get(record.id) || {};
+      const formatted = formatPunchRecord(record);
+      alerts.push({
+        id: `ot_attendance_without_request_${record.id}_${record.timestamp}`,
+        alertType: 'attendance_without_approved_overtime',
+        alertText: '疑似加班出勤但沒有核准加班單',
+        severity: 'danger',
+        employeeId: record.id,
+        employeeName: employee.name || '',
+        department: employee.department || '',
+        requestId: '',
+        startAt: record.timestamp,
+        endAt: record.timestamp,
+        startText: `${formatted.dateText} ${formatted.timeText}`,
+        endText: `${formatted.dateText} ${formatted.timeText}`,
+        durationHours: '',
+        detail: `此筆${formatted.typeText}打卡落在已設定班別外，且未被任何已核准加班單覆蓋。`
+      });
+    });
+
+  return alerts.sort((a, b) => Number(b.startAt || 0) - Number(a.startAt || 0)).slice(0, 200);
+}
+
+function getAdminOvertimeState(employees = dbModule.loadEmployees()) {
+  const lookup = buildOvertimeLookup(employees);
+  const requests = dbModule.queryOvertimeRequests({ limit: 300 })
+    .map((request) => formatOvertimeRequestForDashboard(request, lookup));
+  const alerts = buildOvertimeAttendanceAlerts({ employees });
+  return {
+    requests,
+    alerts,
+    pendingSupervisor: requests.filter((request) => request.status === 'pending_supervisor')
+  };
+}
+
+function escapeCsvCell(value) {
+  const text = value === null || value === undefined ? '' : String(value);
+  if (/[",\r\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
+}
+
+function buildCsvFromColumns(rows = [], columns = []) {
+  const header = columns.map((column) => escapeCsvCell(column.label)).join(',');
+  const body = rows.map((row) => columns.map((column) => {
+    const value = typeof column.value === 'function' ? column.value(row) : row[column.value];
+    return escapeCsvCell(value);
+  }).join(','));
+  return [header, ...body].join('\r\n');
+}
+
+function buildOvertimeRequestsCsv(rows = []) {
+  return buildCsvFromColumns(rows, [
+    { label: '申請單號', value: 'id' },
+    { label: '員工工號', value: 'employeeId' },
+    { label: '員工姓名', value: 'employeeName' },
+    { label: '部門', value: 'employeeDepartment' },
+    { label: '申請人工號', value: 'applicantId' },
+    { label: '申請人姓名', value: 'applicantName' },
+    { label: '開始時間', value: 'startText' },
+    { label: '結束時間', value: 'endText' },
+    { label: '時數', value: 'duration_hours' },
+    { label: '狀態', value: 'statusText' },
+    { label: '流程', value: 'approvalModeText' },
+    { label: '主管', value: (row) => `${row.supervisorId || ''} ${row.supervisorName || ''}`.trim() },
+    { label: '原因', value: 'reason' },
+    { label: '建立時間', value: 'createdText' }
+  ]);
+}
+
+function buildOvertimeAlertsCsv(rows = []) {
+  return buildCsvFromColumns(rows, [
+    { label: '警示類型', value: 'alertText' },
+    { label: '嚴重度', value: 'severity' },
+    { label: '員工工號', value: 'employeeId' },
+    { label: '員工姓名', value: 'employeeName' },
+    { label: '部門', value: 'department' },
+    { label: '開始時間', value: 'startText' },
+    { label: '結束時間', value: 'endText' },
+    { label: '申請單號', value: 'requestId' },
+    { label: '時數', value: 'durationHours' },
+    { label: '說明', value: 'detail' }
+  ]);
+}
+
 function getAdminSecurityDatasets() {
   const employees = dbModule.loadEmployees();
   const employeeMap = new Map(employees.map((employee) => [employee.id, employee]));
@@ -1707,10 +1962,11 @@ function getAdminDatasets(session = {}) {
   const canManualPunch = hasAdminPermission(session, 'admin.manualPunch.create');
   const canReports = hasAnyAdminPermission(session, ['admin.reports.view', 'admin.reports.export']);
   const canLeave = hasAnyAdminPermission(session, ['admin.leave.review', 'admin.leave.settings']);
+  const canOvertime = hasAdminPermission(session, 'admin.overtime.view');
   const canSystem = hasAdminPermission(session, 'admin.system.manage');
   const canBells = hasAdminPermission(session, 'admin.bells.manage');
   const canThemes = hasAdminPermission(session, 'admin.themes.manage');
-  const needsEmployees = canPeople || canSecurity || canManualPunch || canReports || canLeave;
+  const needsEmployees = canPeople || canSecurity || canManualPunch || canReports || canLeave || canOvertime;
   const needsShifts = canShifts || canManualPunch || canReports;
   const customSounds = canBells
     ? dbModule.loadCustomSounds().map((sound) => ({
@@ -1745,6 +2001,7 @@ function getAdminDatasets(session = {}) {
     themeSchedules: canThemes ? dbModule.loadThemeSchedules() : [],
     customThemes,
     leave: canLeave ? getAdminLeaveState(employees) : null,
+    overtime: canOvertime ? getAdminOvertimeState(employees) : null,
     security: canSecurity ? getAdminSecurityDatasets() : null,
     accountAccess: null,
     settings: {
@@ -1819,6 +2076,7 @@ function buildEmployeeDashboard(employee, session = null) {
       label: `現在打卡（預計${nextPunchType}）`
     },
     leave: getEmployeeLeaveState(employee),
+    overtime: getEmployeeOvertimeState(employee),
     recentRecords
   };
 }
@@ -3757,6 +4015,153 @@ function attachBrowserRoutes(server) {
     }
   });
 
+  server.post('/api/browser/employee/overtime/request', requireBrowserSession, requireBrowserRole('employee'), (request, response) => {
+    try {
+      const applicant = getEmployeeById(request.browserSession.employeeId);
+      if (!applicant) throw createHttpError('登入帳號對應的員工資料已不存在，請重新登入。', 401);
+
+      const employees = dbModule.loadEmployees();
+      const routes = dbModule.loadLeaveApprovalRoutes();
+      const targetEmployeeId = String(request.body?.employeeId || request.body?.employee_id || applicant.id).trim();
+      const targetEmployee = employees.find((employee) => employee.id === targetEmployeeId) || null;
+      if (!targetEmployee) throw createHttpError('找不到指定的加班員工。', 404);
+
+      const supervisedIds = new Set(getSupervisedEmployees(applicant.id, employees, routes).map((employee) => employee.id));
+      const isSelfRequest = targetEmployee.id === applicant.id;
+      const isSupervisorProxy = !isSelfRequest && supervisedIds.has(targetEmployee.id);
+      if (!isSelfRequest && !isSupervisorProxy) {
+        throw createHttpError('只能替自己或目前審核路徑內的直屬員工提出加班申請。', 403);
+      }
+
+      const supervisorId = getLeaveSupervisorForEmployee(targetEmployee, routes);
+      if (!supervisorId) {
+        throw createHttpError(`尚未設定「${targetEmployee.department || '未指定部門'}」的主管審核路徑，請先聯絡管理者。`, 400);
+      }
+      if (isSelfRequest && supervisorId === applicant.id) {
+        throw createHttpError('主管本人提出加班申請時仍需上層主管審核，請先在主管審核路徑中指定上層主管。', 400);
+      }
+      if (!employees.some((employee) => employee.id === supervisorId)) {
+        throw createHttpError('此部門設定的主管不存在，請先聯絡管理者修正。', 400);
+      }
+
+      const startAt = parseLeaveDateTime(request.body?.startDate, request.body?.startTime, '18:00');
+      const endAt = parseLeaveDateTime(request.body?.endDate, request.body?.endTime, '20:00');
+      if (endAt <= startAt) throw createHttpError('加班結束時間必須晚於開始時間。', 400);
+
+      const durationHours = calculateLeaveDurationHours(startAt, endAt, request.body?.durationHours);
+      if (durationHours <= 0) throw createHttpError('請輸入有效的加班時數。', 400);
+      if (dbModule.hasOverlappingOvertimeRequest(targetEmployee.id, startAt, endAt)) {
+        throw createHttpError('這段時間已經有待審或已核准的加班申請。', 409);
+      }
+
+      const now = Date.now();
+      const autoApproved = isSupervisorProxy;
+      const overtimeRequest = {
+        id: `overtime_${now}_${crypto.randomBytes(4).toString('hex')}`,
+        employee_id: targetEmployee.id,
+        applicant_id: applicant.id,
+        applicant_role: autoApproved ? 'supervisor_proxy' : 'self',
+        start_at: startAt,
+        end_at: endAt,
+        duration_hours: durationHours,
+        reason: String(request.body?.reason || '').trim(),
+        status: autoApproved ? 'approved' : 'pending_supervisor',
+        supervisor_id: autoApproved ? applicant.id : supervisorId,
+        supervisor_decision: autoApproved ? 'approved' : null,
+        supervisor_comment: autoApproved ? '主管替直屬員工提出，系統自動核准。' : null,
+        supervisor_decided_at: autoApproved ? now : null,
+        approval_mode: autoApproved ? 'supervisor_proxy_auto_approved' : 'self_request',
+        created_at: now,
+        updated_at: now
+      };
+      dbModule.createOvertimeRequest(overtimeRequest);
+      writeBrowserAuditLog(request, {
+        action: 'create',
+        target_type: 'overtime_request',
+        target_id: overtimeRequest.id,
+        summary: `${applicant.id} ${applicant.name} 送出 ${targetEmployee.id} ${targetEmployee.name} 加班申請`,
+        after_data: overtimeRequest
+      });
+      notifyDesktop('overtimeRequests', getBrowserSyncMeta(request));
+      response.json({
+        success: true,
+        message: autoApproved ? '主管代申請已建立並自動核准。' : '加班申請已送出，等待主管審核。',
+        data: { dashboard: buildDashboardForSession(request.browserSession) }
+      });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+  });
+
+  server.post('/api/browser/employee/overtime/withdraw', requireBrowserSession, requireBrowserRole('employee'), (request, response) => {
+    try {
+      const requestId = String(request.body?.requestId || '').trim();
+      const overtimeRequest = dbModule.getOvertimeRequestById(requestId);
+      if (!overtimeRequest) throw createHttpError('找不到指定的加班申請。', 404);
+      const actorId = request.browserSession.employeeId;
+      if (overtimeRequest.employee_id !== actorId && overtimeRequest.applicant_id !== actorId) {
+        throw createHttpError('只能撤回自己相關的加班申請。', 403);
+      }
+      if (overtimeRequest.status !== 'pending_supervisor') {
+        throw createHttpError('只有主管尚未審核的加班申請可以撤回。', 400);
+      }
+      dbModule.withdrawOvertimeRequest({ requestId, withdrawnAt: Date.now() });
+      writeBrowserAuditLog(request, {
+        action: 'withdraw',
+        target_type: 'overtime_request',
+        target_id: requestId,
+        summary: `撤回加班申請 ${requestId}`,
+        before_data: overtimeRequest
+      });
+      notifyDesktop('overtimeRequests', getBrowserSyncMeta(request));
+      response.json({
+        success: true,
+        message: '加班申請已撤回。',
+        data: { dashboard: buildDashboardForSession(request.browserSession) }
+      });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+  });
+
+  server.post('/api/browser/employee/overtime/supervisor-decision', requireBrowserSession, requireBrowserRole('employee'), (request, response) => {
+    try {
+      const requestId = String(request.body?.requestId || '').trim();
+      const decision = String(request.body?.decision || '').trim() === 'approved' ? 'approved' : 'rejected';
+      const overtimeRequest = dbModule.getOvertimeRequestById(requestId);
+      if (!overtimeRequest) throw createHttpError('找不到指定的加班申請。', 404);
+      if (overtimeRequest.supervisor_id !== request.browserSession.employeeId) {
+        throw createHttpError('只有指定主管可以審核這張加班申請。', 403);
+      }
+      if (overtimeRequest.status !== 'pending_supervisor') {
+        throw createHttpError('這張加班申請目前不在主管審核階段。', 400);
+      }
+      const comment = String(request.body?.comment || '').trim();
+      dbModule.updateOvertimeRequestSupervisorDecision({
+        requestId,
+        decision,
+        comment,
+        decidedAt: Date.now()
+      });
+      writeBrowserAuditLog(request, {
+        action: decision === 'approved' ? 'approve' : 'reject',
+        target_type: 'overtime_request',
+        target_id: requestId,
+        summary: `主管${decision === 'approved' ? '核准' : '駁回'}加班申請 ${requestId}`,
+        before_data: overtimeRequest,
+        after_data: { decision, comment }
+      });
+      notifyDesktop('overtimeRequests', getBrowserSyncMeta(request));
+      response.json({
+        success: true,
+        message: decision === 'approved' ? '加班申請已核准。' : '加班申請已由主管駁回。',
+        data: { dashboard: buildDashboardForSession(request.browserSession) }
+      });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+  });
+
   server.post('/api/browser/logout', requireBrowserSession, (request, response) => {
     writeBrowserAuditLog(request, {
       action: 'logout',
@@ -4170,6 +4575,42 @@ function attachBrowserRoutes(server) {
             templateId,
             customFieldIds: getAttendanceExportCustomFields()
           })
+        }
+      });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+  });
+
+  server.post('/api/browser/admin/overtime/export', requireBrowserSession, requireAdminPermission('admin.overtime.view'), (request, response) => {
+    try {
+      const employees = dbModule.loadEmployees();
+      const overtimeState = getAdminOvertimeState(employees);
+      const reportType = String(request.body?.reportType || 'alerts').trim() === 'requests' ? 'requests' : 'alerts';
+      const rows = reportType === 'requests' ? overtimeState.requests : overtimeState.alerts;
+      const csvContent = reportType === 'requests'
+        ? buildOvertimeRequestsCsv(rows)
+        : buildOvertimeAlertsCsv(rows);
+      const today = new Date();
+      const prefix = reportType === 'requests' ? '加班申請紀錄' : '加班出勤查核';
+
+      writeBrowserAuditLog(request, {
+        action: 'export',
+        target_type: reportType === 'requests' ? 'overtime_requests' : 'overtime_audit_alerts',
+        target_id: reportType,
+        summary: `匯出${prefix}，共 ${rows.length} 筆`,
+        after_data: {
+          report_type: reportType,
+          record_count: rows.length
+        }
+      });
+
+      response.json({
+        success: true,
+        message: `${prefix}匯出內容已產生。`,
+        data: {
+          fileName: buildExportFileName(prefix, today, today),
+          csvContent
         }
       });
     } catch (error) {

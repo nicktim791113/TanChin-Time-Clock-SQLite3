@@ -132,6 +132,37 @@ function init(dbFilePath) {
       decided_at INTEGER,
       created_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS overtime_requests (
+      id TEXT PRIMARY KEY,
+      employee_id TEXT NOT NULL,
+      applicant_id TEXT NOT NULL,
+      applicant_role TEXT,
+      start_at INTEGER NOT NULL,
+      end_at INTEGER NOT NULL,
+      duration_hours REAL NOT NULL DEFAULT 0,
+      reason TEXT,
+      status TEXT NOT NULL,
+      supervisor_id TEXT,
+      supervisor_decision TEXT,
+      supervisor_comment TEXT,
+      supervisor_decided_at INTEGER,
+      approval_mode TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      withdrawn_at INTEGER,
+      cancelled_at INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS overtime_approval_steps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      request_id TEXT NOT NULL,
+      step_order INTEGER NOT NULL,
+      reviewer_role TEXT NOT NULL,
+      reviewer_id TEXT,
+      status TEXT NOT NULL,
+      comment TEXT,
+      decided_at INTEGER,
+      created_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS employee_devices (
       employee_id TEXT NOT NULL,
       device_id TEXT NOT NULL,
@@ -192,6 +223,12 @@ function init(dbFilePath) {
     CREATE INDEX IF NOT EXISTS idx_leave_requests_supervisor_id ON leave_requests (supervisor_id);
     CREATE INDEX IF NOT EXISTS idx_leave_requests_start_at ON leave_requests (start_at);
     CREATE INDEX IF NOT EXISTS idx_leave_approval_steps_request_id ON leave_approval_steps (request_id);
+    CREATE INDEX IF NOT EXISTS idx_overtime_requests_employee_id ON overtime_requests (employee_id);
+    CREATE INDEX IF NOT EXISTS idx_overtime_requests_applicant_id ON overtime_requests (applicant_id);
+    CREATE INDEX IF NOT EXISTS idx_overtime_requests_status ON overtime_requests (status);
+    CREATE INDEX IF NOT EXISTS idx_overtime_requests_supervisor_id ON overtime_requests (supervisor_id);
+    CREATE INDEX IF NOT EXISTS idx_overtime_requests_start_at ON overtime_requests (start_at);
+    CREATE INDEX IF NOT EXISTS idx_overtime_approval_steps_request_id ON overtime_approval_steps (request_id);
     CREATE INDEX IF NOT EXISTS idx_account_access_updated_at ON account_access (updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_workspace_nav_order_scope ON workspace_nav_order (role, nav_type, scope, employee_id);
   `);
@@ -746,6 +783,153 @@ const updateLeaveRequestAdminDecision = ({ requestId, decision, adminId, comment
 
 const withdrawLeaveRequest = ({ requestId, withdrawnAt }) => run(
     `UPDATE leave_requests
+     SET status = 'withdrawn', withdrawn_at = ?, updated_at = ?
+     WHERE id = ?`,
+    withdrawnAt,
+    withdrawnAt,
+    requestId
+);
+
+function mapOvertimeRequestRow(row) {
+    return {
+        ...row,
+        duration_hours: Number(row.duration_hours || 0)
+    };
+}
+
+const createOvertimeRequest = (request) => {
+    const insertRequest = db.prepare(`
+        INSERT INTO overtime_requests (
+            id, employee_id, applicant_id, applicant_role, start_at, end_at,
+            duration_hours, reason, status, supervisor_id, supervisor_decision,
+            supervisor_comment, supervisor_decided_at, approval_mode, created_at,
+            updated_at
+        ) VALUES (
+            @id, @employee_id, @applicant_id, @applicant_role, @start_at, @end_at,
+            @duration_hours, @reason, @status, @supervisor_id, @supervisor_decision,
+            @supervisor_comment, @supervisor_decided_at, @approval_mode, @created_at,
+            @updated_at
+        )
+    `);
+    const insertStep = db.prepare(`
+        INSERT INTO overtime_approval_steps (
+            request_id, step_order, reviewer_role, reviewer_id, status, comment,
+            decided_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const isAutoApproved = request.status === 'approved';
+    db.transaction(() => {
+        insertRequest.run({
+            ...request,
+            supervisor_decision: request.supervisor_decision || null,
+            supervisor_comment: request.supervisor_comment || null,
+            supervisor_decided_at: request.supervisor_decided_at || null
+        });
+        insertStep.run(
+            request.id,
+            1,
+            'supervisor',
+            request.supervisor_id || null,
+            isAutoApproved ? 'approved' : 'pending',
+            isAutoApproved ? (request.supervisor_comment || '主管代申請自動核准') : null,
+            isAutoApproved ? (request.supervisor_decided_at || request.created_at) : null,
+            request.created_at
+        );
+    })();
+};
+
+const getOvertimeRequestById = (requestId) => {
+    const row = get('SELECT * FROM overtime_requests WHERE id = ?', requestId);
+    return row ? mapOvertimeRequestRow(row) : null;
+};
+
+const queryOvertimeRequests = (filters = {}) => {
+    const clauses = [];
+    const params = [];
+    if (filters.employeeId) {
+        clauses.push('employee_id = ?');
+        params.push(String(filters.employeeId));
+    }
+    if (filters.applicantId) {
+        clauses.push('applicant_id = ?');
+        params.push(String(filters.applicantId));
+    }
+    if (filters.employeeOrApplicantId) {
+        clauses.push('(employee_id = ? OR applicant_id = ?)');
+        params.push(String(filters.employeeOrApplicantId), String(filters.employeeOrApplicantId));
+    }
+    if (filters.supervisorId) {
+        clauses.push('supervisor_id = ?');
+        params.push(String(filters.supervisorId));
+    }
+    if (filters.status) {
+        if (Array.isArray(filters.status)) {
+            const values = filters.status.map((value) => String(value || '').trim()).filter(Boolean);
+            if (values.length) {
+                clauses.push(`status IN (${values.map(() => '?').join(',')})`);
+                params.push(...values);
+            }
+        } else {
+            clauses.push('status = ?');
+            params.push(String(filters.status));
+        }
+    }
+    if (filters.overlapStartAt !== undefined && filters.overlapEndAt !== undefined) {
+        clauses.push('start_at <= ? AND end_at > ?');
+        params.push(Number(filters.overlapEndAt) || 0, Number(filters.overlapStartAt) || 0);
+    }
+    const shouldLimit = filters.limit !== null && filters.limit !== false && filters.limit !== 'all';
+    const maxLimit = Math.max(1, Number(filters.maxLimit) || 500);
+    const limit = shouldLimit ? Math.max(1, Math.min(Number(filters.limit) || 100, maxLimit)) : null;
+    const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const limitSql = shouldLimit ? ' LIMIT ?' : '';
+    const queryParams = shouldLimit ? [...params, limit] : params;
+    return all(`SELECT * FROM overtime_requests ${whereSql} ORDER BY created_at DESC${limitSql}`, ...queryParams).map(mapOvertimeRequestRow);
+};
+
+const hasOverlappingOvertimeRequest = (employeeId, startAt, endAt, excludeId = '') => {
+    const rows = all(
+        `SELECT id FROM overtime_requests
+         WHERE employee_id = ?
+           AND status IN ('pending_supervisor', 'approved')
+           AND start_at < ?
+           AND end_at > ?`,
+        employeeId,
+        Number(endAt) || 0,
+        Number(startAt) || 0
+    );
+    return rows.some((row) => row.id !== excludeId);
+};
+
+const updateOvertimeRequestSupervisorDecision = ({ requestId, decision, comment, decidedAt }) => {
+    const nextStatus = decision === 'approved' ? 'approved' : 'rejected';
+    db.transaction(() => {
+        run(
+            `UPDATE overtime_requests
+             SET status = ?, supervisor_decision = ?, supervisor_comment = ?,
+                 supervisor_decided_at = ?, updated_at = ?
+             WHERE id = ?`,
+            nextStatus,
+            decision,
+            comment || '',
+            decidedAt,
+            decidedAt,
+            requestId
+        );
+        run(
+            `UPDATE overtime_approval_steps
+             SET status = ?, comment = ?, decided_at = ?
+             WHERE request_id = ? AND reviewer_role = 'supervisor'`,
+            decision,
+            comment || '',
+            decidedAt,
+            requestId
+        );
+    })();
+};
+
+const withdrawOvertimeRequest = ({ requestId, withdrawnAt }) => run(
+    `UPDATE overtime_requests
      SET status = 'withdrawn', withdrawn_at = ?, updated_at = ?
      WHERE id = ?`,
     withdrawnAt,
@@ -1363,6 +1547,9 @@ module.exports = {
   createLeaveRequest, getLeaveRequestById, queryLeaveRequests,
   hasOverlappingLeaveRequest, updateLeaveRequestSupervisorDecision,
   updateLeaveRequestAdminDecision, withdrawLeaveRequest,
+  createOvertimeRequest, getOvertimeRequestById, queryOvertimeRequests,
+  hasOverlappingOvertimeRequest, updateOvertimeRequestSupervisorDecision,
+  withdrawOvertimeRequest,
   saveAutomationTasks, loadAutomationTasks,
   addAutomationLog, loadAutomationLog, clearAutomationLog,
   addAuditLog, getAuditLogsForArchive, deleteAuditLogsByIds,
