@@ -334,6 +334,7 @@ body::after {
     justify-content: flex-end;
     gap: 10px;
     flex-wrap: wrap;
+    min-width: 0;
 }
 
 .identity-pill,
@@ -360,10 +361,17 @@ body::after {
 }
 
 .status-pill {
-    max-width: min(420px, 42vw);
+    flex: 1 1 280px;
+    max-width: min(680px, calc(100vw - 40px));
+    border-radius: 18px;
     color: var(--brand-dark);
     font-size: 0.92rem;
-    text-overflow: ellipsis;
+    line-height: 1.35;
+    overflow: visible;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: left;
+    justify-content: flex-start;
 }
 
 .status-pill.success {
@@ -2276,7 +2284,7 @@ textarea:disabled {
 
 .feedback-toast-host {
     position: fixed;
-    top: 22px;
+    bottom: 22px;
     right: 22px;
     z-index: 2400;
     display: grid;
@@ -2291,9 +2299,11 @@ textarea:disabled {
     border-radius: 18px;
     color: #fff;
     font-weight: 700;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
     box-shadow: 0 16px 32px rgba(31, 45, 61, 0.2);
     opacity: 0;
-    transform: translateY(-10px) scale(0.98);
+    transform: translateY(10px) scale(0.98);
     transition: opacity 0.18s ease, transform 0.18s ease;
 }
 

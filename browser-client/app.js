@@ -564,6 +564,7 @@ const ui = {
 
 function setMessage(target, text, type = "info") {
     target.textContent = text || "";
+    target.title = text || "";
     if (target.id === "dashboard-message") {
         target.className = text ? `status-pill ${type}` : "status-pill hidden";
         return;
