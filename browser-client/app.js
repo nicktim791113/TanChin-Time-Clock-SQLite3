@@ -8534,6 +8534,38 @@ function renderAdminLeaveRouteRows(routes = [], employees = []) {
     `).join("");
 }
 
+function renderLeaveAuditAlertRows(alerts = []) {
+    if (!alerts.length) return renderEmptyState("目前沒有核准請假與實際打卡的查核警示。");
+    return `
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>警示</th>
+                        <th>員工</th>
+                        <th>假別</th>
+                        <th>請假區間</th>
+                        <th>打卡</th>
+                        <th>說明</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${alerts.map((alert) => `
+                        <tr>
+                            <td>${renderBadge(alert.alertText || "-", alert.severity === "danger" ? "danger" : "warning")}</td>
+                            <td>${escapeHtml(`${alert.employeeId || "-"} / ${alert.employeeName || "-"}`)}<div class="record-subline">${escapeHtml(alert.department || "")}</div></td>
+                            <td>${escapeHtml(alert.leaveTypeName || "-")}</td>
+                            <td>${escapeHtml(alert.startText || "-")}${alert.endText ? `<div class="record-subline">${escapeHtml(alert.endText)}</div>` : ""}</td>
+                            <td>${escapeHtml(alert.punchText || "-")}</td>
+                            <td class="multiline-cell">${escapeHtml(alert.detail || "-")}</td>
+                        </tr>
+                    `).join("")}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
 function renderAdminLeaveSection(datasets) {
     const leave = datasets.leave || {};
     return `
@@ -8546,10 +8578,22 @@ function renderAdminLeaveSection(datasets) {
                     </div>
                     <div class="badge-row">
                         ${renderBadge(`管理部待審 ${leave.pendingAdmin?.length || 0} 筆`, leave.pendingAdmin?.length ? "warning" : "success")}
+                        ${renderBadge(`查核警示 ${leave.alerts?.length || 0} 筆`, leave.alerts?.length ? "warning" : "success")}
                         ${renderBadge(`全部請假 ${leave.requests?.length || 0} 筆`)}
                     </div>
                 </div>
                 <p class="helper-text">請假流程採「員工送出 → 部門主管審核 → 管理部終審」；只有終審核准後才視為生效。</p>
+            </article>
+
+            <article class="table-card">
+                <div class="list-toolbar">
+                    <div>
+                        <h3>請假出勤查核</h3>
+                        <p class="helper-text">比對已核准請假與實際打卡，列出請假期間有打卡、全天請假日仍有打卡、部分請假但當日無打卡等需要人工確認的情況。</p>
+                    </div>
+                    <button class="outline-btn" type="button" data-action="export-leave-audit-alerts">匯出查核 CSV</button>
+                </div>
+                ${renderLeaveAuditAlertRows(leave.alerts || [])}
             </article>
 
             <article class="table-card">
@@ -9560,11 +9604,21 @@ const originalHandleDashboardClickWithOvertime = handleDashboardClick;
 handleDashboardClick = async function handleDashboardClickOvertimeOverride(event) {
     const actionTarget = event.target.closest("[data-action]");
     const action = actionTarget?.dataset.action || "";
-    if (!["overtime-withdraw", "overtime-supervisor-decision", "export-overtime-alerts", "export-overtime-requests"].includes(action)) {
+    if (!["overtime-withdraw", "overtime-supervisor-decision", "export-overtime-alerts", "export-overtime-requests", "export-leave-audit-alerts"].includes(action)) {
         return originalHandleDashboardClickWithOvertime(event);
     }
 
     try {
+        if (action === "export-leave-audit-alerts") {
+            const result = await requestJson("/api/browser/admin/leave-audit/export", {
+                method: "POST",
+                auth: true
+            });
+            downloadTextFile(result.data.fileName, result.data.csvContent);
+            setMessage(ui.dashboardMessage, result.message || "請假出勤查核已匯出為 CSV。", "success");
+            return;
+        }
+
         if (action === "overtime-withdraw") {
             if (!window.confirm("確定要撤回這張加班申請嗎？")) return;
             const result = await requestJson("/api/browser/employee/overtime/withdraw", {
@@ -10821,18 +10875,24 @@ const workspaceSubnavConfigs = {
             introIndexes: [0],
             groups: [
                 {
-                    label: "審核作業",
+                    label: "查核與審核",
                     items: [
+                        {
+                            id: "audit",
+                            label: "請假出勤查核",
+                            panelIndex: 1,
+                            badge: (datasets) => String(datasets.leave?.alerts?.length || 0)
+                        },
                         {
                             id: "pending",
                             label: "管理部待複核",
-                            panelIndex: 1,
+                            panelIndex: 2,
                             badge: (datasets) => String(datasets.leave?.pendingAdmin?.length || 0)
                         },
                         {
                             id: "records",
                             label: "請假紀錄",
-                            panelIndex: 2,
+                            panelIndex: 3,
                             badge: (datasets) => String(datasets.leave?.requests?.length || 0)
                         }
                     ]
@@ -10840,8 +10900,8 @@ const workspaceSubnavConfigs = {
                 {
                     label: "制度設定",
                     items: [
-                        { id: "types", label: "假別設定", panelIndex: 3 },
-                        { id: "routes", label: "主管審核路徑", panelIndex: 4 }
+                        { id: "types", label: "假別設定", panelIndex: 4 },
+                        { id: "routes", label: "主管審核路徑", panelIndex: 5 }
                     ]
                 }
             ]

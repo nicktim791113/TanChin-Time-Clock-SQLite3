@@ -234,6 +234,7 @@ const API_ROUTE_CATALOG = [
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/final-decision', auth: '管理者', description: '管理部終審請假申請' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-types/save', auth: '管理者', description: '儲存請假假別設定' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-routes/save', auth: '管理者', description: '儲存請假主管審核路徑' },
+  { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-audit/export', auth: '管理者', description: '匯出請假與實際打卡查核 CSV' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/overtime/export', auth: '管理者', description: '匯出加班申請或加班出勤查核 CSV' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/data-settings', auth: '管理者', description: '更新主畫面標題與副標題' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/change-admin-password', auth: '管理者', description: '變更管理者密碼' },
@@ -1511,6 +1512,130 @@ function getEmployeeLeaveState(employee) {
   };
 }
 
+function isLeaveFullDaySegment(segment, durationHours) {
+  const approvedHours = Number(durationHours) || 0;
+  const rawHours = Number(segment?.rawHours) || 0;
+  return approvedHours >= 7.5 || rawHours >= 7.5;
+}
+
+function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rangeStartMs = null, rangeEndMs = null } = {}) {
+  const now = Date.now();
+  const effectiveEndMs = Number.isFinite(Number(rangeEndMs)) ? Number(rangeEndMs) : now;
+  const effectiveStartMs = Number.isFinite(Number(rangeStartMs))
+    ? Number(rangeStartMs)
+    : effectiveEndMs - (60 * 24 * 60 * 60 * 1000);
+  const employeeMap = new Map(employees.map((employee) => [employee.id, employee]));
+  const leaveTypes = dbModule.loadLeaveTypes();
+  const typeMap = new Map(leaveTypes.map((type) => [type.id, type]));
+  const approvedRequests = dbModule.queryLeaveRequests({
+    status: 'approved',
+    overlapStartAt: effectiveStartMs,
+    overlapEndAt: effectiveEndMs,
+    limit: null
+  });
+  const punchRecords = dbModule.loadPunchRecords()
+    .filter((record) => record.timestamp >= effectiveStartMs && record.timestamp <= effectiveEndMs)
+    .filter((record) => record.status !== '重複打卡')
+    .filter((record) => record.type === 'in' || record.type === 'out');
+  const alerts = [];
+
+  approvedRequests.forEach((request) => {
+    const employee = employeeMap.get(request.employee_id) || {};
+    const leaveTypeName = typeMap.get(request.leave_type_id)?.name || request.leave_type_id;
+    const segments = splitLeaveRequestIntoAttendanceSegments(request, effectiveStartMs, effectiveEndMs);
+    const durations = allocateLeaveSegmentDurations(segments, request.duration_hours);
+
+    segments.forEach((segment, index) => {
+      if (segment.segmentStartAt > now) return;
+      const dayEndAt = segment.dayStartAt + (24 * 60 * 60 * 1000) - 1;
+      const sameDayPunches = punchRecords.filter((record) =>
+        record.id === request.employee_id &&
+        record.timestamp >= segment.dayStartAt &&
+        record.timestamp <= dayEndAt
+      );
+      const punchesInsideLeave = sameDayPunches.filter((record) =>
+        record.timestamp >= segment.segmentStartAt &&
+        record.timestamp <= segment.segmentEndAt
+      );
+      const punchesOutsideLeave = sameDayPunches.filter((record) =>
+        record.timestamp < segment.segmentStartAt ||
+        record.timestamp > segment.segmentEndAt
+      );
+      const durationHours = durations[index] || roundAttendanceHours(segment.rawHours);
+
+      punchesInsideLeave.forEach((record) => {
+        const formatted = formatPunchRecord(record);
+        alerts.push({
+          id: `leave_punch_conflict_${request.id}_${record.timestamp}`,
+          alertType: 'leave_window_punch_conflict',
+          alertText: '請假期間有打卡',
+          severity: 'danger',
+          employeeId: request.employee_id,
+          employeeName: employee.name || '',
+          department: employee.department || '',
+          requestId: request.id,
+          leaveTypeName,
+          startAt: segment.segmentStartAt,
+          endAt: segment.segmentEndAt,
+          punchAt: record.timestamp,
+          startText: formatDateTimeText(segment.segmentStartAt),
+          endText: formatDateTimeText(segment.segmentEndAt),
+          punchText: `${formatted.dateText} ${formatted.timeText} ${formatted.typeText}`,
+          durationHours,
+          detail: `核准請假區間內出現${formatted.typeText}打卡，需確認是否銷假、誤打或審核資料需修正。`
+        });
+      });
+
+      if (segment.segmentEndAt > now) return;
+      if (isLeaveFullDaySegment(segment, durationHours) && punchesOutsideLeave.length) {
+        alerts.push({
+          id: `leave_full_day_with_attendance_${request.id}_${segment.dayStartAt}`,
+          alertType: 'full_day_leave_with_attendance',
+          alertText: '全天請假日仍有打卡',
+          severity: 'warning',
+          employeeId: request.employee_id,
+          employeeName: employee.name || '',
+          department: employee.department || '',
+          requestId: request.id,
+          leaveTypeName,
+          startAt: segment.segmentStartAt,
+          endAt: segment.segmentEndAt,
+          punchAt: punchesOutsideLeave[0]?.timestamp || '',
+          startText: formatDateTimeText(segment.segmentStartAt),
+          endText: formatDateTimeText(segment.segmentEndAt),
+          punchText: `${punchesOutsideLeave.length} 筆打卡`,
+          durationHours,
+          detail: '這筆請假接近全天或全天，但同一天仍有請假區間外打卡，建議人工確認實際出勤與請假是否一致。'
+        });
+      }
+
+      if (!isLeaveFullDaySegment(segment, durationHours) && !punchesInsideLeave.length && !punchesOutsideLeave.length) {
+        alerts.push({
+          id: `leave_partial_missing_attendance_${request.id}_${segment.dayStartAt}`,
+          alertType: 'partial_leave_missing_attendance',
+          alertText: '部分請假但當日無打卡',
+          severity: 'warning',
+          employeeId: request.employee_id,
+          employeeName: employee.name || '',
+          department: employee.department || '',
+          requestId: request.id,
+          leaveTypeName,
+          startAt: segment.segmentStartAt,
+          endAt: segment.segmentEndAt,
+          punchAt: '',
+          startText: formatDateTimeText(segment.segmentStartAt),
+          endText: formatDateTimeText(segment.segmentEndAt),
+          punchText: '-',
+          durationHours,
+          detail: '這筆核准請假不是全天區間，但當天沒有任何上班或下班打卡，需確認是否另有出勤、補登或請假時數需調整。'
+        });
+      }
+    });
+  });
+
+  return alerts.sort((a, b) => Number(b.punchAt || b.startAt || 0) - Number(a.punchAt || a.startAt || 0)).slice(0, 200);
+}
+
 function getAdminLeaveState(employees = dbModule.loadEmployees()) {
   const leaveTypes = dbModule.loadLeaveTypes();
   const lookup = buildLeaveLookup(employees, leaveTypes);
@@ -1520,7 +1645,8 @@ function getAdminLeaveState(employees = dbModule.loadEmployees()) {
     leaveTypes,
     approvalRoutes: dbModule.loadLeaveApprovalRoutes(),
     requests: allRequests,
-    pendingAdmin: allRequests.filter((request) => request.status === 'pending_admin')
+    pendingAdmin: allRequests.filter((request) => request.status === 'pending_admin'),
+    alerts: buildLeaveAttendanceAlerts({ employees })
   };
 }
 
@@ -1753,6 +1879,23 @@ function buildOvertimeRequestsCsv(rows = []) {
     { label: '主管', value: (row) => `${row.supervisorId || ''} ${row.supervisorName || ''}`.trim() },
     { label: '原因', value: 'reason' },
     { label: '建立時間', value: 'createdText' }
+  ]);
+}
+
+function buildLeaveAlertsCsv(rows = []) {
+  return buildCsvFromColumns(rows, [
+    { label: '警示類型', value: 'alertText' },
+    { label: '嚴重度', value: 'severity' },
+    { label: '員工工號', value: 'employeeId' },
+    { label: '員工姓名', value: 'employeeName' },
+    { label: '部門', value: 'department' },
+    { label: '假別', value: 'leaveTypeName' },
+    { label: '請假開始', value: 'startText' },
+    { label: '請假結束', value: 'endText' },
+    { label: '請假時數', value: 'durationHours' },
+    { label: '打卡紀錄', value: 'punchText' },
+    { label: '請假單號', value: 'requestId' },
+    { label: '說明', value: 'detail' }
   ]);
 }
 
@@ -2743,6 +2886,21 @@ function requireAdminPermission(...permissionCodes) {
       return;
     }
     if (permissionCodes.length && !permissionCodes.every((code) => hasAdminPermission(session, code))) {
+      response.status(403).json({ success: false, error: withSupportCode('P232', '這個管理者帳號尚未被授權使用此功能。') });
+      return;
+    }
+    next();
+  };
+}
+
+function requireAnyAdminPermission(...permissionCodes) {
+  return (request, response, next) => {
+    const session = request.browserSession;
+    if (!session || session.role !== 'admin') {
+      response.status(403).json({ success: false, error: withSupportCode('P231', '目前登入角色沒有這個操作權限。') });
+      return;
+    }
+    if (permissionCodes.length && !hasAnyAdminPermission(session, permissionCodes)) {
       response.status(403).json({ success: false, error: withSupportCode('P232', '這個管理者帳號尚未被授權使用此功能。') });
       return;
     }
@@ -4575,6 +4733,34 @@ function attachBrowserRoutes(server) {
             templateId,
             customFieldIds: getAttendanceExportCustomFields()
           })
+        }
+      });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+  });
+
+  server.post('/api/browser/admin/leave-audit/export', requireBrowserSession, requireAnyAdminPermission('admin.leave.review', 'admin.leave.settings'), (request, response) => {
+    try {
+      const employees = dbModule.loadEmployees();
+      const leaveState = getAdminLeaveState(employees);
+      const today = new Date();
+      writeBrowserAuditLog(request, {
+        action: 'export',
+        target_type: 'leave_audit_alerts',
+        target_id: 'leave_attendance_audit',
+        summary: `匯出請假出勤查核，共 ${leaveState.alerts.length} 筆`,
+        after_data: {
+          record_count: leaveState.alerts.length
+        }
+      });
+
+      response.json({
+        success: true,
+        message: '請假出勤查核匯出內容已產生。',
+        data: {
+          fileName: buildExportFileName('請假出勤查核', today, today),
+          csvContent: buildLeaveAlertsCsv(leaveState.alerts)
         }
       });
     } catch (error) {
