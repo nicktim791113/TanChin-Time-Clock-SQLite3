@@ -207,6 +207,9 @@ const API_ROUTE_CATALOG = [
   { category: '外部 API', method: 'GET', path: '/api/records', auth: 'API Key', description: '查詢全部打卡紀錄' },
   { category: '外部 API', method: 'GET', path: '/api/records/range?start=YYYY-MM-DD&end=YYYY-MM-DD', auth: 'API Key', description: '依日期區間查詢打卡紀錄' },
   { category: '外部 API', method: 'GET', path: '/api/records/employee/:id', auth: 'API Key', description: '查詢單一員工的打卡紀錄' },
+  { category: '外部 API', method: 'GET', path: '/api/attendance/report?start=YYYY-MM-DD&end=YYYY-MM-DD', auth: 'API Key', description: '查詢考勤報表紀錄，包含打卡與核准請假' },
+  { category: '外部 API', method: 'GET', path: '/api/leave/requests?start=YYYY-MM-DD&end=YYYY-MM-DD', auth: 'API Key', description: '查詢請假申請紀錄' },
+  { category: '外部 API', method: 'GET', path: '/api/overtime/requests?start=YYYY-MM-DD&end=YYYY-MM-DD', auth: 'API Key', description: '查詢加班申請紀錄' },
   { category: '外部 API', method: 'POST', path: '/api/punch', auth: 'API Key', description: '外部裝置送出卡號打卡' },
 
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/health', auth: '公開', description: '查詢 Express 服務健康狀態摘要' },
@@ -255,6 +258,7 @@ const API_ROUTE_CATALOG = [
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/audit-archive-settings/save', auth: '開發人員', description: '儲存稽核封存設定' },
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/audit-archive/run', auth: '開發人員', description: '立即執行稽核封存' },
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/attendance-export-settings/save', auth: '開發人員', description: '儲存考勤報表匯出欄位設定' },
+  { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/external-api-settings/save', auth: '開發人員', description: '儲存外部 API 啟用狀態與 API Key' },
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/automation-log/clear', auth: '開發人員', description: '清空自動化日誌' },
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/impersonation/settings', auth: '開發人員', description: '啟用或停用開發人員身份切換' },
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/impersonation/start', auth: '開發人員', description: '切換到管理者或指定員工測試身份' },
@@ -2179,7 +2183,8 @@ function getDeveloperDatasets(session = {}) {
       subtitle: settings.subtitle,
       heroDescription: settings.heroDescription,
       externalApiEnabled: externalApiSettings.enabled,
-      externalApiKeyConfigured: externalApiSettings.keyConfigured
+      externalApiKeyConfigured: externalApiSettings.keyConfigured,
+      externalApiAuthMode: externalApiSettings.enabled ? 'api_key' : 'disabled'
     },
     employees: dbModule.loadEmployees().map(sanitizeEmployeeForProfile),
     accountAccess: buildAccountAccessState(),
@@ -3653,6 +3658,149 @@ async function executeAutomationTask(task) {
   return { notificationType, message, status };
 }
 
+function normalizeExternalApiListParam(value) {
+  const values = Array.isArray(value) ? value : [value];
+  return values
+    .flatMap((item) => String(item || '').split(','))
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function getExternalApiLimit(query = {}, defaultLimit = 300, maxLimit = 1000) {
+  const rawLimit = String(query.limit || '').trim().toLowerCase();
+  if (rawLimit === 'all' || rawLimit === 'none') return null;
+  const limit = Number(rawLimit || defaultLimit);
+  if (!Number.isFinite(limit) || limit <= 0) return defaultLimit;
+  return Math.min(Math.floor(limit), maxLimit);
+}
+
+function parseExternalApiDateRange(query = {}, { required = false } = {}) {
+  const startDate = String(query.start || query.startDate || '').trim();
+  const endDate = String(query.end || query.endDate || '').trim();
+
+  if (!startDate && !endDate) {
+    if (required) throw createHttpError('請提供 start 與 end 日期。', 400);
+    return { startDate: '', endDate: '', rangeStartMs: null, rangeEndMs: null };
+  }
+
+  if (!startDate || !endDate) {
+    throw createHttpError('日期區間需同時提供 start 與 end。', 400);
+  }
+
+  const rangeStart = new Date(`${startDate}T00:00:00`);
+  const rangeEnd = new Date(`${endDate}T23:59:59.999`);
+  if (Number.isNaN(rangeStart.getTime()) || Number.isNaN(rangeEnd.getTime())) {
+    throw createHttpError('日期格式不正確，請使用 YYYY-MM-DD。', 400);
+  }
+  if (rangeStart.getTime() > rangeEnd.getTime()) {
+    throw createHttpError('start 日期不能晚於 end 日期。', 400);
+  }
+
+  return {
+    startDate,
+    endDate,
+    rangeStartMs: rangeStart.getTime(),
+    rangeEndMs: rangeEnd.getTime()
+  };
+}
+
+function summarizeStatusCounts(records = []) {
+  return records.reduce((summary, record) => {
+    const status = String(record.status || 'unknown').trim() || 'unknown';
+    summary[status] = (summary[status] || 0) + 1;
+    return summary;
+  }, {});
+}
+
+function sendExternalApiError(response, error) {
+  response.status(error.statusCode || 500).json({
+    success: false,
+    error: error.message || '外部 API 查詢失敗。'
+  });
+}
+
+function buildExternalLeaveRequestResult(query = {}) {
+  const employeeId = String(query.employeeId || query.employee_id || '').trim();
+  const statuses = normalizeExternalApiListParam(query.status);
+  const limit = getExternalApiLimit(query);
+  const range = parseExternalApiDateRange(query);
+  const filters = {
+    limit,
+    maxLimit: 1000
+  };
+
+  if (employeeId) filters.employeeId = employeeId;
+  if (statuses.length === 1) filters.status = statuses[0];
+  if (statuses.length > 1) filters.status = statuses;
+  if (range.rangeStartMs !== null && range.rangeEndMs !== null) {
+    filters.overlapStartAt = range.rangeStartMs;
+    filters.overlapEndAt = range.rangeEndMs;
+  }
+
+  const employees = dbModule.loadEmployees();
+  const leaveTypes = dbModule.loadLeaveTypes();
+  const lookup = buildLeaveLookup(employees, leaveTypes);
+  const records = dbModule.queryLeaveRequests(filters)
+    .map((request) => formatLeaveRequestForDashboard(request, lookup));
+
+  return {
+    filters: {
+      employeeId,
+      status: statuses,
+      startDate: range.startDate,
+      endDate: range.endDate,
+      limit: limit === null ? 'all' : limit
+    },
+    summary: {
+      recordCount: records.length,
+      statusCounts: summarizeStatusCounts(records)
+    },
+    records
+  };
+}
+
+function buildExternalOvertimeRequestResult(query = {}) {
+  const employeeId = String(query.employeeId || query.employee_id || '').trim();
+  const applicantId = String(query.applicantId || query.applicant_id || '').trim();
+  const statuses = normalizeExternalApiListParam(query.status);
+  const limit = getExternalApiLimit(query);
+  const range = parseExternalApiDateRange(query);
+  const filters = {
+    limit,
+    maxLimit: 1000
+  };
+
+  if (employeeId) filters.employeeId = employeeId;
+  if (applicantId) filters.applicantId = applicantId;
+  if (statuses.length === 1) filters.status = statuses[0];
+  if (statuses.length > 1) filters.status = statuses;
+  if (range.rangeStartMs !== null && range.rangeEndMs !== null) {
+    filters.overlapStartAt = range.rangeStartMs;
+    filters.overlapEndAt = range.rangeEndMs;
+  }
+
+  const employees = dbModule.loadEmployees();
+  const lookup = buildOvertimeLookup(employees);
+  const records = dbModule.queryOvertimeRequests(filters)
+    .map((request) => formatOvertimeRequestForDashboard(request, lookup));
+
+  return {
+    filters: {
+      employeeId,
+      applicantId,
+      status: statuses,
+      startDate: range.startDate,
+      endDate: range.endDate,
+      limit: limit === null ? 'all' : limit
+    },
+    summary: {
+      recordCount: records.length,
+      statusCounts: summarizeStatusCounts(records)
+    },
+    records
+  };
+}
+
 function attachExternalApiRoutes(server) {
   server.get('/api/employees', requireExternalApiAccess, (request, response) => {
     response.json({ success: true, data: dbModule.loadEmployees() });
@@ -3695,6 +3843,37 @@ function attachExternalApiRoutes(server) {
       .map(formatPunchRecord);
 
     response.json({ success: true, data: records });
+  });
+
+  server.get('/api/attendance/report', requireExternalApiAccess, (request, response) => {
+    try {
+      const range = parseExternalApiDateRange(request.query, { required: true });
+      const employeeId = String(request.query.employeeId || request.query.employee_id || '').trim();
+      const report = buildAdminAttendanceReport({
+        employeeId,
+        startDate: range.startDate,
+        endDate: range.endDate
+      });
+      response.json({ success: true, data: report });
+    } catch (error) {
+      sendExternalApiError(response, error);
+    }
+  });
+
+  server.get('/api/leave/requests', requireExternalApiAccess, (request, response) => {
+    try {
+      response.json({ success: true, data: buildExternalLeaveRequestResult(request.query) });
+    } catch (error) {
+      sendExternalApiError(response, error);
+    }
+  });
+
+  server.get('/api/overtime/requests', requireExternalApiAccess, (request, response) => {
+    try {
+      response.json({ success: true, data: buildExternalOvertimeRequestResult(request.query) });
+    } catch (error) {
+      sendExternalApiError(response, error);
+    }
   });
 
   server.post('/api/punch', requireExternalApiAccess, (request, response) => {
@@ -5475,6 +5654,53 @@ function attachBrowserRoutes(server) {
       sessionToken: request.browserSession.token
     });
     response.json({ success: true, message: '考勤報表匯出欄位設定已更新。' });
+  });
+
+  server.post('/api/browser/developer/external-api-settings/save', requireBrowserSession, requireBrowserRole('developer'), (request, response) => {
+    const previousSettings = getExternalApiAccessSettings();
+    const enabled = normalizeBoolean(request.body?.externalApiEnabled);
+    const submittedApiKey = String(request.body?.externalApiKey || '').trim();
+    const clearApiKey = normalizeBoolean(request.body?.clearApiKey);
+    const nextApiKey = submittedApiKey || (clearApiKey ? '' : previousSettings.apiKey || '');
+
+    if (enabled && !nextApiKey) {
+      response.status(400).json({ success: false, error: '啟用外部 API 前，請先設定 API Key。' });
+      return;
+    }
+
+    dbModule.setSetting('externalApiEnabled', enabled ? 'true' : 'false');
+    if (clearApiKey || submittedApiKey) {
+      dbModule.setSetting('externalApiKey', nextApiKey);
+    }
+
+    const nextSettings = getExternalApiAccessSettings();
+    writeBrowserAuditLog(request, {
+      action: 'update',
+      target_type: 'setting',
+      target_id: 'externalApiSettings',
+      summary: `外部 API 已${nextSettings.enabled ? '啟用' : '停用'}，API Key ${nextSettings.keyConfigured ? '已設定' : '未設定'}`,
+      before_data: {
+        enabled: previousSettings.enabled,
+        keyConfigured: previousSettings.keyConfigured
+      },
+      after_data: {
+        enabled: nextSettings.enabled,
+        keyConfigured: nextSettings.keyConfigured
+      }
+    });
+    notifyDesktop('externalApiSettings', {
+      origin: 'browser',
+      sessionToken: request.browserSession.token
+    });
+    response.json({
+      success: true,
+      message: `外部 API 已${nextSettings.enabled ? '啟用' : '停用'}。`,
+      data: {
+        externalApiEnabled: nextSettings.enabled,
+        externalApiKeyConfigured: nextSettings.keyConfigured,
+        externalApiAuthMode: nextSettings.enabled ? 'api_key' : 'disabled'
+      }
+    });
   });
 
   server.post('/api/browser/developer/automation-log/clear', requireBrowserSession, requireBrowserRole('developer'), (request, response) => {

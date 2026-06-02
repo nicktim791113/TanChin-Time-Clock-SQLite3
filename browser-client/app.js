@@ -870,6 +870,7 @@ function getRealtimeSyncLabel(type) {
     if (type === "systemPassword") return "系統密碼";
     if (type === "automationExportDirectory") return "自動化匯出資料夾";
     if (type === "attendanceExportSettings") return "考勤報表匯出欄位設定";
+    if (type === "externalApiSettings") return "外部 API 設定";
     return type;
 }
 
@@ -890,7 +891,7 @@ async function handleRealtimeSyncMessage(payload) {
         "themeSchedules",
         "customThemes"
     ]);
-    const developerSyncTypes = new Set(["automationTasks", "automationLog", "systemPassword", "automationExportDirectory", "databaseBackup", "systemHealth", "attendanceExportSettings", "displaySettings"]);
+    const developerSyncTypes = new Set(["automationTasks", "automationLog", "systemPassword", "automationExportDirectory", "databaseBackup", "systemHealth", "attendanceExportSettings", "externalApiSettings", "displaySettings"]);
     if (!state.dashboard) return;
     if (payload.origin === "browser" && payload.sessionToken && payload.sessionToken === state.token) return;
 
@@ -4129,6 +4130,21 @@ async function handleDashboardSubmit(event) {
             }
             return saveAndReload("/api/browser/developer/attendance-export-settings/save", { customFields }, "考勤報表匯出欄位設定已更新。");
         }
+        if (formId === "external-api-settings-form") {
+            const values = Object.fromEntries(new FormData(form).entries());
+            const result = await requestJson("/api/browser/developer/external-api-settings/save", {
+                method: "POST",
+                body: {
+                    externalApiEnabled: values.externalApiEnabled === "true",
+                    externalApiKey: values.externalApiKey?.trim() || "",
+                    clearApiKey: values.clearApiKey === "true"
+                },
+                auth: true
+            });
+            form.reset();
+            await reloadDashboard(result.message || "外部 API 設定已更新。");
+            return;
+        }
         if (formId === "system-password-form") {
             const values = Object.fromEntries(new FormData(form).entries());
             await saveAndReload("/api/browser/developer/change-system-password", values, "系統密碼已更新。");
@@ -4447,6 +4463,7 @@ renderDeveloperStatusSection = function renderDeveloperStatusSectionOverride(dat
                 ])}
             </article>
 
+            ${renderExternalApiSettingsPanel(datasets)}
             ${renderApiCatalogTables(datasets.apiCatalog || [])}
         </div>
     `;
@@ -5836,6 +5853,7 @@ const SAVE_FEEDBACK_FORM_IDS = new Set([
     "custom-theme-form",
     "automation-form",
     "attendance-export-settings-form",
+    "external-api-settings-form",
     "automation-export-directory-form",
     "system-password-form"
 ]);
@@ -6713,6 +6731,7 @@ getRealtimeSyncLabel = function getRealtimeSyncLabelAuditOverride(type) {
     if (type === "systemPassword") return "系統密碼";
     if (type === "automationExportDirectory") return "自動化匯出資料夾";
     if (type === "attendanceExportSettings") return "考勤匯出設定";
+    if (type === "externalApiSettings") return "外部 API 設定";
     return type;
 };
 
@@ -6743,6 +6762,7 @@ handleRealtimeSyncMessage = async function handleRealtimeSyncMessageAuditOverrid
         "databaseBackup",
         "systemHealth",
         "attendanceExportSettings",
+        "externalApiSettings",
         "displaySettings"
     ]);
     if (!state.dashboard) return;
@@ -6907,6 +6927,64 @@ renderDeveloperLogsSection = function renderDeveloperLogsSectionOverride(dataset
     `;
 };
 
+function renderExternalApiSettingsPanel(datasets = {}) {
+    const health = datasets.systemHealth || {};
+    const settings = datasets.settings || {};
+    const enabled = Boolean(settings.externalApiEnabled ?? health.externalApiEnabled);
+    const keyConfigured = Boolean(settings.externalApiKeyConfigured ?? health.externalApiKeyConfigured);
+    const authMode = settings.externalApiAuthMode || health.externalApiAuthMode || (enabled ? "api_key" : "disabled");
+    const apiCatalog = Array.isArray(datasets.apiCatalog) ? datasets.apiCatalog : [];
+    const externalRoutes = apiCatalog.filter((route) => route.category === "外部 API");
+    const routeSummary = externalRoutes.length
+        ? externalRoutes.map((route) => `${route.method} ${route.path}`).join(" / ")
+        : "尚未登錄外部 API";
+
+    return `
+        <article class="sub-panel">
+            <div class="list-toolbar">
+                <div>
+                    <p class="sub-kicker">外部整合</p>
+                    <h3>外部 API 保護設定</h3>
+                </div>
+                <div class="badge-row">
+                    ${renderBadge(enabled ? "外部 API 已啟用" : "外部 API 已停用", enabled ? "success" : "danger")}
+                    ${renderBadge(keyConfigured ? "API Key 已設定" : "API Key 未設定", keyConfigured ? "success" : "danger")}
+                </div>
+            </div>
+            <p class="helper-text">控制 <code>/api/employees</code>、<code>/api/records</code>、<code>/api/attendance/report</code>、<code>/api/leave/requests</code>、<code>/api/overtime/requests</code>、<code>/api/punch</code> 等外部 API 是否開放給 ERP 或外部裝置使用。</p>
+            ${buildKeyValueGrid([
+                { label: "驗證模式", value: authMode === "api_key" ? "API Key" : "停用" },
+                { label: "外部 API 數量", value: `${externalRoutes.length} 支` },
+                { label: "目前路由", value: routeSummary, mono: true }
+            ])}
+            <form id="external-api-settings-form" class="stack-form">
+                <div class="field-grid">
+                    <label class="field">
+                        <span>外部 API 狀態</span>
+                        <select name="externalApiEnabled">
+                            <option value="true" ${enabled ? "selected" : ""}>啟用</option>
+                            <option value="false" ${!enabled ? "selected" : ""}>停用</option>
+                        </select>
+                    </label>
+                    <label class="field">
+                        <span>API Key</span>
+                        <input name="externalApiKey" type="password" autocomplete="new-password" placeholder="${keyConfigured ? "留空沿用目前金鑰" : "請輸入 API Key 後再啟用"}">
+                    </label>
+                </div>
+                <label class="checkbox-label">
+                    <input type="checkbox" name="clearApiKey" value="true">
+                    <span>清除目前 API Key</span>
+                </label>
+                <div class="form-toolbar">
+                    <button class="primary-btn" type="submit">儲存外部 API 設定</button>
+                    <p class="helper-text">啟用時必須保留或輸入 API Key；停用時外部 API 會拒絕連線。</p>
+                </div>
+                <div class="inline-message" data-form-message-for="external-api-settings-form" aria-live="polite"></div>
+            </form>
+        </article>
+    `;
+}
+
 renderDeveloperStatusSection = function renderDeveloperStatusSectionAuditOverride(datasets) {
     const health = datasets.systemHealth || {};
     const latestLogText = health.lastAutomationLog
@@ -6977,6 +7055,7 @@ renderDeveloperStatusSection = function renderDeveloperStatusSectionAuditOverrid
                 ])}
             </article>
 
+            ${renderExternalApiSettingsPanel(datasets)}
             ${renderApiCatalogTables(datasets.apiCatalog || [])}
         </div>
     `;
@@ -10336,6 +10415,7 @@ const originalGetRealtimeSyncLabelWithAccountAccess = getRealtimeSyncLabel;
 getRealtimeSyncLabel = function getRealtimeSyncLabelAccountAccessOverride(type) {
     if (type === "accountAccess") return "帳號權限設定";
     if (type === "workspaceNavOrder") return "主功能頁籤排序";
+    if (type === "externalApiSettings") return "外部 API 設定";
     return originalGetRealtimeSyncLabelWithAccountAccess(type);
 };
 
