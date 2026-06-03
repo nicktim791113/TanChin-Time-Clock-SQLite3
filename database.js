@@ -59,6 +59,19 @@ function init(dbFilePath) {
     CREATE TABLE IF NOT EXISTS bell_history ( timestamp INTEGER PRIMARY KEY, scheduleId TEXT, time TEXT, sound TEXT );
     CREATE TABLE IF NOT EXISTS custom_sounds ( id TEXT PRIMARY KEY, name TEXT, path TEXT );
     CREATE TABLE IF NOT EXISTS settings ( key TEXT PRIMARY KEY, value TEXT );
+    CREATE TABLE IF NOT EXISTS external_api_keys (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      key_hash TEXT NOT NULL UNIQUE,
+      key_suffix TEXT,
+      permissions TEXT NOT NULL DEFAULT '[]',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      notes TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      last_used_at INTEGER,
+      last_used_ip TEXT
+    );
     CREATE TABLE IF NOT EXISTS account_access (
       employee_id TEXT PRIMARY KEY,
       allowed_roles TEXT NOT NULL DEFAULT '["employee"]',
@@ -216,6 +229,9 @@ function init(dbFilePath) {
     CREATE INDEX IF NOT EXISTS idx_audit_logs_target_type ON audit_logs (target_type);
     CREATE INDEX IF NOT EXISTS idx_audit_archives_created_at ON audit_archives (created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_audit_archives_month ON audit_archives (archive_month);
+    CREATE INDEX IF NOT EXISTS idx_external_api_keys_hash ON external_api_keys (key_hash);
+    CREATE INDEX IF NOT EXISTS idx_external_api_keys_enabled ON external_api_keys (enabled);
+    CREATE INDEX IF NOT EXISTS idx_external_api_keys_last_used_at ON external_api_keys (last_used_at DESC);
     CREATE INDEX IF NOT EXISTS idx_employee_devices_employee_id ON employee_devices (employee_id);
     CREATE INDEX IF NOT EXISTS idx_employee_devices_last_seen_at ON employee_devices (last_seen_at DESC);
     CREATE INDEX IF NOT EXISTS idx_leave_requests_employee_id ON leave_requests (employee_id);
@@ -1055,6 +1071,79 @@ function normalizeStringList(values = []) {
         .filter(Boolean))];
 }
 
+function mapExternalApiKeyRow(row = {}) {
+    return {
+        id: String(row.id || '').trim(),
+        name: String(row.name || '').trim(),
+        key_hash: String(row.key_hash || '').trim(),
+        keyHash: String(row.key_hash || '').trim(),
+        key_suffix: String(row.key_suffix || '').trim(),
+        keySuffix: String(row.key_suffix || '').trim(),
+        permissions: normalizeStringList(safeParseArray(row.permissions, [])),
+        enabled: row.enabled === 1,
+        notes: String(row.notes || '').trim(),
+        created_at: Number(row.created_at) || 0,
+        createdAt: Number(row.created_at) || 0,
+        updated_at: Number(row.updated_at) || 0,
+        updatedAt: Number(row.updated_at) || 0,
+        last_used_at: Number(row.last_used_at) || 0,
+        lastUsedAt: Number(row.last_used_at) || 0,
+        last_used_ip: String(row.last_used_ip || '').trim(),
+        lastUsedIp: String(row.last_used_ip || '').trim()
+    };
+}
+
+function normalizeExternalApiKeyForStorage(record = {}) {
+    const now = Date.now();
+    return {
+        id: String(record.id || record.keyId || `api_key_${now}`).trim(),
+        name: String(record.name || '').trim(),
+        key_hash: String(record.key_hash || record.keyHash || '').trim(),
+        key_suffix: String(record.key_suffix || record.keySuffix || '').trim(),
+        permissions: JSON.stringify(normalizeStringList(record.permissions)),
+        enabled: record.enabled === false || record.enabled === 0 || record.enabled === '0' || record.enabled === 'false' ? 0 : 1,
+        notes: String(record.notes || '').trim(),
+        created_at: Number(record.created_at || record.createdAt) || now,
+        updated_at: Number(record.updated_at || record.updatedAt) || now,
+        last_used_at: Number(record.last_used_at || record.lastUsedAt) || null,
+        last_used_ip: String(record.last_used_ip || record.lastUsedIp || '').trim()
+    };
+}
+
+const loadExternalApiKeys = () => all('SELECT * FROM external_api_keys ORDER BY created_at DESC').map(mapExternalApiKeyRow);
+const getExternalApiKeyById = (keyId) => {
+    const row = get('SELECT * FROM external_api_keys WHERE id = ?', String(keyId || '').trim());
+    return row ? mapExternalApiKeyRow(row) : null;
+};
+const getExternalApiKeyByHash = (keyHash) => {
+    const row = get('SELECT * FROM external_api_keys WHERE key_hash = ?', String(keyHash || '').trim());
+    return row ? mapExternalApiKeyRow(row) : null;
+};
+const saveExternalApiKey = (record = {}) => {
+    const normalized = normalizeExternalApiKeyForStorage(record);
+    if (!normalized.id || !normalized.name || !normalized.key_hash) {
+        throw new Error('外部 API Key 資料不完整，無法儲存。');
+    }
+    run(
+        `INSERT OR REPLACE INTO external_api_keys (
+            id, name, key_hash, key_suffix, permissions, enabled, notes,
+            created_at, updated_at, last_used_at, last_used_ip
+        ) VALUES (
+            @id, @name, @key_hash, @key_suffix, @permissions, @enabled, @notes,
+            @created_at, @updated_at, @last_used_at, @last_used_ip
+        )`,
+        normalized
+    );
+    return getExternalApiKeyById(normalized.id);
+};
+const deleteExternalApiKey = (keyId) => run('DELETE FROM external_api_keys WHERE id = ?', String(keyId || '').trim());
+const updateExternalApiKeyUsage = ({ keyId, usedAt = Date.now(), ipAddress = '' } = {}) => run(
+    'UPDATE external_api_keys SET last_used_at = ?, last_used_ip = ? WHERE id = ?',
+    Number(usedAt) || Date.now(),
+    String(ipAddress || '').trim(),
+    String(keyId || '').trim()
+);
+
 function mapAccountAccessRow(row = {}) {
     return {
         employee_id: String(row.employee_id || '').trim(),
@@ -1533,6 +1622,8 @@ module.exports = {
   addBellHistory, hasBellHistorySince, loadBellHistory, clearBellHistory,
   saveCustomSounds, loadCustomSounds,
   setSetting, getSetting,
+  loadExternalApiKeys, getExternalApiKeyById, getExternalApiKeyByHash,
+  saveExternalApiKey, deleteExternalApiKey, updateExternalApiKeyUsage,
   countAccountAccessRecords, loadAccountAccessRecords, getAccountAccessRecord,
   saveAccountAccessRecords, saveAccountAccessRecord, deleteAccountAccessByEmployee,
   loadWorkspaceNavOrderRecords, getWorkspaceNavOrderRecord,

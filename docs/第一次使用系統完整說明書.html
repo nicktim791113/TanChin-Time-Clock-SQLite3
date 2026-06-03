@@ -592,9 +592,12 @@
         <section id="api-erp">
           <h2>11. API 與 ERP 匯出</h2>
           <h3>API</h3>
-          <p>系統提供外部 API，可查詢員工、打卡紀錄、考勤報表、請假申請紀錄、加班申請紀錄，也可建立 API 打卡。這些 API 需要先由開發人員工作台啟用，並使用 API Key 保護。</p>
+          <p>系統提供外部 API，可查詢員工、打卡紀錄、考勤報表、請假申請紀錄、加班申請紀錄，也可建立 API 打卡。這些 API 需要先由開發人員工作台啟用，並使用多組 API Key 保護。</p>
           <ul>
             <li>開啟位置：開發者工作台 → 系統狀態 → API 目錄 → 外部 API 保護設定。</li>
+            <li>可替不同外部系統建立不同 API Key，例如 ERP 同步、薪資系統、外部打卡設備各用一組。</li>
+            <li>每組 Key 可個別開放員工名冊、出勤紀錄、請假資料、加班資料、外部打卡等範圍，停用或刪除後會立刻阻擋該組 Key。</li>
+            <li>工作台只顯示 Key 名稱、末 4 碼、權限範圍、最近使用時間與來源 IP；完整金鑰只在新增或更換時輸入，不會再次顯示。</li>
             <li>建議外部系統使用 <code>x-api-key</code> header 傳入 API Key，不要把金鑰放在網址中。</li>
             <li>常用資料端點：<code>GET /api/attendance/report?start=YYYY-MM-DD&amp;end=YYYY-MM-DD</code>、<code>GET /api/leave/requests</code>、<code>GET /api/overtime/requests</code>。</li>
             <li>ERP 同步可優先使用短路徑：<code>GET /api/leave-types</code>、<code>GET /api/leave-requests</code>、<code>GET /api/overtime-requests</code>。</li>

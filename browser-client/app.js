@@ -4135,14 +4135,30 @@ async function handleDashboardSubmit(event) {
             const result = await requestJson("/api/browser/developer/external-api-settings/save", {
                 method: "POST",
                 body: {
-                    externalApiEnabled: values.externalApiEnabled === "true",
-                    externalApiKey: values.externalApiKey?.trim() || "",
-                    clearApiKey: values.clearApiKey === "true"
+                    externalApiEnabled: values.externalApiEnabled === "true"
                 },
                 auth: true
             });
-            form.reset();
             await reloadDashboard(result.message || "外部 API 設定已更新。");
+            return;
+        }
+        if (formId === "external-api-key-form") {
+            const values = Object.fromEntries(new FormData(form).entries());
+            const permissions = Array.from(form.querySelectorAll('input[name="permissions"]:checked'))
+                .map((checkbox) => checkbox.value);
+            const result = await requestJson("/api/browser/developer/external-api-keys/save", {
+                method: "POST",
+                body: {
+                    keyId: values.keyId?.trim() || "",
+                    name: values.name?.trim() || "",
+                    apiKey: values.apiKey?.trim() || "",
+                    enabled: values.enabled === "true",
+                    permissions,
+                    notes: values.notes?.trim() || ""
+                },
+                auth: true
+            });
+            await reloadDashboard(result.message || "外部 API Key 已儲存。");
             return;
         }
         if (formId === "system-password-form") {
@@ -5854,6 +5870,7 @@ const SAVE_FEEDBACK_FORM_IDS = new Set([
     "automation-form",
     "attendance-export-settings-form",
     "external-api-settings-form",
+    "external-api-key-form",
     "automation-export-directory-form",
     "system-password-form"
 ]);
@@ -6928,20 +6945,124 @@ renderDeveloperLogsSection = function renderDeveloperLogsSectionOverride(dataset
 };
 
 function getExternalApiRouteGroup(route = {}) {
-    const path = String(route.path || "");
-    if (path.includes("/employees")) return "員工名冊";
-    if (path.includes("/attendance") || path.includes("/records")) return "出勤紀錄";
-    if (path.includes("/leave")) return "請假資料";
-    if (path.includes("/overtime")) return "加班資料";
-    if (path.includes("/punch")) return "外部打卡";
-    return "其他";
+    const permissionCode = getExternalApiPermissionCodeForRoute(route);
+    return getExternalApiPermissionLabel(permissionCode);
 }
 
-function renderExternalApiMermaidFlow({ enabled, keyConfigured, authMode, externalRoutes }) {
-    const routeGroups = ["員工名冊", "出勤紀錄", "請假資料", "加班資料", "外部打卡"]
-        .map((label) => {
-            const routes = externalRoutes.filter((route) => getExternalApiRouteGroup(route) === label);
-            return { label, routes };
+function getExternalApiPermissionDefinitions(datasets = {}) {
+    const settings = datasets.settings || {};
+    const permissions = Array.isArray(settings.externalApiPermissions) ? settings.externalApiPermissions : [];
+    if (permissions.length) {
+        return permissions.map((permission) => ({
+            code: String(permission.code || "").trim(),
+            label: String(permission.label || permission.code || "").trim(),
+            description: String(permission.description || "").trim(),
+            examples: Array.isArray(permission.examples) ? permission.examples : []
+        })).filter((permission) => permission.code);
+    }
+    return [
+        { code: "employees", label: "員工名冊", description: "查詢員工清單與單一員工資料", examples: ["GET /api/employees", "GET /api/employees/:id"] },
+        { code: "attendance", label: "出勤紀錄", description: "查詢打卡紀錄與考勤報表", examples: ["GET /api/records", "GET /api/attendance/report"] },
+        { code: "leave", label: "請假資料", description: "查詢假別與請假申請紀錄", examples: ["GET /api/leave-types", "GET /api/leave-requests"] },
+        { code: "overtime", label: "加班資料", description: "查詢加班申請紀錄", examples: ["GET /api/overtime-requests"] },
+        { code: "punch", label: "外部打卡", description: "允許外部裝置送出卡號打卡", examples: ["POST /api/punch"] }
+    ];
+}
+
+function getExternalApiPermissionLabel(code, permissions = getExternalApiPermissionDefinitions()) {
+    return permissions.find((permission) => permission.code === code)?.label || code || "其他";
+}
+
+function getExternalApiPermissionCodeForRoute(route = {}) {
+    const path = String(route.path || "").split("?")[0];
+    const method = String(route.method || "").toUpperCase();
+    if (method === "GET" && path.includes("/employees")) return "employees";
+    if (method === "GET" && (path.includes("/attendance") || path.includes("/records"))) return "attendance";
+    if (method === "GET" && path.includes("/leave")) return "leave";
+    if (method === "GET" && path.includes("/overtime")) return "overtime";
+    if (method === "POST" && path.includes("/punch")) return "punch";
+    return "";
+}
+
+function normalizeExternalApiPermissionCodes(values = [], permissions = getExternalApiPermissionDefinitions()) {
+    const allowed = new Set(permissions.map((permission) => permission.code));
+    return [...new Set((Array.isArray(values) ? values : String(values || "").split(","))
+        .map((value) => String(value || "").trim())
+        .filter((value) => allowed.has(value)))];
+}
+
+function renderExternalApiPermissionPills(codes = [], permissions = getExternalApiPermissionDefinitions()) {
+    const normalizedCodes = normalizeExternalApiPermissionCodes(codes, permissions);
+    if (!normalizedCodes.length) return `<span class="muted-text">未開放任何範圍</span>`;
+    return `
+        <div class="api-permission-pills">
+            ${normalizedCodes.map((code) => `<span class="api-permission-pill">${escapeHtml(getExternalApiPermissionLabel(code, permissions))}</span>`).join("")}
+        </div>
+    `;
+}
+
+function renderExternalApiPermissionCheckboxes(permissions = getExternalApiPermissionDefinitions(), selectedCodes = []) {
+    const selected = new Set(normalizeExternalApiPermissionCodes(selectedCodes, permissions));
+    return `
+        <div class="api-permission-grid">
+            ${permissions.map((permission) => `
+                <label class="api-permission-option">
+                    <input type="checkbox" name="permissions" value="${escapeHtml(permission.code)}" ${selected.has(permission.code) ? "checked" : ""}>
+                    <span>
+                        <strong>${escapeHtml(permission.label)}</strong>
+                        <small>${escapeHtml(permission.description || permission.examples.join("、"))}</small>
+                    </span>
+                </label>
+            `).join("")}
+        </div>
+    `;
+}
+
+function renderExternalApiKeyCards(keys = [], permissions = getExternalApiPermissionDefinitions()) {
+    if (!keys.length) {
+        return renderEmptyState("目前尚未建立外部 API Key。新增後，外部系統才能依權限呼叫資料。");
+    }
+    return `
+        <div class="api-key-list">
+            ${keys.map((key) => {
+                const permissionCodes = normalizeExternalApiPermissionCodes(key.permissions, permissions);
+                const suffix = key.keySuffix ? `****${key.keySuffix}` : "未記錄";
+                return `
+                    <section class="api-key-item">
+                        <div class="api-key-main">
+                            <div>
+                                <div class="api-key-title-row">
+                                    <strong>${escapeHtml(key.name || "未命名 Key")}</strong>
+                                    ${renderBadge(key.enabled ? "啟用" : "停用", key.enabled ? "success" : "danger")}
+                                </div>
+                                <p class="helper-text">Key 末 4 碼：<span class="mono-text">${escapeHtml(suffix)}</span></p>
+                            </div>
+                            <div class="inline-actions">
+                                <button class="mini-btn" type="button" data-action="edit-external-api-key" data-id="${escapeHtml(key.id)}">編輯</button>
+                                <button class="mini-btn danger-text" type="button" data-action="delete-external-api-key" data-id="${escapeHtml(key.id)}">刪除</button>
+                            </div>
+                        </div>
+                        ${renderExternalApiPermissionPills(permissionCodes, permissions)}
+                        <dl class="api-key-meta">
+                            <div><dt>建立時間</dt><dd>${escapeHtml(key.createdText || "-")}</dd></div>
+                            <div><dt>最近使用</dt><dd>${escapeHtml(key.lastUsedText || "尚未使用")}</dd></div>
+                            <div><dt>來源 IP</dt><dd>${escapeHtml(key.lastUsedIp || "未記錄")}</dd></div>
+                        </dl>
+                        ${key.notes ? `<p class="api-key-notes">${escapeHtml(key.notes)}</p>` : ""}
+                    </section>
+                `;
+            }).join("")}
+        </div>
+    `;
+}
+
+function renderExternalApiMermaidFlow({ enabled, keyConfigured, authMode, externalRoutes, keys = [], permissions = getExternalApiPermissionDefinitions() }) {
+    const enabledKeys = keys.filter((key) => key.enabled);
+    const routeGroups = permissions
+        .map((permission) => {
+            const routes = externalRoutes.filter((route) => getExternalApiPermissionCodeForRoute(route) === permission.code);
+            const keyCount = enabledKeys.filter((key) => normalizeExternalApiPermissionCodes(key.permissions, permissions).includes(permission.code)).length;
+            return { ...permission, routes, keyCount };
         })
         .filter((group) => group.routes.length);
     const authReady = enabled && keyConfigured;
@@ -6958,7 +7079,7 @@ function renderExternalApiMermaidFlow({ enabled, keyConfigured, authMode, extern
                 <div class="api-mermaid-node guard ${authReady ? "ready" : "blocked"}">
                     <span class="node-kicker">防護閘門</span>
                     <strong>${authMode === "api_key" ? "API Key 驗證" : "目前停用"}</strong>
-                    <small>${keyConfigured ? "金鑰已設定" : "尚未設定金鑰"}</small>
+                    <small>${keyConfigured ? `${enabledKeys.length} 組 Key 已啟用` : "尚未啟用任何 Key"}</small>
                 </div>
                 <div class="api-mermaid-arrow" aria-hidden="true">→</div>
                 <div class="api-mermaid-node service">
@@ -6972,6 +7093,7 @@ function renderExternalApiMermaidFlow({ enabled, keyConfigured, authMode, extern
                     <div class="api-mermaid-dataset">
                         <span class="dataset-label">${escapeHtml(group.label)}</span>
                         <strong>${group.routes.length} 支</strong>
+                        <small>${group.keyCount} 組 Key 可呼叫</small>
                         <code>${escapeHtml(group.routes.map((route) => route.path).join(" | "))}</code>
                     </div>
                 `).join("")}
@@ -6984,8 +7106,13 @@ function renderExternalApiSettingsPanel(datasets = {}) {
     const health = datasets.systemHealth || {};
     const settings = datasets.settings || {};
     const enabled = Boolean(settings.externalApiEnabled ?? health.externalApiEnabled);
-    const keyConfigured = Boolean(settings.externalApiKeyConfigured ?? health.externalApiKeyConfigured);
     const authMode = settings.externalApiAuthMode || health.externalApiAuthMode || (enabled ? "api_key" : "disabled");
+    const permissions = getExternalApiPermissionDefinitions(datasets);
+    const defaultPermissionCodes = permissions.map((permission) => permission.code);
+    const keys = Array.isArray(settings.externalApiKeys) ? settings.externalApiKeys : [];
+    const keyCount = Number(settings.externalApiKeyCount ?? health.externalApiKeyCount ?? keys.length) || keys.length;
+    const enabledKeyCount = Number(settings.externalApiEnabledKeyCount ?? health.externalApiEnabledKeyCount ?? keys.filter((key) => key.enabled).length) || 0;
+    const keyConfigured = enabledKeyCount > 0 || Boolean(settings.externalApiKeyConfigured ?? health.externalApiKeyConfigured);
     const apiCatalog = Array.isArray(datasets.apiCatalog) ? datasets.apiCatalog : [];
     const externalRoutes = apiCatalog.filter((route) => route.category === "外部 API");
 
@@ -6998,16 +7125,19 @@ function renderExternalApiSettingsPanel(datasets = {}) {
                 </div>
                 <div class="badge-row">
                     ${renderBadge(enabled ? "外部 API 已啟用" : "外部 API 已停用", enabled ? "success" : "danger")}
-                    ${renderBadge(keyConfigured ? "API Key 已設定" : "API Key 未設定", keyConfigured ? "success" : "danger")}
+                    ${renderBadge(`${enabledKeyCount} 組啟用 Key`, enabledKeyCount ? "success" : "danger")}
+                    ${renderBadge(`${keyCount} 組總 Key`, keyCount ? "info" : "")}
                 </div>
             </div>
-            <p class="helper-text">外部系統需帶 <code>x-api-key</code> 或 <code>Authorization: Bearer API_KEY</code>；停用時所有外部 API 會被拒絕。</p>
+            <p class="helper-text">外部系統需帶 <code>x-api-key</code> 或 <code>Authorization: Bearer API_KEY</code>；每組 Key 可各自設定能呼叫的資料範圍，完整金鑰只在建立或更換時輸入，不會回填顯示。</p>
             ${buildKeyValueGrid([
                 { label: "驗證模式", value: authMode === "api_key" ? "API Key" : "停用" },
                 { label: "外部 API 數量", value: `${externalRoutes.length} 支` },
-                { label: "串接狀態", value: enabled && keyConfigured ? "可供外部系統呼叫" : "尚未開放外部呼叫" }
+                { label: "Key 總數", value: `${keyCount} 組` },
+                { label: "啟用 Key", value: `${enabledKeyCount} 組` },
+                { label: "串接狀態", value: enabled && keyConfigured ? "可依各組 Key 權限呼叫" : "尚未開放外部呼叫" }
             ])}
-            ${renderExternalApiMermaidFlow({ enabled, keyConfigured, authMode, externalRoutes })}
+            ${renderExternalApiMermaidFlow({ enabled, keyConfigured, authMode, externalRoutes, keys, permissions })}
             <form id="external-api-settings-form" class="stack-form">
                 <div class="field-grid">
                     <label class="field">
@@ -7017,24 +7147,140 @@ function renderExternalApiSettingsPanel(datasets = {}) {
                             <option value="false" ${!enabled ? "selected" : ""}>停用</option>
                         </select>
                     </label>
-                    <label class="field">
-                        <span>API Key</span>
-                        <input name="externalApiKey" type="password" autocomplete="new-password" placeholder="${keyConfigured ? "留空沿用目前金鑰" : "請輸入 API Key 後再啟用"}">
-                    </label>
                 </div>
-                <label class="checkbox-label">
-                    <input type="checkbox" name="clearApiKey" value="true">
-                    <span>清除目前 API Key</span>
-                </label>
                 <div class="form-toolbar">
-                    <button class="primary-btn" type="submit">儲存外部 API 設定</button>
-                    <p class="helper-text">啟用時必須保留或輸入 API Key；停用時外部 API 會拒絕連線。</p>
+                    <button class="primary-btn" type="submit">儲存外部 API 總開關</button>
+                    <p class="helper-text">總開關停用時，即使 Key 存在也會拒絕所有外部 API。</p>
                 </div>
                 <div class="inline-message" data-form-message-for="external-api-settings-form" aria-live="polite"></div>
             </form>
+            <div class="api-key-admin-grid">
+                <form id="external-api-key-form" class="stack-form api-key-form">
+                    <input type="hidden" name="keyId" value="">
+                    <div class="list-toolbar compact">
+                        <div>
+                            <p class="sub-kicker">API Key</p>
+                            <h4 id="external-api-key-form-title">新增外部 API Key</h4>
+                        </div>
+                    </div>
+                    <div class="field-grid">
+                        <label class="field">
+                            <span>Key 名稱</span>
+                            <input name="name" type="text" placeholder="例如：ERP 出勤同步" required>
+                        </label>
+                        <label class="field">
+                            <span>狀態</span>
+                            <select name="enabled">
+                                <option value="true" selected>啟用</option>
+                                <option value="false">停用</option>
+                            </select>
+                        </label>
+                        <label class="field span-2">
+                            <span>API Key 內容</span>
+                            <input name="apiKey" type="password" autocomplete="new-password" placeholder="新增必填；編輯時留空代表沿用原 Key">
+                        </label>
+                    </div>
+                    <div class="field">
+                        <span>可呼叫範圍</span>
+                        ${renderExternalApiPermissionCheckboxes(permissions, defaultPermissionCodes)}
+                    </div>
+                    <label class="field">
+                        <span>備註</span>
+                        <textarea name="notes" rows="3" placeholder="例如：給 ERP 廠商使用，僅限讀取出勤與請假資料"></textarea>
+                    </label>
+                    <div class="form-toolbar">
+                        <button class="primary-btn" type="submit">儲存這組 Key</button>
+                        <button class="outline-btn" type="button" data-action="reset-external-api-key-form">清空 Key 表單</button>
+                    </div>
+                    <div class="inline-message" data-form-message-for="external-api-key-form" aria-live="polite"></div>
+                </form>
+                <section class="api-key-list-panel">
+                    <div class="list-toolbar compact">
+                        <div>
+                            <p class="sub-kicker">已建立 Key</p>
+                            <h4>外部 API Key 清單</h4>
+                        </div>
+                    </div>
+                    ${renderExternalApiKeyCards(keys, permissions)}
+                </section>
+            </div>
         </article>
     `;
 }
+
+function resetExternalApiKeyForm() {
+    const form = document.getElementById("external-api-key-form");
+    if (!form) return;
+    form.reset();
+    if (form.elements.keyId) form.elements.keyId.value = "";
+    const permissions = getExternalApiPermissionDefinitions(getDatasets());
+    const defaultCodes = new Set(permissions.map((permission) => permission.code));
+    form.querySelectorAll('input[name="permissions"]').forEach((checkbox) => {
+        checkbox.checked = defaultCodes.has(checkbox.value);
+    });
+    const title = document.getElementById("external-api-key-form-title");
+    if (title) title.textContent = "新增外部 API Key";
+    setFormMessage("external-api-key-form", "已切換為新增 Key。", "info", { toast: false });
+}
+
+function fillExternalApiKeyForm(keyId) {
+    const form = document.getElementById("external-api-key-form");
+    if (!form) return;
+    const settings = getDatasets().settings || {};
+    const permissions = getExternalApiPermissionDefinitions(getDatasets());
+    const key = (settings.externalApiKeys || []).find((item) => item.id === keyId);
+    if (!key) {
+        setFormMessage("external-api-key-form", "找不到指定的外部 API Key。", "error");
+        return;
+    }
+    if (form.elements.keyId) form.elements.keyId.value = key.id || "";
+    if (form.elements.name) form.elements.name.value = key.name || "";
+    if (form.elements.apiKey) form.elements.apiKey.value = "";
+    if (form.elements.enabled) form.elements.enabled.value = key.enabled ? "true" : "false";
+    if (form.elements.notes) form.elements.notes.value = key.notes || "";
+    const selected = new Set(normalizeExternalApiPermissionCodes(key.permissions, permissions));
+    form.querySelectorAll('input[name="permissions"]').forEach((checkbox) => {
+        checkbox.checked = selected.has(checkbox.value);
+    });
+    const title = document.getElementById("external-api-key-form-title");
+    if (title) title.textContent = `編輯外部 API Key：${key.name || key.id}`;
+    setFormMessage("external-api-key-form", "已載入 Key 設定；完整金鑰不會回填，留空即可沿用。", "info", { toast: false });
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+const originalHandleDashboardClickWithExternalApiKeys = handleDashboardClick;
+handleDashboardClick = async function handleDashboardClickExternalApiKeysOverride(event) {
+    const actionTarget = event.target?.closest?.("[data-action]");
+    if (!actionTarget) return originalHandleDashboardClickWithExternalApiKeys(event);
+    const action = actionTarget.dataset.action || "";
+
+    try {
+        if (action === "reset-external-api-key-form") {
+            resetExternalApiKeyForm();
+            return;
+        }
+        if (action === "edit-external-api-key") {
+            fillExternalApiKeyForm(actionTarget.dataset.id || "");
+            return;
+        }
+        if (action === "delete-external-api-key") {
+            if (!window.confirm("確定要刪除這組外部 API Key 嗎？刪除後外部系統會立刻無法用這組 Key 呼叫。")) return;
+            const result = await requestJson("/api/browser/developer/external-api-keys/delete", {
+                method: "POST",
+                body: { keyId: actionTarget.dataset.id || "" },
+                auth: true
+            });
+            await reloadDashboard(result.message || "外部 API Key 已刪除。");
+            return;
+        }
+    } catch (error) {
+        setMessage(ui.dashboardMessage, error.message, "error");
+        setFormMessage("external-api-key-form", error.message, "error");
+        return;
+    }
+
+    return originalHandleDashboardClickWithExternalApiKeys(event);
+};
 
 renderDeveloperStatusSection = function renderDeveloperStatusSectionAuditOverride(datasets) {
     const health = datasets.systemHealth || {};

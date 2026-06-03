@@ -166,6 +166,40 @@ const SOURCE_LABELS = {
   api: '外部裝置',
   browser: '瀏覽器'
 };
+const EXTERNAL_API_PERMISSION_DEFINITIONS = [
+  {
+    code: 'employees',
+    label: '員工名冊',
+    description: '查詢員工清單與單一員工資料',
+    examples: ['GET /api/employees', 'GET /api/employees/:id']
+  },
+  {
+    code: 'attendance',
+    label: '出勤紀錄',
+    description: '查詢打卡紀錄與含核准請假的考勤報表',
+    examples: ['GET /api/records', 'GET /api/attendance/report']
+  },
+  {
+    code: 'leave',
+    label: '請假資料',
+    description: '查詢假別與請假申請紀錄',
+    examples: ['GET /api/leave-types', 'GET /api/leave-requests']
+  },
+  {
+    code: 'overtime',
+    label: '加班資料',
+    description: '查詢加班申請紀錄',
+    examples: ['GET /api/overtime-requests']
+  },
+  {
+    code: 'punch',
+    label: '外部打卡',
+    description: '允許外部裝置送出卡號打卡',
+    examples: ['POST /api/punch']
+  }
+];
+const EXTERNAL_API_PERMISSION_CODES = new Set(EXTERNAL_API_PERMISSION_DEFINITIONS.map((item) => item.code));
+const DEFAULT_EXTERNAL_API_PERMISSIONS = EXTERNAL_API_PERMISSION_DEFINITIONS.map((item) => item.code);
 const LEAVE_ATTENDANCE_STATUS_TEXT = '已核准請假';
 const LEAVE_ATTENDANCE_SOURCE_TEXT = '請假模組';
 const LEAVE_RECORD_KIND_TEXT = '請假';
@@ -261,7 +295,9 @@ const API_ROUTE_CATALOG = [
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/audit-archive-settings/save', auth: '開發人員', description: '儲存稽核封存設定' },
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/audit-archive/run', auth: '開發人員', description: '立即執行稽核封存' },
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/attendance-export-settings/save', auth: '開發人員', description: '儲存考勤報表匯出欄位設定' },
-  { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/external-api-settings/save', auth: '開發人員', description: '儲存外部 API 啟用狀態與 API Key' },
+  { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/external-api-settings/save', auth: '開發人員', description: '儲存外部 API 總開關狀態' },
+  { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/external-api-keys/save', auth: '開發人員', description: '新增或更新外部 API Key 與可用 API 範圍' },
+  { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/external-api-keys/delete', auth: '開發人員', description: '刪除外部 API Key' },
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/automation-log/clear', auth: '開發人員', description: '清空自動化日誌' },
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/impersonation/settings', auth: '開發人員', description: '啟用或停用開發人員身份切換' },
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/impersonation/start', auth: '開發人員', description: '切換到管理者或指定員工測試身份' },
@@ -628,12 +664,76 @@ function getAttendanceExportCustomFields() {
   );
 }
 
+function hashExternalApiKey(apiKey) {
+  return crypto.createHash('sha256').update(String(apiKey || '').trim()).digest('hex');
+}
+
+function getExternalApiKeySuffix(apiKey) {
+  const text = String(apiKey || '').trim();
+  return text ? text.slice(-4) : '';
+}
+
+function normalizeExternalApiPermissions(values = []) {
+  const rawValues = Array.isArray(values)
+    ? values
+    : String(values || '').split(',');
+  return [...new Set(rawValues
+    .map((value) => String(value || '').trim())
+    .filter((value) => EXTERNAL_API_PERMISSION_CODES.has(value)))];
+}
+
+function formatExternalApiKeyForDashboard(key = {}) {
+  return {
+    id: key.id,
+    name: key.name,
+    keySuffix: key.keySuffix || key.key_suffix || '',
+    permissions: normalizeExternalApiPermissions(key.permissions),
+    enabled: key.enabled === true,
+    notes: key.notes || '',
+    createdAt: key.createdAt || key.created_at || 0,
+    createdText: formatDateTimeText(key.createdAt || key.created_at),
+    updatedAt: key.updatedAt || key.updated_at || 0,
+    updatedText: formatDateTimeText(key.updatedAt || key.updated_at),
+    lastUsedAt: key.lastUsedAt || key.last_used_at || 0,
+    lastUsedText: key.lastUsedAt || key.last_used_at ? formatDateTimeText(key.lastUsedAt || key.last_used_at) : '尚未使用',
+    lastUsedIp: key.lastUsedIp || key.last_used_ip || ''
+  };
+}
+
+function ensureLegacyExternalApiKeyMigrated() {
+  const legacyApiKey = String(getSettingValue('externalApiKey', '') || '').trim();
+  if (!legacyApiKey) return;
+
+  const keyHash = hashExternalApiKey(legacyApiKey);
+  const existing = dbModule.getExternalApiKeyByHash(keyHash);
+  if (!existing) {
+    const now = Date.now();
+    dbModule.saveExternalApiKey({
+      id: `legacy_external_api_${now}`,
+      name: '舊版外部 API Key',
+      keyHash,
+      keySuffix: getExternalApiKeySuffix(legacyApiKey),
+      permissions: DEFAULT_EXTERNAL_API_PERMISSIONS,
+      enabled: true,
+      notes: '由舊版單一 API Key 自動轉入。',
+      createdAt: now,
+      updatedAt: now
+    });
+  }
+  dbModule.setSetting('externalApiKey', '');
+}
+
 function getExternalApiAccessSettings() {
-  const apiKey = String(getSettingValue('externalApiKey', '') || '').trim();
+  ensureLegacyExternalApiKeyMigrated();
+  const keys = dbModule.loadExternalApiKeys().map(formatExternalApiKeyForDashboard);
+  const enabledKeys = keys.filter((key) => key.enabled);
   return {
     enabled: normalizeBoolean(getSettingValue('externalApiEnabled', false)),
-    apiKey,
-    keyConfigured: Boolean(apiKey)
+    keys,
+    keyCount: keys.length,
+    enabledKeyCount: enabledKeys.length,
+    keyConfigured: enabledKeys.length > 0,
+    permissions: EXTERNAL_API_PERMISSION_DEFINITIONS
   };
 }
 
@@ -2241,6 +2341,8 @@ function getSystemHealthSnapshot() {
     databaseEmergencyBackupRecentCount: databaseBackupSettings.recentEmergencyBackups.length,
     externalApiEnabled: externalApiSettings.enabled,
     externalApiKeyConfigured: externalApiSettings.keyConfigured,
+    externalApiKeyCount: externalApiSettings.keyCount,
+    externalApiEnabledKeyCount: externalApiSettings.enabledKeyCount,
     externalApiAuthMode: externalApiSettings.enabled ? 'api_key' : 'disabled',
     apiCount: API_ROUTE_CATALOG.length,
     systemPasswordSet: Boolean(getSettingValue('systemPassword', DEFAULT_SYSTEM_PASSWORD)),
@@ -2339,7 +2441,11 @@ function getDeveloperDatasets(session = {}) {
       heroDescription: settings.heroDescription,
       externalApiEnabled: externalApiSettings.enabled,
       externalApiKeyConfigured: externalApiSettings.keyConfigured,
-      externalApiAuthMode: externalApiSettings.enabled ? 'api_key' : 'disabled'
+      externalApiAuthMode: externalApiSettings.enabled ? 'api_key' : 'disabled',
+      externalApiKeyCount: externalApiSettings.keyCount,
+      externalApiEnabledKeyCount: externalApiSettings.enabledKeyCount,
+      externalApiKeys: externalApiSettings.keys,
+      externalApiPermissions: externalApiSettings.permissions
     },
     employees: dbModule.loadEmployees().map(sanitizeEmployeeForProfile),
     accountAccess: buildAccountAccessState(),
@@ -2979,6 +3085,29 @@ function extractExternalApiKey(request) {
   return String(request.body?.apiKey || request.body?.api_key || '').trim();
 }
 
+function getExternalApiPermissionForRequest(request) {
+  const pathText = String(request.path || request.originalUrl || '').split('?')[0];
+  const method = String(request.method || '').toUpperCase();
+  if (method === 'GET' && (pathText === '/api/employees' || pathText.startsWith('/api/employees/'))) return 'employees';
+  if (method === 'GET' && (
+    pathText === '/api/records' ||
+    pathText === '/api/records/range' ||
+    pathText.startsWith('/api/records/employee/') ||
+    pathText === '/api/attendance/report'
+  )) return 'attendance';
+  if (method === 'GET' && (
+    pathText === '/api/leave-types' ||
+    pathText === '/api/leave-requests' ||
+    pathText === '/api/leave/requests'
+  )) return 'leave';
+  if (method === 'GET' && (
+    pathText === '/api/overtime-requests' ||
+    pathText === '/api/overtime/requests'
+  )) return 'overtime';
+  if (method === 'POST' && pathText === '/api/punch') return 'punch';
+  return '';
+}
+
 function requireExternalApiAccess(request, response, next) {
   const settings = getExternalApiAccessSettings();
   if (!settings.enabled) {
@@ -2992,11 +3121,33 @@ function requireExternalApiAccess(request, response, next) {
   }
 
   const providedKey = extractExternalApiKey(request);
-  if (!providedKey || providedKey !== settings.apiKey) {
+  const apiKeyRecord = providedKey
+    ? dbModule.getExternalApiKeyByHash(hashExternalApiKey(providedKey))
+    : null;
+  if (!providedKey || !apiKeyRecord) {
     response.setHeader('WWW-Authenticate', 'Bearer realm="TanChin External API"');
     response.status(401).json({ success: false, error: withSupportCode('P093', 'API 金鑰無效，或尚未提供 API 金鑰。') });
     return;
   }
+  if (!apiKeyRecord.enabled) {
+    response.status(403).json({ success: false, error: withSupportCode('P094', '這組 API Key 目前已停用。') });
+    return;
+  }
+
+  const requiredPermission = getExternalApiPermissionForRequest(request);
+  const permissions = normalizeExternalApiPermissions(apiKeyRecord.permissions);
+  if (requiredPermission && !permissions.includes(requiredPermission)) {
+    const permissionLabel = EXTERNAL_API_PERMISSION_DEFINITIONS.find((item) => item.code === requiredPermission)?.label || requiredPermission;
+    response.status(403).json({ success: false, error: withSupportCode('P095', `這組 API Key 未開放「${permissionLabel}」權限。`) });
+    return;
+  }
+
+  dbModule.updateExternalApiKeyUsage({
+    keyId: apiKeyRecord.id,
+    usedAt: Date.now(),
+    ipAddress: getRequestIpAddress(request)
+  });
+  request.externalApiKey = formatExternalApiKeyForDashboard(apiKeyRecord);
 
   next();
 }
@@ -5742,33 +5893,21 @@ function attachBrowserRoutes(server) {
   server.post('/api/browser/developer/external-api-settings/save', requireBrowserSession, requireBrowserRole('developer'), (request, response) => {
     const previousSettings = getExternalApiAccessSettings();
     const enabled = normalizeBoolean(request.body?.externalApiEnabled);
-    const submittedApiKey = String(request.body?.externalApiKey || '').trim();
-    const clearApiKey = normalizeBoolean(request.body?.clearApiKey);
-    const nextApiKey = submittedApiKey || (clearApiKey ? '' : previousSettings.apiKey || '');
-
-    if (enabled && !nextApiKey) {
-      response.status(400).json({ success: false, error: '啟用外部 API 前，請先設定 API Key。' });
-      return;
-    }
-
     dbModule.setSetting('externalApiEnabled', enabled ? 'true' : 'false');
-    if (clearApiKey || submittedApiKey) {
-      dbModule.setSetting('externalApiKey', nextApiKey);
-    }
 
     const nextSettings = getExternalApiAccessSettings();
     writeBrowserAuditLog(request, {
       action: 'update',
       target_type: 'setting',
       target_id: 'externalApiSettings',
-      summary: `外部 API 已${nextSettings.enabled ? '啟用' : '停用'}，API Key ${nextSettings.keyConfigured ? '已設定' : '未設定'}`,
+      summary: `外部 API 已${nextSettings.enabled ? '啟用' : '停用'}，啟用 Key ${nextSettings.enabledKeyCount} 組`,
       before_data: {
         enabled: previousSettings.enabled,
-        keyConfigured: previousSettings.keyConfigured
+        enabledKeyCount: previousSettings.enabledKeyCount
       },
       after_data: {
         enabled: nextSettings.enabled,
-        keyConfigured: nextSettings.keyConfigured
+        enabledKeyCount: nextSettings.enabledKeyCount
       }
     });
     notifyDesktop('externalApiSettings', {
@@ -5781,9 +5920,104 @@ function attachBrowserRoutes(server) {
       data: {
         externalApiEnabled: nextSettings.enabled,
         externalApiKeyConfigured: nextSettings.keyConfigured,
-        externalApiAuthMode: nextSettings.enabled ? 'api_key' : 'disabled'
+        externalApiAuthMode: nextSettings.enabled ? 'api_key' : 'disabled',
+        externalApiKeyCount: nextSettings.keyCount,
+        externalApiEnabledKeyCount: nextSettings.enabledKeyCount
       }
     });
+  });
+
+  server.post('/api/browser/developer/external-api-keys/save', requireBrowserSession, requireBrowserRole('developer'), (request, response) => {
+    try {
+      const keyId = String(request.body?.keyId || request.body?.id || '').trim();
+      const existing = keyId ? dbModule.getExternalApiKeyById(keyId) : null;
+      if (keyId && !existing) throw createHttpError('找不到指定的外部 API Key。', 404);
+      const name = String(request.body?.name || existing?.name || '').trim();
+      const submittedApiKey = String(request.body?.apiKey || request.body?.externalApiKey || '').trim();
+      const permissions = normalizeExternalApiPermissions(request.body?.permissions);
+      const enabled = request.body?.enabled === false || request.body?.enabled === 0 || request.body?.enabled === '0' || request.body?.enabled === 'false' ? false : true;
+      const notes = String(request.body?.notes || '').trim();
+      if (!name) throw createHttpError('請輸入 API Key 名稱。', 400);
+      if (!permissions.length) throw createHttpError('請至少選擇一個可呼叫的外部 API 範圍。', 400);
+      if (!existing && !submittedApiKey) throw createHttpError('新增 API Key 時請輸入金鑰內容。', 400);
+
+      const now = Date.now();
+      const keyHash = submittedApiKey ? hashExternalApiKey(submittedApiKey) : existing.keyHash;
+      const duplicate = dbModule.getExternalApiKeyByHash(keyHash);
+      if (duplicate && duplicate.id !== (existing?.id || keyId)) {
+        throw createHttpError('這組 API Key 已存在，請改用另一組金鑰。', 409);
+      }
+
+      const savedKey = dbModule.saveExternalApiKey({
+        id: existing?.id || `external_api_${now}_${crypto.randomBytes(4).toString('hex')}`,
+        name,
+        keyHash,
+        keySuffix: submittedApiKey ? getExternalApiKeySuffix(submittedApiKey) : existing.keySuffix,
+        permissions,
+        enabled,
+        notes,
+        createdAt: existing?.createdAt || now,
+        updatedAt: now,
+        lastUsedAt: existing?.lastUsedAt || 0,
+        lastUsedIp: existing?.lastUsedIp || ''
+      });
+      const formattedKey = formatExternalApiKeyForDashboard(savedKey);
+
+      writeBrowserAuditLog(request, {
+        action: existing ? 'update' : 'create',
+        target_type: 'external_api_key',
+        target_id: formattedKey.id,
+        summary: `${existing ? '更新' : '新增'}外部 API Key：${formattedKey.name}`,
+        before_data: existing ? {
+          name: existing.name,
+          keySuffix: existing.keySuffix,
+          permissions: existing.permissions,
+          enabled: existing.enabled,
+          notes: existing.notes
+        } : null,
+        after_data: {
+          name: formattedKey.name,
+          keySuffix: formattedKey.keySuffix,
+          permissions: formattedKey.permissions,
+          enabled: formattedKey.enabled,
+          notes: formattedKey.notes
+        }
+      });
+      notifyDesktop('externalApiSettings', getBrowserSyncMeta(request));
+      response.json({
+        success: true,
+        message: existing ? '外部 API Key 已更新。' : '外部 API Key 已新增，完整金鑰不會再次顯示。',
+        data: formattedKey
+      });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+  });
+
+  server.post('/api/browser/developer/external-api-keys/delete', requireBrowserSession, requireBrowserRole('developer'), (request, response) => {
+    try {
+      const keyId = String(request.body?.keyId || request.body?.id || '').trim();
+      const existing = dbModule.getExternalApiKeyById(keyId);
+      if (!existing) throw createHttpError('找不到指定的外部 API Key。', 404);
+      dbModule.deleteExternalApiKey(keyId);
+      writeBrowserAuditLog(request, {
+        action: 'delete',
+        target_type: 'external_api_key',
+        target_id: keyId,
+        summary: `刪除外部 API Key：${existing.name}`,
+        before_data: {
+          name: existing.name,
+          keySuffix: existing.keySuffix,
+          permissions: existing.permissions,
+          enabled: existing.enabled,
+          notes: existing.notes
+        }
+      });
+      notifyDesktop('externalApiSettings', getBrowserSyncMeta(request));
+      response.json({ success: true, message: '外部 API Key 已刪除。' });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
   });
 
   server.post('/api/browser/developer/automation-log/clear', requireBrowserSession, requireBrowserRole('developer'), (request, response) => {
