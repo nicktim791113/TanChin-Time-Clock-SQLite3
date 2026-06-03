@@ -6927,6 +6927,59 @@ renderDeveloperLogsSection = function renderDeveloperLogsSectionOverride(dataset
     `;
 };
 
+function getExternalApiRouteGroup(route = {}) {
+    const path = String(route.path || "");
+    if (path.includes("/employees")) return "員工名冊";
+    if (path.includes("/attendance") || path.includes("/records")) return "出勤紀錄";
+    if (path.includes("/leave")) return "請假資料";
+    if (path.includes("/overtime")) return "加班資料";
+    if (path.includes("/punch")) return "外部打卡";
+    return "其他";
+}
+
+function renderExternalApiMermaidFlow({ enabled, keyConfigured, authMode, externalRoutes }) {
+    const routeGroups = ["員工名冊", "出勤紀錄", "請假資料", "加班資料", "外部打卡"]
+        .map((label) => {
+            const routes = externalRoutes.filter((route) => getExternalApiRouteGroup(route) === label);
+            return { label, routes };
+        })
+        .filter((group) => group.routes.length);
+    const authReady = enabled && keyConfigured;
+
+    return `
+        <div class="api-mermaid-board" aria-label="外部 API 串接流程">
+            <div class="api-mermaid-flow">
+                <div class="api-mermaid-node source">
+                    <span class="node-kicker">外部來源</span>
+                    <strong>ERP / 外部裝置</strong>
+                    <small>透過 HTTP 呼叫</small>
+                </div>
+                <div class="api-mermaid-arrow" aria-hidden="true">→</div>
+                <div class="api-mermaid-node guard ${authReady ? "ready" : "blocked"}">
+                    <span class="node-kicker">防護閘門</span>
+                    <strong>${authMode === "api_key" ? "API Key 驗證" : "目前停用"}</strong>
+                    <small>${keyConfigured ? "金鑰已設定" : "尚未設定金鑰"}</small>
+                </div>
+                <div class="api-mermaid-arrow" aria-hidden="true">→</div>
+                <div class="api-mermaid-node service">
+                    <span class="node-kicker">Time Clock</span>
+                    <strong>${externalRoutes.length} 支外部 API</strong>
+                    <small>${enabled ? "可依權限回應資料" : "目前拒絕外部請求"}</small>
+                </div>
+            </div>
+            <div class="api-mermaid-datasets">
+                ${routeGroups.map((group) => `
+                    <div class="api-mermaid-dataset">
+                        <span class="dataset-label">${escapeHtml(group.label)}</span>
+                        <strong>${group.routes.length} 支</strong>
+                        <code>${escapeHtml(group.routes.map((route) => route.path).join(" | "))}</code>
+                    </div>
+                `).join("")}
+            </div>
+        </div>
+    `;
+}
+
 function renderExternalApiSettingsPanel(datasets = {}) {
     const health = datasets.systemHealth || {};
     const settings = datasets.settings || {};
@@ -6935,9 +6988,6 @@ function renderExternalApiSettingsPanel(datasets = {}) {
     const authMode = settings.externalApiAuthMode || health.externalApiAuthMode || (enabled ? "api_key" : "disabled");
     const apiCatalog = Array.isArray(datasets.apiCatalog) ? datasets.apiCatalog : [];
     const externalRoutes = apiCatalog.filter((route) => route.category === "外部 API");
-    const routeSummary = externalRoutes.length
-        ? externalRoutes.map((route) => `${route.method} ${route.path}`).join(" / ")
-        : "尚未登錄外部 API";
 
     return `
         <article class="sub-panel">
@@ -6951,12 +7001,13 @@ function renderExternalApiSettingsPanel(datasets = {}) {
                     ${renderBadge(keyConfigured ? "API Key 已設定" : "API Key 未設定", keyConfigured ? "success" : "danger")}
                 </div>
             </div>
-            <p class="helper-text">控制 <code>/api/employees</code>、<code>/api/records</code>、<code>/api/attendance/report</code>、<code>/api/leave/requests</code>、<code>/api/overtime/requests</code>、<code>/api/punch</code> 等外部 API 是否開放給 ERP 或外部裝置使用。</p>
+            <p class="helper-text">外部系統需帶 <code>x-api-key</code> 或 <code>Authorization: Bearer API_KEY</code>；停用時所有外部 API 會被拒絕。</p>
             ${buildKeyValueGrid([
                 { label: "驗證模式", value: authMode === "api_key" ? "API Key" : "停用" },
                 { label: "外部 API 數量", value: `${externalRoutes.length} 支` },
-                { label: "目前路由", value: routeSummary, mono: true }
+                { label: "串接狀態", value: enabled && keyConfigured ? "可供外部系統呼叫" : "尚未開放外部呼叫" }
             ])}
+            ${renderExternalApiMermaidFlow({ enabled, keyConfigured, authMode, externalRoutes })}
             <form id="external-api-settings-form" class="stack-form">
                 <div class="field-grid">
                     <label class="field">

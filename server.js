@@ -208,9 +208,12 @@ const API_ROUTE_CATALOG = [
   { category: '外部 API', method: 'GET', path: '/api/records/range?start=YYYY-MM-DD&end=YYYY-MM-DD', auth: 'API Key', description: '依日期區間查詢打卡紀錄' },
   { category: '外部 API', method: 'GET', path: '/api/records/employee/:id', auth: 'API Key', description: '查詢單一員工的打卡紀錄' },
   { category: '外部 API', method: 'GET', path: '/api/attendance/report?start=YYYY-MM-DD&end=YYYY-MM-DD', auth: 'API Key', description: '查詢考勤報表紀錄，包含打卡與核准請假' },
-  { category: '外部 API', method: 'GET', path: '/api/leave/requests?start=YYYY-MM-DD&end=YYYY-MM-DD', auth: 'API Key', description: '查詢請假申請紀錄' },
-  { category: '外部 API', method: 'GET', path: '/api/overtime/requests?start=YYYY-MM-DD&end=YYYY-MM-DD', auth: 'API Key', description: '查詢加班申請紀錄' },
   { category: '外部 API', method: 'POST', path: '/api/punch', auth: 'API Key', description: '外部裝置送出卡號打卡' },
+  { category: '外部 API', method: 'GET', path: '/api/leave-types', auth: 'API Key', description: '查詢請假假別' },
+  { category: '外部 API', method: 'GET', path: '/api/leave-requests?start=YYYY-MM-DD&end=YYYY-MM-DD&status=approved', auth: 'API Key', description: '依日期區間查詢請假申請' },
+  { category: '外部 API', method: 'GET', path: '/api/overtime-requests?start=YYYY-MM-DD&end=YYYY-MM-DD&status=approved', auth: 'API Key', description: '依日期區間查詢加班申請' },
+  { category: '外部 API', method: 'GET', path: '/api/leave/requests?start=YYYY-MM-DD&end=YYYY-MM-DD', auth: 'API Key', description: '查詢請假申請紀錄（相容路徑）' },
+  { category: '外部 API', method: 'GET', path: '/api/overtime/requests?start=YYYY-MM-DD&end=YYYY-MM-DD', auth: 'API Key', description: '查詢加班申請紀錄（相容路徑）' },
 
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/health', auth: '公開', description: '查詢 Express 服務健康狀態摘要' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/login', auth: '公開', description: '瀏覽器入口登入，取得 Session Token' },
@@ -1700,6 +1703,158 @@ function formatOvertimeRequestForDashboard(request, lookup = buildOvertimeLookup
     endText: formatDateTimeText(request.end_at),
     createdText: formatDateTimeText(request.created_at),
     supervisorDecidedText: formatDateTimeText(request.supervisor_decided_at)
+  };
+}
+
+function parseExternalApiDate(value, endOfDay = false) {
+  if (value === null || value === undefined || value === '') return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const date = new Date(`${text}T${endOfDay ? '23:59:59.999' : '00:00:00'}`);
+    return Number.isNaN(date.getTime()) ? null : date.getTime();
+  }
+  const numeric = Number(text);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? null : date.getTime();
+}
+
+function toExternalIso(timestamp) {
+  const numeric = Number(timestamp);
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  return new Date(numeric).toISOString();
+}
+
+function parseExternalApiDateRangeQuery(query = {}, { required = false } = {}) {
+  const startText = String(query.start || query.startDate || query.from || '').trim();
+  const endText = String(query.end || query.endDate || query.to || '').trim();
+
+  if (!startText && !endText) {
+    if (required) throw createHttpError('請提供 start 與 end 日期。', 400);
+    return { startDate: '', endDate: '', startAt: null, endAt: null };
+  }
+
+  if (!startText || !endText) {
+    throw createHttpError('日期區間需同時提供 start 與 end。', 400);
+  }
+
+  const startAt = parseExternalApiDate(startText, false);
+  const endAt = parseExternalApiDate(endText, true);
+  if (startAt === null || endAt === null) {
+    throw createHttpError('日期格式不正確，請使用 YYYY-MM-DD、ISO 時間或毫秒時間戳。', 400);
+  }
+  if (startAt > endAt) {
+    throw createHttpError('start 日期不能晚於 end 日期。', 400);
+  }
+
+  return { startDate: startText, endDate: endText, startAt, endAt };
+}
+
+function getExternalRequestContext(query = {}) {
+  const statusText = String(query.status || '').trim();
+  const statusValues = statusText.split(',').map((value) => value.trim()).filter(Boolean);
+  const range = parseExternalApiDateRangeQuery(query);
+  const limitText = String(query.limit || '').trim().toLowerCase();
+  const limit = limitText === 'all'
+    ? 'all'
+    : Math.max(1, Math.min(Number(query.limit) || 500, 1000));
+  const filters = {
+    limit,
+    maxLimit: 1000
+  };
+
+  if (statusValues.length) {
+    filters.status = statusValues.length > 1 ? statusValues : statusValues[0];
+  }
+  if (range.startAt !== null && range.endAt !== null) {
+    filters.overlapStartAt = range.startAt;
+    filters.overlapEndAt = range.endAt;
+  }
+  if (query.employeeId || query.employee_id) {
+    filters.employeeId = String(query.employeeId || query.employee_id).trim();
+  }
+  if (query.applicantId || query.applicant_id) {
+    filters.applicantId = String(query.applicantId || query.applicant_id).trim();
+  }
+
+  return {
+    filters,
+    meta: {
+      employeeId: filters.employeeId || '',
+      applicantId: filters.applicantId || '',
+      status: statusValues,
+      startDate: range.startDate,
+      endDate: range.endDate,
+      limit
+    }
+  };
+}
+
+function getExternalRequestFilters(query = {}) {
+  return getExternalRequestContext(query).filters;
+}
+
+function summarizeExternalStatusCounts(records = []) {
+  return records.reduce((summary, record) => {
+    const status = String(record.status || 'unknown').trim() || 'unknown';
+    summary[status] = (summary[status] || 0) + 1;
+    return summary;
+  }, {});
+}
+
+function sendExternalApiError(response, error) {
+  response.status(error.statusCode || 500).json({
+    success: false,
+    error: error.message || '外部 API 查詢失敗。'
+  });
+}
+
+function formatLeaveTypeForExternal(type) {
+  return {
+    ...type,
+    requiresAttachment: Number(type.requires_attachment) === 1,
+    deductsBalance: Number(type.deducts_balance) === 1,
+    paid: Number(type.paid) === 1,
+    enabled: Number(type.enabled) === 1,
+    displayOrder: Number(type.display_order) || 0
+  };
+}
+
+function formatLeaveRequestForExternal(request, lookup = buildLeaveLookup()) {
+  const formatted = formatLeaveRequestForDashboard(request, lookup);
+  return {
+    ...formatted,
+    externalId: request.id,
+    employeeNo: request.employee_id,
+    supervisorEmployeeNo: request.supervisor_id || '',
+    adminEmployeeNo: request.admin_decision_by || '',
+    startAtIso: toExternalIso(request.start_at),
+    endAtIso: toExternalIso(request.end_at),
+    createdAtIso: toExternalIso(request.created_at),
+    updatedAtIso: toExternalIso(request.updated_at),
+    supervisorDecidedAtIso: toExternalIso(request.supervisor_decided_at),
+    adminDecidedAtIso: toExternalIso(request.admin_decided_at),
+    withdrawnAtIso: toExternalIso(request.withdrawn_at),
+    cancelledAtIso: toExternalIso(request.cancelled_at)
+  };
+}
+
+function formatOvertimeRequestForExternal(request, lookup = buildOvertimeLookup()) {
+  const formatted = formatOvertimeRequestForDashboard(request, lookup);
+  return {
+    ...formatted,
+    externalId: request.id,
+    employeeNo: request.employee_id,
+    applicantEmployeeNo: request.applicant_id || '',
+    supervisorEmployeeNo: request.supervisor_id || '',
+    startAtIso: toExternalIso(request.start_at),
+    endAtIso: toExternalIso(request.end_at),
+    createdAtIso: toExternalIso(request.created_at),
+    updatedAtIso: toExternalIso(request.updated_at),
+    supervisorDecidedAtIso: toExternalIso(request.supervisor_decided_at),
+    withdrawnAtIso: toExternalIso(request.withdrawn_at),
+    cancelledAtIso: toExternalIso(request.cancelled_at)
   };
 }
 
@@ -3658,149 +3813,6 @@ async function executeAutomationTask(task) {
   return { notificationType, message, status };
 }
 
-function normalizeExternalApiListParam(value) {
-  const values = Array.isArray(value) ? value : [value];
-  return values
-    .flatMap((item) => String(item || '').split(','))
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function getExternalApiLimit(query = {}, defaultLimit = 300, maxLimit = 1000) {
-  const rawLimit = String(query.limit || '').trim().toLowerCase();
-  if (rawLimit === 'all' || rawLimit === 'none') return null;
-  const limit = Number(rawLimit || defaultLimit);
-  if (!Number.isFinite(limit) || limit <= 0) return defaultLimit;
-  return Math.min(Math.floor(limit), maxLimit);
-}
-
-function parseExternalApiDateRange(query = {}, { required = false } = {}) {
-  const startDate = String(query.start || query.startDate || '').trim();
-  const endDate = String(query.end || query.endDate || '').trim();
-
-  if (!startDate && !endDate) {
-    if (required) throw createHttpError('請提供 start 與 end 日期。', 400);
-    return { startDate: '', endDate: '', rangeStartMs: null, rangeEndMs: null };
-  }
-
-  if (!startDate || !endDate) {
-    throw createHttpError('日期區間需同時提供 start 與 end。', 400);
-  }
-
-  const rangeStart = new Date(`${startDate}T00:00:00`);
-  const rangeEnd = new Date(`${endDate}T23:59:59.999`);
-  if (Number.isNaN(rangeStart.getTime()) || Number.isNaN(rangeEnd.getTime())) {
-    throw createHttpError('日期格式不正確，請使用 YYYY-MM-DD。', 400);
-  }
-  if (rangeStart.getTime() > rangeEnd.getTime()) {
-    throw createHttpError('start 日期不能晚於 end 日期。', 400);
-  }
-
-  return {
-    startDate,
-    endDate,
-    rangeStartMs: rangeStart.getTime(),
-    rangeEndMs: rangeEnd.getTime()
-  };
-}
-
-function summarizeStatusCounts(records = []) {
-  return records.reduce((summary, record) => {
-    const status = String(record.status || 'unknown').trim() || 'unknown';
-    summary[status] = (summary[status] || 0) + 1;
-    return summary;
-  }, {});
-}
-
-function sendExternalApiError(response, error) {
-  response.status(error.statusCode || 500).json({
-    success: false,
-    error: error.message || '外部 API 查詢失敗。'
-  });
-}
-
-function buildExternalLeaveRequestResult(query = {}) {
-  const employeeId = String(query.employeeId || query.employee_id || '').trim();
-  const statuses = normalizeExternalApiListParam(query.status);
-  const limit = getExternalApiLimit(query);
-  const range = parseExternalApiDateRange(query);
-  const filters = {
-    limit,
-    maxLimit: 1000
-  };
-
-  if (employeeId) filters.employeeId = employeeId;
-  if (statuses.length === 1) filters.status = statuses[0];
-  if (statuses.length > 1) filters.status = statuses;
-  if (range.rangeStartMs !== null && range.rangeEndMs !== null) {
-    filters.overlapStartAt = range.rangeStartMs;
-    filters.overlapEndAt = range.rangeEndMs;
-  }
-
-  const employees = dbModule.loadEmployees();
-  const leaveTypes = dbModule.loadLeaveTypes();
-  const lookup = buildLeaveLookup(employees, leaveTypes);
-  const records = dbModule.queryLeaveRequests(filters)
-    .map((request) => formatLeaveRequestForDashboard(request, lookup));
-
-  return {
-    filters: {
-      employeeId,
-      status: statuses,
-      startDate: range.startDate,
-      endDate: range.endDate,
-      limit: limit === null ? 'all' : limit
-    },
-    summary: {
-      recordCount: records.length,
-      statusCounts: summarizeStatusCounts(records)
-    },
-    records
-  };
-}
-
-function buildExternalOvertimeRequestResult(query = {}) {
-  const employeeId = String(query.employeeId || query.employee_id || '').trim();
-  const applicantId = String(query.applicantId || query.applicant_id || '').trim();
-  const statuses = normalizeExternalApiListParam(query.status);
-  const limit = getExternalApiLimit(query);
-  const range = parseExternalApiDateRange(query);
-  const filters = {
-    limit,
-    maxLimit: 1000
-  };
-
-  if (employeeId) filters.employeeId = employeeId;
-  if (applicantId) filters.applicantId = applicantId;
-  if (statuses.length === 1) filters.status = statuses[0];
-  if (statuses.length > 1) filters.status = statuses;
-  if (range.rangeStartMs !== null && range.rangeEndMs !== null) {
-    filters.overlapStartAt = range.rangeStartMs;
-    filters.overlapEndAt = range.rangeEndMs;
-  }
-
-  const employees = dbModule.loadEmployees();
-  const lookup = buildOvertimeLookup(employees);
-  const records = dbModule.queryOvertimeRequests(filters)
-    .map((request) => formatOvertimeRequestForDashboard(request, lookup));
-
-  return {
-    filters: {
-      employeeId,
-      applicantId,
-      status: statuses,
-      startDate: range.startDate,
-      endDate: range.endDate,
-      limit: limit === null ? 'all' : limit
-    },
-    summary: {
-      recordCount: records.length,
-      statusCounts: summarizeStatusCounts(records)
-    },
-    records
-  };
-}
-
 function attachExternalApiRoutes(server) {
   server.get('/api/employees', requireExternalApiAccess, (request, response) => {
     response.json({ success: true, data: dbModule.loadEmployees() });
@@ -3847,7 +3859,7 @@ function attachExternalApiRoutes(server) {
 
   server.get('/api/attendance/report', requireExternalApiAccess, (request, response) => {
     try {
-      const range = parseExternalApiDateRange(request.query, { required: true });
+      const range = parseExternalApiDateRangeQuery(request.query, { required: true });
       const employeeId = String(request.query.employeeId || request.query.employee_id || '').trim();
       const report = buildAdminAttendanceReport({
         employeeId,
@@ -3860,9 +3872,63 @@ function attachExternalApiRoutes(server) {
     }
   });
 
+  server.get('/api/leave-types', requireExternalApiAccess, (request, response) => {
+    response.json({
+      success: true,
+      data: dbModule.loadLeaveTypes().map(formatLeaveTypeForExternal)
+    });
+  });
+
+  server.get('/api/leave-requests', requireExternalApiAccess, (request, response) => {
+    try {
+      const employees = dbModule.loadEmployees();
+      const leaveTypes = dbModule.loadLeaveTypes();
+      const lookup = buildLeaveLookup(employees, leaveTypes);
+      const rows = dbModule
+        .queryLeaveRequests(getExternalRequestFilters(request.query))
+        .map((row) => formatLeaveRequestForExternal(row, lookup));
+
+      response.json({ success: true, data: rows });
+    } catch (error) {
+      sendExternalApiError(response, error);
+    }
+  });
+
+  server.get('/api/overtime-requests', requireExternalApiAccess, (request, response) => {
+    try {
+      const employees = dbModule.loadEmployees();
+      const lookup = buildOvertimeLookup(employees);
+      const rows = dbModule
+        .queryOvertimeRequests(getExternalRequestFilters(request.query))
+        .map((row) => formatOvertimeRequestForExternal(row, lookup));
+
+      response.json({ success: true, data: rows });
+    } catch (error) {
+      sendExternalApiError(response, error);
+    }
+  });
+
   server.get('/api/leave/requests', requireExternalApiAccess, (request, response) => {
     try {
-      response.json({ success: true, data: buildExternalLeaveRequestResult(request.query) });
+      const context = getExternalRequestContext(request.query);
+      const employees = dbModule.loadEmployees();
+      const leaveTypes = dbModule.loadLeaveTypes();
+      const lookup = buildLeaveLookup(employees, leaveTypes);
+      const records = dbModule
+        .queryLeaveRequests(context.filters)
+        .map((row) => formatLeaveRequestForExternal(row, lookup));
+
+      response.json({
+        success: true,
+        data: {
+          filters: context.meta,
+          summary: {
+            recordCount: records.length,
+            statusCounts: summarizeExternalStatusCounts(records)
+          },
+          records
+        }
+      });
     } catch (error) {
       sendExternalApiError(response, error);
     }
@@ -3870,7 +3936,24 @@ function attachExternalApiRoutes(server) {
 
   server.get('/api/overtime/requests', requireExternalApiAccess, (request, response) => {
     try {
-      response.json({ success: true, data: buildExternalOvertimeRequestResult(request.query) });
+      const context = getExternalRequestContext(request.query);
+      const employees = dbModule.loadEmployees();
+      const lookup = buildOvertimeLookup(employees);
+      const records = dbModule
+        .queryOvertimeRequests(context.filters)
+        .map((row) => formatOvertimeRequestForExternal(row, lookup));
+
+      response.json({
+        success: true,
+        data: {
+          filters: context.meta,
+          summary: {
+            recordCount: records.length,
+            statusCounts: summarizeExternalStatusCounts(records)
+          },
+          records
+        }
+      });
     } catch (error) {
       sendExternalApiError(response, error);
     }
