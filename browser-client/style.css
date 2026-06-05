@@ -1093,6 +1093,134 @@ textarea:disabled {
     padding: 11px 14px;
 }
 
+.admin-paper-field-grid {
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    align-items: start;
+}
+
+.admin-paper-field-grid .span-full {
+    grid-column: 1 / -1;
+}
+
+.admin-paper-field-grid .compact-field {
+    min-width: 112px;
+}
+
+.admin-paper-field-grid .medium-field {
+    grid-column: span 2;
+    min-width: 180px;
+}
+
+.admin-paper-field-grid .wide-field {
+    grid-column: span 3;
+    min-width: 240px;
+}
+
+.paper-employee-field {
+    gap: 8px;
+}
+
+.paper-employee-header,
+.paper-employee-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.paper-employee-header > span:first-child {
+    font-weight: 800;
+    color: var(--ink);
+}
+
+.paper-employee-count {
+    color: var(--muted);
+    font-size: 0.84rem;
+    font-weight: 700;
+}
+
+.paper-employee-tools input {
+    flex: 1 1 220px;
+    min-width: 180px;
+}
+
+.paper-employee-tools .outline-btn {
+    flex: 0 0 auto;
+}
+
+.paper-employee-picker {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px;
+    max-height: 186px;
+    overflow: auto;
+    padding: 8px;
+    border: 1px solid rgba(113, 177, 207, 0.28);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.72);
+}
+
+.paper-employee-option {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: 7px;
+    min-width: 0;
+    padding: 8px 9px;
+    border: 1px solid rgba(154, 191, 213, 0.28);
+    border-radius: 10px;
+    background: rgba(248, 253, 255, 0.88);
+    cursor: pointer;
+}
+
+.paper-employee-option:hover {
+    border-color: rgba(31, 148, 219, 0.42);
+    background: rgba(232, 247, 255, 0.94);
+}
+
+.paper-employee-option input {
+    width: 16px;
+    height: 16px;
+    margin-top: 2px;
+    accent-color: var(--brand);
+}
+
+.paper-employee-option strong,
+.paper-employee-option small {
+    display: block;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.paper-employee-option strong {
+    color: var(--ink);
+    font-size: 0.9rem;
+}
+
+.paper-employee-option small {
+    color: var(--muted);
+    font-size: 0.76rem;
+    line-height: 1.35;
+}
+
+.paper-employee-option.is-hidden {
+    display: none;
+}
+
+@media (max-width: 760px) {
+    .admin-paper-field-grid .medium-field,
+    .admin-paper-field-grid .wide-field {
+        grid-column: 1 / -1;
+        min-width: 0;
+    }
+
+    .paper-employee-tools input,
+    .paper-employee-tools .outline-btn {
+        flex: 1 1 100%;
+    }
+}
+
 .dense-toolbar {
     align-items: flex-end;
     gap: 10px;

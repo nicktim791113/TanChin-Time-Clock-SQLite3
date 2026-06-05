@@ -8984,13 +8984,90 @@ function renderLeaveAuditAlertRows(alerts = []) {
     `;
 }
 
-function renderAdminPaperEmployeeOptions(employees = [], selectedId = "") {
-    return employees.map((employee) => `
-        <option value="${escapeHtml(employee.id)}" ${employee.id === selectedId ? "selected" : ""}>
-            ${escapeHtml(employee.id)} / ${escapeHtml(employee.name || "-")} / ${escapeHtml(employee.department || "-")}
-        </option>
-    `).join("");
+function renderAdminPaperEmployeePicker(employees = [], labelText = "員工") {
+    const employeeItems = employees.map((employee) => {
+        const searchText = `${employee.id || ""} ${employee.name || ""} ${employee.department || ""}`.trim();
+        return `
+            <label class="paper-employee-option" data-paper-employee-item data-search-text="${escapeHtml(searchText.toLowerCase())}">
+                <input type="checkbox" name="employeeIds" value="${escapeHtml(employee.id)}" data-paper-employee-checkbox>
+                <span>
+                    <strong>${escapeHtml(employee.id)}</strong>
+                    <small>${escapeHtml(employee.name || "-")} / ${escapeHtml(employee.department || "-")}</small>
+                </span>
+            </label>
+        `;
+    }).join("");
+    return `
+        <div class="field span-full paper-employee-field" data-paper-employee-field>
+            <div class="paper-employee-header">
+                <span>${escapeHtml(labelText)}</span>
+                <span class="paper-employee-count" data-paper-employee-count>已選 0 位</span>
+            </div>
+            <div class="paper-employee-tools">
+                <input type="search" data-paper-employee-search placeholder="輸入工號、姓名或部門篩選">
+                <button class="outline-btn" type="button" data-action="paper-select-visible-employees">選取顯示</button>
+                <button class="outline-btn" type="button" data-action="paper-clear-employees">清除</button>
+            </div>
+            <div class="paper-employee-picker" data-paper-employee-picker>
+                ${employeeItems || `<p class="helper-text">目前沒有可選員工。</p>`}
+            </div>
+        </div>
+    `;
 }
+
+function collectAdminPaperEmployeeIds(form) {
+    return Array.from(form.querySelectorAll('input[name="employeeIds"]:checked'))
+        .map((input) => input.value)
+        .filter(Boolean);
+}
+
+function syncAdminPaperEmployeePicker(field) {
+    const checkedCount = field.querySelectorAll('input[name="employeeIds"]:checked').length;
+    const visibleCount = Array.from(field.querySelectorAll("[data-paper-employee-item]"))
+        .filter((item) => !item.classList.contains("is-hidden")).length;
+    const count = field.querySelector("[data-paper-employee-count]");
+    if (count) count.textContent = `已選 ${checkedCount} 位 / 顯示 ${visibleCount} 位`;
+}
+
+function filterAdminPaperEmployeePicker(input) {
+    const field = input.closest("[data-paper-employee-field]");
+    if (!field) return;
+    const query = String(input.value || "").trim().toLowerCase();
+    field.querySelectorAll("[data-paper-employee-item]").forEach((item) => {
+        const text = item.dataset.searchText || "";
+        item.classList.toggle("is-hidden", Boolean(query) && !text.includes(query));
+    });
+    syncAdminPaperEmployeePicker(field);
+}
+
+const originalHandleDashboardClickWithPaperEmployeePicker = handleDashboardClick;
+handleDashboardClick = async function handleDashboardClickPaperEmployeePickerOverride(event) {
+    const actionTarget = event.target.closest("[data-action]");
+    const action = actionTarget?.dataset.action || "";
+    if (action === "paper-select-visible-employees" || action === "paper-clear-employees") {
+        const field = actionTarget.closest("[data-paper-employee-field]");
+        if (!field) return;
+        field.querySelectorAll("[data-paper-employee-item]").forEach((item) => {
+            const checkbox = item.querySelector('input[name="employeeIds"]');
+            if (!checkbox) return;
+            if (action === "paper-clear-employees") checkbox.checked = false;
+            else if (!item.classList.contains("is-hidden")) checkbox.checked = true;
+        });
+        syncAdminPaperEmployeePicker(field);
+        return;
+    }
+    return originalHandleDashboardClickWithPaperEmployeePicker(event);
+};
+
+const originalHandleDashboardChangeWithPaperEmployeePicker = handleDashboardChange;
+handleDashboardChange = async function handleDashboardChangePaperEmployeePickerOverride(event) {
+    if (event.target.matches("[data-paper-employee-checkbox]")) {
+        const field = event.target.closest("[data-paper-employee-field]");
+        if (field) syncAdminPaperEmployeePicker(field);
+        return;
+    }
+    return originalHandleDashboardChangeWithPaperEmployeePicker(event);
+};
 
 function renderAdminPaperLeaveForm(datasets = {}) {
     const leave = datasets.leave || {};
@@ -9007,50 +9084,47 @@ function renderAdminPaperLeaveForm(datasets = {}) {
                 ${renderBadge("直接建立已核准紀錄", "warning")}
             </div>
             <form id="admin-paper-leave-form" class="stack-form">
-                <div class="field-grid dense-form">
-                    <label class="field span-2">
-                        <span>請假員工</span>
-                        <select name="employeeId" required>${renderAdminPaperEmployeeOptions(employees)}</select>
-                    </label>
-                    <label class="field">
+                <div class="field-grid dense-form admin-paper-field-grid">
+                    ${renderAdminPaperEmployeePicker(employees, "請假員工")}
+                    <label class="field medium-field">
                         <span>假別</span>
                         <select name="leaveTypeId" required>${renderLeaveTypeOptions(leaveTypes)}</select>
                     </label>
-                    <label class="field">
+                    <label class="field compact-field">
                         <span>開始日期</span>
                         <input name="startDate" type="date" value="${today}" required>
                     </label>
-                    <label class="field">
+                    <label class="field compact-field">
                         <span>開始時間</span>
                         <input name="startTime" type="time" value="09:00" required>
                     </label>
-                    <label class="field">
+                    <label class="field compact-field">
                         <span>結束日期</span>
                         <input name="endDate" type="date" value="${today}" required>
                     </label>
-                    <label class="field">
+                    <label class="field compact-field">
                         <span>結束時間</span>
                         <input name="endTime" type="time" value="18:00" required>
                     </label>
-                    <label class="field">
+                    <label class="field compact-field">
                         <span>請假時數</span>
                         <input name="durationHours" type="number" min="0.5" step="0.5" placeholder="未填則用時間差估算">
                     </label>
-                    <label class="field">
+                    <label class="field compact-field">
                         <span>紙本單號</span>
                         <input name="paperNo" type="text" placeholder="選填">
                     </label>
-                    <label class="field">
+                    <label class="field medium-field">
                         <span>紙本核准人</span>
                         <input name="approvedBy" type="text" placeholder="主管或核准人姓名">
                     </label>
-                    <label class="field span-2">
+                    <label class="field wide-field">
                         <span>請假原因</span>
-                        <textarea name="reason" rows="3" placeholder="請假原因或紙本內容摘要"></textarea>
+                        <textarea name="reason" rows="2" placeholder="請假原因或紙本內容摘要"></textarea>
                     </label>
-                    <label class="field span-2">
+                    <label class="field wide-field">
                         <span>補登備註</span>
-                        <textarea name="comment" rows="3" placeholder="例如紙本已由某主管核准、單據存放位置"></textarea>
+                        <textarea name="comment" rows="2" placeholder="例如紙本已由某主管核准、單據存放位置"></textarea>
                     </label>
                 </div>
                 <div class="form-toolbar dense-toolbar">
@@ -9703,11 +9777,13 @@ handleDashboardSubmit = async function handleDashboardSubmitLeaveOverride(event)
 
         if (formId === "admin-paper-leave-form") {
             const values = Object.fromEntries(new FormData(form).entries());
+            const employeeIds = collectAdminPaperEmployeeIds(form);
+            if (!employeeIds.length) throw new Error("請至少選擇一位請假員工。");
             const result = await requestJson("/api/browser/admin/leave/paper-approved", {
                 method: "POST",
                 auth: true,
                 body: {
-                    employeeId: values.employeeId,
+                    employeeIds,
                     leaveTypeId: values.leaveTypeId,
                     startDate: values.startDate,
                     startTime: values.startTime,
@@ -10056,46 +10132,43 @@ function renderAdminPaperOvertimeForm(datasets = {}) {
                 ${renderBadge("直接建立已核准紀錄", "warning")}
             </div>
             <form id="admin-paper-overtime-form" class="stack-form">
-                <div class="field-grid dense-form">
-                    <label class="field span-2">
-                        <span>加班員工</span>
-                        <select name="employeeId" required>${renderAdminPaperEmployeeOptions(employees)}</select>
-                    </label>
-                    <label class="field">
+                <div class="field-grid dense-form admin-paper-field-grid">
+                    ${renderAdminPaperEmployeePicker(employees, "加班員工")}
+                    <label class="field compact-field">
                         <span>開始日期</span>
                         <input name="startDate" type="date" value="${today}" required>
                     </label>
-                    <label class="field">
+                    <label class="field compact-field">
                         <span>開始時間</span>
                         <input name="startTime" type="time" value="18:00" required>
                     </label>
-                    <label class="field">
+                    <label class="field compact-field">
                         <span>結束日期</span>
                         <input name="endDate" type="date" value="${today}" required>
                     </label>
-                    <label class="field">
+                    <label class="field compact-field">
                         <span>結束時間</span>
                         <input name="endTime" type="time" value="20:00" required>
                     </label>
-                    <label class="field">
+                    <label class="field compact-field">
                         <span>加班時數</span>
                         <input name="durationHours" type="number" min="0.5" step="0.5" placeholder="未填則用時間差估算">
                     </label>
-                    <label class="field">
+                    <label class="field compact-field">
                         <span>紙本單號</span>
                         <input name="paperNo" type="text" placeholder="選填">
                     </label>
-                    <label class="field">
+                    <label class="field medium-field">
                         <span>紙本核准人</span>
                         <input name="approvedBy" type="text" placeholder="主管或核准人姓名">
                     </label>
-                    <label class="field span-2">
+                    <label class="field wide-field">
                         <span>加班原因</span>
-                        <textarea name="reason" rows="3" placeholder="加班原因或紙本內容摘要"></textarea>
+                        <textarea name="reason" rows="2" placeholder="加班原因或紙本內容摘要"></textarea>
                     </label>
-                    <label class="field span-2">
+                    <label class="field wide-field">
                         <span>補登備註</span>
-                        <textarea name="comment" rows="3" placeholder="例如紙本已由某主管核准、單據存放位置"></textarea>
+                        <textarea name="comment" rows="2" placeholder="例如紙本已由某主管核准、單據存放位置"></textarea>
                     </label>
                 </div>
                 <div class="form-toolbar dense-toolbar">
@@ -10171,11 +10244,13 @@ handleDashboardSubmit = async function handleDashboardSubmitOvertimeOverride(eve
     try {
         const values = Object.fromEntries(new FormData(form).entries());
         if (formId === "admin-paper-overtime-form") {
+            const employeeIds = collectAdminPaperEmployeeIds(form);
+            if (!employeeIds.length) throw new Error("請至少選擇一位加班員工。");
             const result = await requestJson("/api/browser/admin/overtime/paper-approved", {
                 method: "POST",
                 auth: true,
                 body: {
-                    employeeId: values.employeeId,
+                    employeeIds,
                     startDate: values.startDate,
                     startTime: values.startTime,
                     endDate: values.endDate,
@@ -12009,6 +12084,10 @@ function initialize() {
         }
         if (event.target.id === "account-access-search") {
             filterAccountAccessRows();
+            return;
+        }
+        if (event.target.matches("[data-paper-employee-search]")) {
+            filterAdminPaperEmployeePicker(event.target);
             return;
         }
         const dataTable = event.target.closest(".data-table");
