@@ -8731,6 +8731,7 @@ function renderEmployeeLeaveRequestRows(requests = [], { showEmployee = false, r
                         <th>結束</th>
                         <th>時數</th>
                         <th>狀態</th>
+                        <th>流程</th>
                         <th>理由</th>
                         <th>操作</th>
                     </tr>
@@ -8744,6 +8745,7 @@ function renderEmployeeLeaveRequestRows(requests = [], { showEmployee = false, r
                             <td>${escapeHtml(request.endText || "-")}</td>
                             <td>${escapeHtml(request.duration_hours ?? "-")}</td>
                             <td>${getLeaveStatusBadge(request)}</td>
+                            <td>${escapeHtml(request.approvalModeText || "-")}</td>
                             <td class="multiline-cell">${escapeHtml(request.reason || "-")}</td>
                             <td class="actions ${reviewMode ? "has-review-comment" : ""}">
                                 <div class="${reviewMode ? "review-action-stack" : "table-actions"}">
@@ -8982,6 +8984,85 @@ function renderLeaveAuditAlertRows(alerts = []) {
     `;
 }
 
+function renderAdminPaperEmployeeOptions(employees = [], selectedId = "") {
+    return employees.map((employee) => `
+        <option value="${escapeHtml(employee.id)}" ${employee.id === selectedId ? "selected" : ""}>
+            ${escapeHtml(employee.id)} / ${escapeHtml(employee.name || "-")} / ${escapeHtml(employee.department || "-")}
+        </option>
+    `).join("");
+}
+
+function renderAdminPaperLeaveForm(datasets = {}) {
+    const leave = datasets.leave || {};
+    const employees = datasets.employees || [];
+    const leaveTypes = leave.leaveTypes || [];
+    const today = formatDateInputValue(new Date());
+    return `
+        <article class="sub-panel">
+            <div class="list-toolbar">
+                <div>
+                    <h3>紙本請假補登</h3>
+                    <p class="helper-text">員工已走紙本或現場核准流程時，由管理者直接補登為已核准請假；資料會進考勤報表與請假出勤查核。</p>
+                </div>
+                ${renderBadge("直接建立已核准紀錄", "warning")}
+            </div>
+            <form id="admin-paper-leave-form" class="stack-form">
+                <div class="field-grid dense-form">
+                    <label class="field span-2">
+                        <span>請假員工</span>
+                        <select name="employeeId" required>${renderAdminPaperEmployeeOptions(employees)}</select>
+                    </label>
+                    <label class="field">
+                        <span>假別</span>
+                        <select name="leaveTypeId" required>${renderLeaveTypeOptions(leaveTypes)}</select>
+                    </label>
+                    <label class="field">
+                        <span>開始日期</span>
+                        <input name="startDate" type="date" value="${today}" required>
+                    </label>
+                    <label class="field">
+                        <span>開始時間</span>
+                        <input name="startTime" type="time" value="09:00" required>
+                    </label>
+                    <label class="field">
+                        <span>結束日期</span>
+                        <input name="endDate" type="date" value="${today}" required>
+                    </label>
+                    <label class="field">
+                        <span>結束時間</span>
+                        <input name="endTime" type="time" value="18:00" required>
+                    </label>
+                    <label class="field">
+                        <span>請假時數</span>
+                        <input name="durationHours" type="number" min="0.5" step="0.5" placeholder="未填則用時間差估算">
+                    </label>
+                    <label class="field">
+                        <span>紙本單號</span>
+                        <input name="paperNo" type="text" placeholder="選填">
+                    </label>
+                    <label class="field">
+                        <span>紙本核准人</span>
+                        <input name="approvedBy" type="text" placeholder="主管或核准人姓名">
+                    </label>
+                    <label class="field span-2">
+                        <span>請假原因</span>
+                        <textarea name="reason" rows="3" placeholder="請假原因或紙本內容摘要"></textarea>
+                    </label>
+                    <label class="field span-2">
+                        <span>補登備註</span>
+                        <textarea name="comment" rows="3" placeholder="例如紙本已由某主管核准、單據存放位置"></textarea>
+                    </label>
+                </div>
+                <div class="form-toolbar dense-toolbar">
+                    <button class="primary-btn" type="submit">建立紙本核准請假</button>
+                    <p class="helper-text">儲存後會直接成為已核准請假，不會再進主管或管理部待審。</p>
+                </div>
+                <div class="inline-message" data-form-message-for="admin-paper-leave-form" aria-live="polite"></div>
+            </form>
+        </article>
+    `;
+}
+
 function renderAdminLeaveSection(datasets) {
     const leave = datasets.leave || {};
     return `
@@ -9000,6 +9081,8 @@ function renderAdminLeaveSection(datasets) {
                 </div>
                 <p class="helper-text">請假流程採「員工送出 → 部門主管審核 → 管理部終審」；只有終審核准後才視為生效。</p>
             </article>
+
+            ${renderAdminPaperLeaveForm(datasets)}
 
             <article class="table-card">
                 <div class="list-toolbar">
@@ -9591,7 +9674,7 @@ handleDashboardSubmit = async function handleDashboardSubmitLeaveOverride(event)
         ? event.target
         : event.target?.closest?.("form");
     const formId = form?.getAttribute("id") || "";
-    if (!["employee-leave-form", "admin-leave-types-form", "admin-leave-routes-form"].includes(formId)) {
+    if (!["employee-leave-form", "admin-paper-leave-form", "admin-leave-types-form", "admin-leave-routes-form"].includes(formId)) {
         return originalHandleDashboardSubmitWithLeave(event);
     }
 
@@ -9615,6 +9698,31 @@ handleDashboardSubmit = async function handleDashboardSubmitLeaveOverride(event)
             });
             renderDashboard(result.data.dashboard);
             setMessage(ui.dashboardMessage, result.message || "請假申請已送出。", "success");
+            return;
+        }
+
+        if (formId === "admin-paper-leave-form") {
+            const values = Object.fromEntries(new FormData(form).entries());
+            const result = await requestJson("/api/browser/admin/leave/paper-approved", {
+                method: "POST",
+                auth: true,
+                body: {
+                    employeeId: values.employeeId,
+                    leaveTypeId: values.leaveTypeId,
+                    startDate: values.startDate,
+                    startTime: values.startTime,
+                    endDate: values.endDate,
+                    endTime: values.endTime,
+                    durationHours: values.durationHours,
+                    reason: values.reason?.trim() || "",
+                    paperNo: values.paperNo?.trim() || "",
+                    approvedBy: values.approvedBy?.trim() || "",
+                    comment: values.comment?.trim() || ""
+                }
+            });
+            renderDashboard(result.data.dashboard);
+            setMessage(ui.dashboardMessage, result.message || "紙本核准請假已補登。", "success");
+            setFormMessage(formId, result.message || "紙本核准請假已補登。", "success");
             return;
         }
 
@@ -9935,6 +10043,71 @@ function renderOvertimeAlertRows(alerts = []) {
     `;
 }
 
+function renderAdminPaperOvertimeForm(datasets = {}) {
+    const employees = datasets.employees || [];
+    const today = formatDateInputValue(new Date());
+    return `
+        <article class="sub-panel">
+            <div class="list-toolbar">
+                <div>
+                    <h3>紙本加班補登</h3>
+                    <p class="helper-text">員工已走紙本或現場核准流程時，由管理者直接補登為已核准加班；資料會進加班查核與申請匯出。</p>
+                </div>
+                ${renderBadge("直接建立已核准紀錄", "warning")}
+            </div>
+            <form id="admin-paper-overtime-form" class="stack-form">
+                <div class="field-grid dense-form">
+                    <label class="field span-2">
+                        <span>加班員工</span>
+                        <select name="employeeId" required>${renderAdminPaperEmployeeOptions(employees)}</select>
+                    </label>
+                    <label class="field">
+                        <span>開始日期</span>
+                        <input name="startDate" type="date" value="${today}" required>
+                    </label>
+                    <label class="field">
+                        <span>開始時間</span>
+                        <input name="startTime" type="time" value="18:00" required>
+                    </label>
+                    <label class="field">
+                        <span>結束日期</span>
+                        <input name="endDate" type="date" value="${today}" required>
+                    </label>
+                    <label class="field">
+                        <span>結束時間</span>
+                        <input name="endTime" type="time" value="20:00" required>
+                    </label>
+                    <label class="field">
+                        <span>加班時數</span>
+                        <input name="durationHours" type="number" min="0.5" step="0.5" placeholder="未填則用時間差估算">
+                    </label>
+                    <label class="field">
+                        <span>紙本單號</span>
+                        <input name="paperNo" type="text" placeholder="選填">
+                    </label>
+                    <label class="field">
+                        <span>紙本核准人</span>
+                        <input name="approvedBy" type="text" placeholder="主管或核准人姓名">
+                    </label>
+                    <label class="field span-2">
+                        <span>加班原因</span>
+                        <textarea name="reason" rows="3" placeholder="加班原因或紙本內容摘要"></textarea>
+                    </label>
+                    <label class="field span-2">
+                        <span>補登備註</span>
+                        <textarea name="comment" rows="3" placeholder="例如紙本已由某主管核准、單據存放位置"></textarea>
+                    </label>
+                </div>
+                <div class="form-toolbar dense-toolbar">
+                    <button class="primary-btn" type="submit">建立紙本核准加班</button>
+                    <p class="helper-text">儲存後只會建立加班核准紀錄，不會直接修改打卡或出勤時間。</p>
+                </div>
+                <div class="inline-message" data-form-message-for="admin-paper-overtime-form" aria-live="polite"></div>
+            </form>
+        </article>
+    `;
+}
+
 function renderAdminOvertimeSection(datasets) {
     const overtime = datasets.overtime || {};
     const alerts = overtime.alerts || [];
@@ -9955,6 +10128,8 @@ function renderAdminOvertimeSection(datasets) {
                 </div>
                 <p class="helper-text">加班申請與請假分開保存；查核只做比對與警示，不會直接改動出勤打卡時間。</p>
             </article>
+
+            ${renderAdminPaperOvertimeForm(datasets)}
 
             <article class="table-card">
                 <div class="list-toolbar">
@@ -9987,7 +10162,7 @@ handleDashboardSubmit = async function handleDashboardSubmitOvertimeOverride(eve
         ? event.target
         : event.target?.closest?.("form");
     const formId = form?.getAttribute("id") || "";
-    if (formId !== "employee-overtime-form") {
+    if (!["employee-overtime-form", "admin-paper-overtime-form"].includes(formId)) {
         return originalHandleDashboardSubmitWithOvertime(event);
     }
 
@@ -9995,6 +10170,29 @@ handleDashboardSubmit = async function handleDashboardSubmitOvertimeOverride(eve
     setFormMessage(formId, "");
     try {
         const values = Object.fromEntries(new FormData(form).entries());
+        if (formId === "admin-paper-overtime-form") {
+            const result = await requestJson("/api/browser/admin/overtime/paper-approved", {
+                method: "POST",
+                auth: true,
+                body: {
+                    employeeId: values.employeeId,
+                    startDate: values.startDate,
+                    startTime: values.startTime,
+                    endDate: values.endDate,
+                    endTime: values.endTime,
+                    durationHours: values.durationHours,
+                    reason: values.reason?.trim() || "",
+                    paperNo: values.paperNo?.trim() || "",
+                    approvedBy: values.approvedBy?.trim() || "",
+                    comment: values.comment?.trim() || ""
+                }
+            });
+            renderDashboard(result.data.dashboard);
+            setMessage(ui.dashboardMessage, result.message || "紙本核准加班已補登。", "success");
+            setFormMessage(formId, result.message || "紙本核准加班已補登。", "success");
+            return;
+        }
+
         const result = await requestJson("/api/browser/employee/overtime/request", {
             method: "POST",
             auth: true,
@@ -11295,21 +11493,26 @@ const workspaceSubnavConfigs = {
                     label: "查核與審核",
                     items: [
                         {
+                            id: "paper",
+                            label: "紙本核准補登",
+                            panelIndex: 1
+                        },
+                        {
                             id: "audit",
                             label: "請假出勤查核",
-                            panelIndex: 1,
+                            panelIndex: 2,
                             badge: (datasets) => String(datasets.leave?.alerts?.length || 0)
                         },
                         {
                             id: "pending",
                             label: "管理部待複核",
-                            panelIndex: 2,
+                            panelIndex: 3,
                             badge: (datasets) => String(datasets.leave?.pendingAdmin?.length || 0)
                         },
                         {
                             id: "records",
                             label: "請假紀錄",
-                            panelIndex: 3,
+                            panelIndex: 4,
                             badge: (datasets) => String(datasets.leave?.requests?.length || 0)
                         }
                     ]
@@ -11317,8 +11520,8 @@ const workspaceSubnavConfigs = {
                 {
                     label: "制度設定",
                     items: [
-                        { id: "types", label: "假別設定", panelIndex: 4 },
-                        { id: "routes", label: "主管審核路徑", panelIndex: 5 }
+                        { id: "types", label: "假別設定", panelIndex: 5 },
+                        { id: "routes", label: "主管審核路徑", panelIndex: 6 }
                     ]
                 }
             ]
@@ -11330,15 +11533,20 @@ const workspaceSubnavConfigs = {
                     label: "加班查核",
                     items: [
                         {
+                            id: "paper",
+                            label: "紙本核准補登",
+                            panelIndex: 1
+                        },
+                        {
                             id: "alerts",
                             label: "出勤查核警示",
-                            panelIndex: 1,
+                            panelIndex: 2,
                             badge: (datasets) => String(datasets.overtime?.alerts?.length || 0)
                         },
                         {
                             id: "records",
                             label: "加班申請紀錄",
-                            panelIndex: 2,
+                            panelIndex: 3,
                             badge: (datasets) => String(datasets.overtime?.requests?.length || 0)
                         }
                     ]

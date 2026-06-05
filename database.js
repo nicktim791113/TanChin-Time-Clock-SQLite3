@@ -129,6 +129,7 @@ function init(dbFilePath) {
       admin_decision_by TEXT,
       admin_comment TEXT,
       admin_decided_at INTEGER,
+      approval_mode TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       withdrawn_at INTEGER,
@@ -339,6 +340,22 @@ function init(dbFilePath) {
                 run(`ALTER TABLE punch_records ADD COLUMN ${columnDefinition}`);
             }
             console.log('[資料庫] punch_records 安全欄位升級成功！');
+        }
+
+        const leaveRequestTableInfo = db.prepare("PRAGMA table_info(leave_requests)").all();
+        const leaveRequestColumns = leaveRequestTableInfo.map(col => col.name);
+        if (!leaveRequestColumns.includes('approval_mode')) {
+            console.log('[資料庫] 偵測到舊版 leave_requests 結構，正在補上 approval_mode 欄位...');
+            run('ALTER TABLE leave_requests ADD COLUMN approval_mode TEXT');
+            console.log('[資料庫] leave_requests approval_mode 升級成功！');
+        }
+
+        const overtimeRequestTableInfo = db.prepare("PRAGMA table_info(overtime_requests)").all();
+        const overtimeRequestColumns = overtimeRequestTableInfo.map(col => col.name);
+        if (!overtimeRequestColumns.includes('approval_mode')) {
+            console.log('[資料庫] 偵測到舊版 overtime_requests 結構，正在補上 approval_mode 欄位...');
+            run('ALTER TABLE overtime_requests ADD COLUMN approval_mode TEXT');
+            console.log('[資料庫] overtime_requests approval_mode 升級成功！');
         }
 
         const employeeDevicesTableInfo = db.prepare("PRAGMA table_info(employee_devices)").all();
@@ -662,21 +679,55 @@ const createLeaveRequest = (request) => {
     const insertRequest = db.prepare(`
         INSERT INTO leave_requests (
             id, employee_id, leave_type_id, start_at, end_at, duration_hours,
-            reason, status, supervisor_id, created_at, updated_at
+            reason, status, supervisor_id, supervisor_decision, supervisor_comment,
+            supervisor_decided_at, admin_decision_by, admin_comment, admin_decided_at,
+            approval_mode, created_at, updated_at
         ) VALUES (
             @id, @employee_id, @leave_type_id, @start_at, @end_at, @duration_hours,
-            @reason, @status, @supervisor_id, @created_at, @updated_at
+            @reason, @status, @supervisor_id, @supervisor_decision, @supervisor_comment,
+            @supervisor_decided_at, @admin_decision_by, @admin_comment, @admin_decided_at,
+            @approval_mode, @created_at, @updated_at
         )
     `);
     const insertStep = db.prepare(`
         INSERT INTO leave_approval_steps (
-            request_id, step_order, reviewer_role, reviewer_id, status, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            request_id, step_order, reviewer_role, reviewer_id, status, comment,
+            decided_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
+    const isApproved = request.status === 'approved';
+    const requestForDb = {
+        ...request,
+        supervisor_decision: request.supervisor_decision || null,
+        supervisor_comment: request.supervisor_comment || null,
+        supervisor_decided_at: request.supervisor_decided_at || null,
+        admin_decision_by: request.admin_decision_by || null,
+        admin_comment: request.admin_comment || null,
+        admin_decided_at: request.admin_decided_at || null,
+        approval_mode: request.approval_mode || 'employee_request'
+    };
     db.transaction(() => {
-        insertRequest.run(request);
-        insertStep.run(request.id, 1, 'supervisor', request.supervisor_id || null, 'pending', request.created_at);
-        insertStep.run(request.id, 2, 'admin', null, 'waiting', request.created_at);
+        insertRequest.run(requestForDb);
+        insertStep.run(
+            request.id,
+            1,
+            'supervisor',
+            request.supervisor_id || null,
+            isApproved ? 'approved' : 'pending',
+            isApproved ? (request.supervisor_comment || '紙本核准補登') : null,
+            isApproved ? (request.supervisor_decided_at || request.created_at) : null,
+            request.created_at
+        );
+        insertStep.run(
+            request.id,
+            2,
+            'admin',
+            request.admin_decision_by || null,
+            isApproved ? 'approved' : 'waiting',
+            isApproved ? (request.admin_comment || '管理者紙本核准補登') : null,
+            isApproved ? (request.admin_decided_at || request.created_at) : null,
+            request.created_at
+        );
     })();
 };
 

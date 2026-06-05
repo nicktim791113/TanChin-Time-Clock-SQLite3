@@ -45,8 +45,10 @@ const ADMIN_PERMISSION_DEFINITIONS = [
   { code: 'admin.reports.view', category: '考勤報表', label: '查詢考勤報表', section: 'reports' },
   { code: 'admin.reports.export', category: '考勤報表', label: '匯出考勤報表', section: 'reports', highRisk: true },
   { code: 'admin.leave.review', category: '請假管理', label: '請假終審', section: 'leave' },
+  { code: 'admin.leave.paperCreate', category: '請假管理', label: '紙本請假補登', section: 'leave', highRisk: true },
   { code: 'admin.leave.settings', category: '請假管理', label: '假別與審核路徑設定', section: 'leave' },
   { code: 'admin.overtime.view', category: '加班管理', label: '查看加班申請、警示與匯出', section: 'overtime' },
+  { code: 'admin.overtime.paperCreate', category: '加班管理', label: '紙本加班補登', section: 'overtime', highRisk: true },
   { code: 'admin.system.manage', category: '系統外觀與提醒', label: '主畫面與問候語設定', section: 'system' },
   { code: 'admin.bells.manage', category: '系統外觀與提醒', label: '響鈴與聲音設定', section: 'bells' },
   { code: 'admin.themes.manage', category: '系統外觀與提醒', label: '主題與特效設定', section: 'themes' }
@@ -58,8 +60,8 @@ const ADMIN_SECTION_RULES = [
   { id: 'shifts', label: '班別設定', permissions: ['admin.shifts.manage'] },
   { id: 'manualPunch', label: '手動補登', permissions: ['admin.manualPunch.create'] },
   { id: 'reports', label: '考勤報表', permissions: ['admin.reports.view', 'admin.reports.export'] },
-  { id: 'leave', label: '請假管理', permissions: ['admin.leave.review', 'admin.leave.settings'] },
-  { id: 'overtime', label: '加班管理', permissions: ['admin.overtime.view'] },
+  { id: 'leave', label: '請假管理', permissions: ['admin.leave.review', 'admin.leave.paperCreate', 'admin.leave.settings'] },
+  { id: 'overtime', label: '加班管理', permissions: ['admin.overtime.view', 'admin.overtime.paperCreate'] },
   { id: 'system', label: '系統設定', permissions: ['admin.system.manage'] },
   { id: 'bells', label: '響鈴設定', permissions: ['admin.bells.manage'] },
   { id: 'themes', label: '主題特效', permissions: ['admin.themes.manage'] }
@@ -104,8 +106,10 @@ const ADMIN_PERMISSION_PRESETS = [
       'admin.people.view',
       'admin.people.edit',
       'admin.leave.review',
+      'admin.leave.paperCreate',
       'admin.leave.settings',
       'admin.overtime.view',
+      'admin.overtime.paperCreate',
       'admin.reports.view'
     ]
   },
@@ -117,6 +121,7 @@ const ADMIN_PERMISSION_PRESETS = [
       'admin.shifts.manage',
       'admin.manualPunch.create',
       'admin.overtime.view',
+      'admin.overtime.paperCreate',
       'admin.reports.view',
       'admin.reports.export'
     ]
@@ -271,10 +276,12 @@ const API_ROUTE_CATALOG = [
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/manual-punch', auth: '管理者', description: '建立手動補登打卡' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/reports/query', auth: '管理者', description: '查詢考勤報表資料' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/reports/export', auth: '管理者', description: '匯出考勤報表 CSV' },
+  { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/paper-approved', auth: '管理者', description: '依紙本核准資料直接補登已核准請假' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/final-decision', auth: '管理者', description: '管理部終審請假申請' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-types/save', auth: '管理者', description: '儲存請假假別設定' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-routes/save', auth: '管理者', description: '儲存請假主管審核路徑' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-audit/export', auth: '管理者', description: '匯出請假與實際打卡查核 CSV' },
+  { category: '管理者 API', method: 'POST', path: '/api/browser/admin/overtime/paper-approved', auth: '管理者', description: '依紙本核准資料直接補登已核准加班' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/overtime/export', auth: '管理者', description: '匯出加班申請或加班出勤查核 CSV' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/data-settings', auth: '管理者', description: '更新主畫面標題與副標題' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/change-admin-password', auth: '管理者', description: '變更管理者密碼' },
@@ -1513,9 +1520,17 @@ const LEAVE_STATUS_LABELS = {
   withdrawn: '已撤回',
   cancelled: '已取消'
 };
+const LEAVE_APPROVAL_MODE_LABELS = {
+  employee_request: '員工線上申請',
+  admin_paper_approved: '管理者紙本核准補登'
+};
 
 function getLeaveStatusText(status) {
   return LEAVE_STATUS_LABELS[status] || status || '-';
+}
+
+function getLeaveApprovalModeText(mode) {
+  return LEAVE_APPROVAL_MODE_LABELS[mode] || mode || '-';
 }
 
 function formatDateTimeText(timestamp) {
@@ -1595,6 +1610,7 @@ function formatLeaveRequestForDashboard(request, lookup = buildLeaveLookup()) {
     adminDecisionBy: request.admin_decision_by || '',
     adminName: admin.name || '',
     statusText: getLeaveStatusText(request.status),
+    approvalModeText: getLeaveApprovalModeText(request.approval_mode),
     startText: formatDateTimeText(request.start_at),
     endText: formatDateTimeText(request.end_at),
     createdText: formatDateTimeText(request.created_at),
@@ -1767,7 +1783,8 @@ const OVERTIME_STATUS_LABELS = {
 
 const OVERTIME_APPROVAL_MODE_LABELS = {
   self_request: '本人申請',
-  supervisor_proxy_auto_approved: '主管代申請自動核准'
+  supervisor_proxy_auto_approved: '主管代申請自動核准',
+  admin_paper_approved: '管理者紙本核准補登'
 };
 
 function getOvertimeStatusText(status) {
@@ -2105,6 +2122,17 @@ function getAdminOvertimeState(employees = dbModule.loadEmployees()) {
     alerts,
     pendingSupervisor: requests.filter((request) => request.status === 'pending_supervisor')
   };
+}
+
+function buildPaperApprovalComment({ paperNo = '', approvedBy = '', comment = '' } = {}) {
+  const parts = [];
+  const normalizedPaperNo = String(paperNo || '').trim();
+  const normalizedApprovedBy = String(approvedBy || '').trim();
+  const normalizedComment = String(comment || '').trim();
+  if (normalizedPaperNo) parts.push(`紙本單號：${normalizedPaperNo}`);
+  if (normalizedApprovedBy) parts.push(`紙本核准人：${normalizedApprovedBy}`);
+  if (normalizedComment) parts.push(`補登備註：${normalizedComment}`);
+  return parts.join('；') || '管理者依紙本核准資料補登。';
 }
 
 function escapeCsvCell(value) {
@@ -5181,6 +5209,78 @@ function attachBrowserRoutes(server) {
     }
   });
 
+  server.post('/api/browser/admin/leave/paper-approved', requireBrowserSession, requireAdminPermission('admin.leave.paperCreate'), (request, response) => {
+    try {
+      const employees = dbModule.loadEmployees();
+      const leaveTypes = dbModule.loadLeaveTypes();
+      const employeeId = String(request.body?.employeeId || request.body?.employee_id || '').trim();
+      const employee = employees.find((item) => item.id === employeeId);
+      if (!employee) throw createHttpError('請選擇有效的請假員工。', 404);
+
+      const leaveTypeId = String(request.body?.leaveTypeId || request.body?.leave_type_id || '').trim();
+      const leaveType = leaveTypes.find((type) => type.id === leaveTypeId && type.enabled);
+      if (!leaveType) throw createHttpError('請選擇有效的假別。', 400);
+
+      const startAt = parseLeaveDateTime(request.body?.startDate, request.body?.startTime, '09:00');
+      const endAt = parseLeaveDateTime(request.body?.endDate, request.body?.endTime, '18:00');
+      if (endAt <= startAt) throw createHttpError('請假結束時間必須晚於開始時間。', 400);
+
+      const durationHours = calculateLeaveDurationHours(startAt, endAt, request.body?.durationHours);
+      if (durationHours <= 0) throw createHttpError('請輸入有效的請假時數。', 400);
+      if (dbModule.hasOverlappingLeaveRequest(employee.id, startAt, endAt)) {
+        throw createHttpError('這段時間已經有待審或已核准的請假申請。', 409);
+      }
+
+      const now = Date.now();
+      const paperComment = buildPaperApprovalComment({
+        paperNo: request.body?.paperNo,
+        approvedBy: request.body?.approvedBy,
+        comment: request.body?.comment
+      });
+      const supervisorId = getLeaveSupervisorForEmployee(employee) || '';
+      const leaveRequest = {
+        id: `leave_paper_${now}_${crypto.randomBytes(4).toString('hex')}`,
+        employee_id: employee.id,
+        leave_type_id: leaveType.id,
+        start_at: startAt,
+        end_at: endAt,
+        duration_hours: durationHours,
+        reason: String(request.body?.reason || '').trim(),
+        status: 'approved',
+        supervisor_id: supervisorId,
+        supervisor_decision: 'approved',
+        supervisor_comment: paperComment,
+        supervisor_decided_at: now,
+        admin_decision_by: request.browserSession.employeeId,
+        admin_comment: paperComment,
+        admin_decided_at: now,
+        approval_mode: 'admin_paper_approved',
+        created_at: now,
+        updated_at: now
+      };
+      dbModule.createLeaveRequest(leaveRequest);
+      writeBrowserAuditLog(request, {
+        action: 'create',
+        target_type: 'leave_request',
+        target_id: leaveRequest.id,
+        summary: `管理者紙本補登 ${employee.id} ${employee.name} 已核准請假：${leaveType.name}`,
+        after_data: {
+          ...leaveRequest,
+          paper_no: String(request.body?.paperNo || '').trim(),
+          paper_approved_by: String(request.body?.approvedBy || '').trim()
+        }
+      });
+      notifyDesktop('leaveRequests', getBrowserSyncMeta(request));
+      response.json({
+        success: true,
+        message: `已為 ${employee.name} 建立紙本核准請假紀錄。`,
+        data: { dashboard: buildDashboardForSession(request.browserSession) }
+      });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+  });
+
   server.post('/api/browser/admin/overtime/export', requireBrowserSession, requireAdminPermission('admin.overtime.view'), (request, response) => {
     try {
       const employees = dbModule.loadEmployees();
@@ -5211,6 +5311,70 @@ function attachBrowserRoutes(server) {
           fileName: buildExportFileName(prefix, today, today),
           csvContent
         }
+      });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+  });
+
+  server.post('/api/browser/admin/overtime/paper-approved', requireBrowserSession, requireAdminPermission('admin.overtime.paperCreate'), (request, response) => {
+    try {
+      const employees = dbModule.loadEmployees();
+      const employeeId = String(request.body?.employeeId || request.body?.employee_id || '').trim();
+      const employee = employees.find((item) => item.id === employeeId);
+      if (!employee) throw createHttpError('請選擇有效的加班員工。', 404);
+
+      const startAt = parseLeaveDateTime(request.body?.startDate, request.body?.startTime, '18:00');
+      const endAt = parseLeaveDateTime(request.body?.endDate, request.body?.endTime, '20:00');
+      if (endAt <= startAt) throw createHttpError('加班結束時間必須晚於開始時間。', 400);
+
+      const durationHours = calculateLeaveDurationHours(startAt, endAt, request.body?.durationHours);
+      if (durationHours <= 0) throw createHttpError('請輸入有效的加班時數。', 400);
+      if (dbModule.hasOverlappingOvertimeRequest(employee.id, startAt, endAt)) {
+        throw createHttpError('這段時間已經有待審或已核准的加班申請。', 409);
+      }
+
+      const now = Date.now();
+      const paperComment = buildPaperApprovalComment({
+        paperNo: request.body?.paperNo,
+        approvedBy: request.body?.approvedBy,
+        comment: request.body?.comment
+      });
+      const overtimeRequest = {
+        id: `overtime_paper_${now}_${crypto.randomBytes(4).toString('hex')}`,
+        employee_id: employee.id,
+        applicant_id: request.browserSession.employeeId,
+        applicant_role: 'admin_paper_proxy',
+        start_at: startAt,
+        end_at: endAt,
+        duration_hours: durationHours,
+        reason: String(request.body?.reason || '').trim(),
+        status: 'approved',
+        supervisor_id: request.browserSession.employeeId,
+        supervisor_decision: 'approved',
+        supervisor_comment: paperComment,
+        supervisor_decided_at: now,
+        approval_mode: 'admin_paper_approved',
+        created_at: now,
+        updated_at: now
+      };
+      dbModule.createOvertimeRequest(overtimeRequest);
+      writeBrowserAuditLog(request, {
+        action: 'create',
+        target_type: 'overtime_request',
+        target_id: overtimeRequest.id,
+        summary: `管理者紙本補登 ${employee.id} ${employee.name} 已核准加班`,
+        after_data: {
+          ...overtimeRequest,
+          paper_no: String(request.body?.paperNo || '').trim(),
+          paper_approved_by: String(request.body?.approvedBy || '').trim()
+        }
+      });
+      notifyDesktop('overtimeRequests', getBrowserSyncMeta(request));
+      response.json({
+        success: true,
+        message: `已為 ${employee.name} 建立紙本核准加班紀錄。`,
+        data: { dashboard: buildDashboardForSession(request.browserSession) }
       });
     } catch (error) {
       response.status(error.statusCode || 500).json({ success: false, error: error.message });
