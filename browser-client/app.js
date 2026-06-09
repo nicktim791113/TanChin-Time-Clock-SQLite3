@@ -1684,13 +1684,42 @@ function renderEmployeeDashboard(dashboard) {
     `;
 }
 
-function buildEmployeeDirectoryDepartmentOptions(employees, selectedDepartment = "") {
-    return Array.from(new Set(
-        (employees || [])
+function getDepartmentNamesFromDatasets(datasets = getDatasets(), { enabledOnly = false, includeEmployeeDepartments = true } = {}) {
+    const names = new Set();
+    (datasets.departments || [])
+        .filter((department) => !enabledOnly || department.enabled !== false)
+        .map((department) => String(department.name || "").trim())
+        .filter(Boolean)
+        .forEach((name) => names.add(name));
+    if (includeEmployeeDepartments) {
+        (datasets.employees || [])
             .map((employee) => String(employee.department || "").trim())
             .filter(Boolean)
-    ))
+            .forEach((name) => names.add(name));
+    }
+    return Array.from(names).sort((left, right) => left.localeCompare(right, "zh-Hant"));
+}
+
+function buildDepartmentOptions(departments = [], selectedDepartment = "", {
+    enabledOnly = false,
+    includeCurrent = true,
+    blankLabel = ""
+} = {}) {
+    const names = new Set((departments || [])
+        .filter((department) => !enabledOnly || department.enabled !== false)
+        .map((department) => String(department.name || "").trim())
+        .filter(Boolean));
+    const selected = String(selectedDepartment || "").trim();
+    if (includeCurrent && selected) names.add(selected);
+    const options = Array.from(names)
         .sort((left, right) => left.localeCompare(right, "zh-Hant"))
+        .map((department) => `<option value="${escapeHtml(department)}" ${department === selected ? "selected" : ""}>${escapeHtml(department)}</option>`)
+        .join("");
+    return `${blankLabel ? `<option value="">${escapeHtml(blankLabel)}</option>` : ""}${options}`;
+}
+
+function buildEmployeeDirectoryDepartmentOptions(datasets, selectedDepartment = "") {
+    return getDepartmentNamesFromDatasets(datasets, { enabledOnly: false })
         .map((department) => `<option value="${escapeHtml(department)}" ${department === selectedDepartment ? "selected" : ""}>${escapeHtml(department)}</option>`)
         .join("");
 }
@@ -1971,7 +2000,7 @@ function renderSectionTabs(role, items) {
 function renderAdminPeopleSection(datasets) {
     const filters = ensureAdminPeopleFilters();
     const filteredEmployees = filterAdminEmployees(datasets.employees);
-    const departmentOptions = buildEmployeeDirectoryDepartmentOptions(datasets.employees, filters.department);
+    const departmentOptions = buildEmployeeDirectoryDepartmentOptions(datasets, filters.department);
     const shiftOptions = renderOptions(datasets.shifts, {
         labelFn: (shift) => `${shift.name} (${shift.start} - ${shift.end})`
     });
@@ -3860,6 +3889,16 @@ async function handleDashboardChange(event) {
                 setMessage(ui.dashboardMessage, "CSV 內沒有符合格式的員工資料，或必要欄位不足。", "error");
                 return;
             }
+            const enabledDepartmentNames = new Set(getDepartmentNamesFromDatasets(datasets, { enabledOnly: true, includeEmployeeDepartments: false }));
+            const invalidDepartments = [...new Set(incoming
+                .map((employee) => String(employee.department || "").trim())
+                .filter((department) => !department || !enabledDepartmentNames.has(department)))];
+            if (invalidDepartments.length) {
+                target.value = "";
+                const displayDepartments = invalidDepartments.map((department) => department || "未填部門");
+                setMessage(ui.dashboardMessage, `CSV 含有尚未啟用的部門：${displayDepartments.join("、")}。請先到部門設定建立後再匯入。`, "error");
+                return;
+            }
 
             const mergedResult = mergeImportedEmployees(datasets.employees, incoming);
             const summary = skipped > 0
@@ -4488,7 +4527,7 @@ renderDeveloperStatusSection = function renderDeveloperStatusSectionOverride(dat
 renderAdminPeopleSection = function renderAdminPeopleSectionOverride(datasets) {
     const filters = ensureAdminPeopleFilters();
     const filteredEmployees = filterAdminEmployees(datasets.employees);
-    const departmentOptions = buildEmployeeDirectoryDepartmentOptions(datasets.employees, filters.department);
+    const departmentOptions = buildEmployeeDirectoryDepartmentOptions(datasets, filters.department);
     const shiftOptions = renderOptions(datasets.shifts, {
         labelFn: (shift) => `${shift.name} (${shift.start} - ${shift.end})`
     });
@@ -4528,7 +4567,7 @@ renderAdminPeopleSection = function renderAdminPeopleSectionOverride(datasets) {
                         <div class="form-section-grid four-up">
                             <label class="field"><span>工號</span><input name="id" placeholder="工號" required></label>
                             <label class="field"><span>姓名</span><input name="name" placeholder="姓名" required></label>
-                            <label class="field"><span>部門</span><input name="department" placeholder="部門" required></label>
+                            <label class="field"><span>部門</span><select name="department" required>${buildDepartmentOptions(datasets.departments || [], "", { enabledOnly: true, blankLabel: "選擇部門" })}</select></label>
                             <label class="field"><span>職稱</span><input name="job_title" placeholder="職稱"></label>
                             <label class="field"><span>性別</span><input name="gender" placeholder="性別"></label>
                             <label class="field"><span>國籍</span><input name="nationality" placeholder="國籍"></label>
@@ -4839,7 +4878,8 @@ renderAdminThemeSection = function renderAdminThemeSectionOverride(datasets) {
 renderAdminPeopleSection = function renderAdminPeopleSectionTabsOverride(datasets) {
     const filters = ensureAdminPeopleFilters();
     const filteredEmployees = filterAdminEmployees(datasets.employees);
-    const departmentOptions = buildEmployeeDirectoryDepartmentOptions(datasets.employees, filters.department);
+    const departmentOptions = buildEmployeeDirectoryDepartmentOptions(datasets, filters.department);
+    const employeeDepartmentOptions = buildDepartmentOptions(datasets.departments || [], "", { enabledOnly: true, blankLabel: "選擇部門" });
 
     return `
         <div class="workspace-stack">
@@ -4875,7 +4915,7 @@ renderAdminPeopleSection = function renderAdminPeopleSectionTabsOverride(dataset
                         <div class="form-section-grid four-up">
                             <label class="field"><span>工號</span><input name="id" placeholder="工號" required></label>
                             <label class="field"><span>姓名</span><input name="name" placeholder="姓名" required></label>
-                            <label class="field"><span>部門</span><input name="department" placeholder="部門" required></label>
+                            <label class="field"><span>部門</span><select name="department" required>${employeeDepartmentOptions}</select></label>
                             <label class="field"><span>職稱</span><input name="job_title" placeholder="職稱"></label>
                             <label class="field"><span>性別</span><input name="gender" placeholder="性別"></label>
                             <label class="field"><span>國籍</span><input name="nationality" placeholder="國籍"></label>
@@ -4942,6 +4982,8 @@ renderAdminPeopleSection = function renderAdminPeopleSectionTabsOverride(dataset
                     <input id="employee-import-file" type="file" accept=".csv,text/csv" class="hidden">
                 </form>
             </article>
+
+            ${renderDepartmentSettingsPanel(datasets)}
 
             <article class="table-card">
                 <div class="list-toolbar">
@@ -5055,6 +5097,95 @@ async function writeEmployeeCardCaptureDiagnostic({
 
 function getEmployeeForm() {
     return document.getElementById("employee-form");
+}
+
+function getDepartmentUsageCounts(datasets = getDatasets()) {
+    const counts = new Map();
+    const ensure = (name) => {
+        const key = String(name || "").trim();
+        if (!key) return null;
+        if (!counts.has(key)) counts.set(key, { employees: 0, routes: 0 });
+        return counts.get(key);
+    };
+    (datasets.employees || []).forEach((employee) => {
+        const count = ensure(employee.department);
+        if (count) count.employees += 1;
+    });
+    (datasets.leave?.approvalRoutes || []).forEach((route) => {
+        const department = String(route.department || "").trim();
+        if (!department || ["*", "全部", "預設"].includes(department)) return;
+        const count = ensure(department);
+        if (count) count.routes += 1;
+    });
+    return counts;
+}
+
+function renderDepartmentSettingsRows(departments = [], datasets = getDatasets()) {
+    const rows = [
+        ...(departments || []),
+        { id: "", name: "", description: "", enabled: true, display_order: ((departments || []).length + 1) * 10 }
+    ];
+    const usageCounts = getDepartmentUsageCounts(datasets);
+    return rows.map((department, index) => {
+        const usage = usageCounts.get(String(department.name || "").trim()) || { employees: 0, routes: 0 };
+        return `
+            <div class="department-setting-row" data-department-row>
+                <input type="hidden" name="id" value="${escapeHtml(department.id || "")}">
+                <label class="field department-name-field">
+                    <span>部門名稱</span>
+                    <input name="name" value="${escapeHtml(department.name || "")}" placeholder="部門名稱">
+                </label>
+                <label class="field department-order-field">
+                    <span>排序</span>
+                    <input name="display_order" type="number" step="1" value="${escapeHtml(department.display_order ?? department.displayOrder ?? index * 10)}">
+                </label>
+                <label class="field department-description-field">
+                    <span>說明</span>
+                    <input name="description" value="${escapeHtml(department.description || "")}" placeholder="選填">
+                </label>
+                <div class="department-usage-cell">
+                    ${renderBadge(`員工 ${usage.employees}`, usage.employees ? "success" : "neutral")}
+                    ${renderBadge(`主管路徑 ${usage.routes}`, usage.routes ? "info" : "neutral")}
+                </div>
+                <label class="switch-line department-enabled-field">
+                    <input name="enabled" type="checkbox" ${department.enabled !== false ? "checked" : ""}>啟用
+                </label>
+            </div>
+        `;
+    }).join("");
+}
+
+function collectDepartmentSettings(form) {
+    return Array.from(form.querySelectorAll("[data-department-row]")).map((row) => ({
+        id: row.querySelector('[name="id"]')?.value || "",
+        name: row.querySelector('[name="name"]')?.value?.trim() || "",
+        description: row.querySelector('[name="description"]')?.value?.trim() || "",
+        enabled: Boolean(row.querySelector('[name="enabled"]')?.checked),
+        display_order: Number(row.querySelector('[name="display_order"]')?.value || 0) || 0
+    })).filter((department) => department.name);
+}
+
+function renderDepartmentSettingsPanel(datasets = getDatasets()) {
+    return `
+        <article class="sub-panel">
+            <div class="list-toolbar">
+                <div>
+                    <h3>部門設定</h3>
+                    <p class="helper-text">員工部門、請假主管路徑與紙本補登篩選都會使用這裡的部門清單。</p>
+                </div>
+                ${renderBadge(`部門 ${datasets.departments?.length || 0} 組`, "success")}
+            </div>
+            <form id="department-settings-form" class="stack-form">
+                <div class="department-settings-list">
+                    ${renderDepartmentSettingsRows(datasets.departments || [], datasets)}
+                </div>
+                <div class="form-toolbar">
+                    <button class="primary-btn" type="submit">儲存部門設定</button>
+                </div>
+                <div class="inline-message" data-form-message-for="department-settings-form" aria-live="polite"></div>
+            </form>
+        </article>
+    `;
 }
 
 function getEmployeeCardCaptureNodes() {
@@ -5516,6 +5647,7 @@ handleDashboardSubmit = async function handleDashboardSubmitAdminFeedbackOverrid
     const formId = form?.getAttribute("id") || "";
     const managedAdminForms = new Set([
         "employee-form",
+        "department-settings-form",
         "shift-form",
         "manual-punch-form",
         "data-settings-form",
@@ -5569,6 +5701,13 @@ handleDashboardSubmit = async function handleDashboardSubmitAdminFeedbackOverrid
                 throw new Error("這個卡號已經被其他員工使用。");
             }
             await saveAndReloadWithFormFeedback("/api/browser/admin/employee/save", { employee, originalId }, "員工資料已儲存。", formId);
+            return;
+        }
+
+        if (formId === "department-settings-form") {
+            const departments = collectDepartmentSettings(form);
+            if (!departments.length) throw new Error("請至少建立一個部門。");
+            await saveAndReloadWithFormFeedback("/api/browser/admin/departments/save", { departments }, "部門設定已儲存。", formId);
             return;
         }
 
@@ -8937,15 +9076,20 @@ function renderAdminLeaveTypeEditorRows(leaveTypes = []) {
     `;
 }
 
-function renderAdminLeaveRouteRows(routes = [], employees = []) {
+function renderAdminLeaveRouteRows(routes = [], employees = [], departments = []) {
     const rows = [...routes, { department: "", supervisor_id: "", enabled: true }];
     const employeeOptions = (selectedId = "") => employees.map((employee) => `
         <option value="${escapeHtml(employee.id)}" ${employee.id === selectedId ? "selected" : ""}>${escapeHtml(employee.id)} / ${escapeHtml(employee.name || "-")} / ${escapeHtml(employee.department || "-")}</option>
     `).join("");
+    const departmentOptions = (selectedDepartment = "") => `
+        <option value="">選擇部門</option>
+        <option value="*" ${selectedDepartment === "*" ? "selected" : ""}>預設 / 全部部門</option>
+        ${buildDepartmentOptions(departments, selectedDepartment, { enabledOnly: true, includeCurrent: true })}
+    `;
     return rows.map((route) => `
         <div class="field-grid three leave-route-row dense-form">
             <input type="hidden" name="id" value="${escapeHtml(route.id || "")}">
-            <label class="field"><span>部門</span><input name="department" value="${escapeHtml(route.department || "")}" placeholder="部門名稱，或 * 作為預設"></label>
+            <label class="field"><span>部門</span><select name="department">${departmentOptions(route.department || "")}</select></label>
             <label class="field"><span>主管</span><select name="supervisor_id"><option value="">選擇主管</option>${employeeOptions(route.supervisor_id || route.supervisorId || "")}</select></label>
             <label class="switch-line"><input name="enabled" type="checkbox" ${route.enabled !== false ? "checked" : ""}>啟用</label>
         </div>
@@ -8984,11 +9128,11 @@ function renderLeaveAuditAlertRows(alerts = []) {
     `;
 }
 
-function renderAdminPaperEmployeePicker(employees = [], labelText = "員工") {
+function renderAdminPaperEmployeePicker(employees = [], labelText = "員工", departments = []) {
     const employeeItems = employees.map((employee) => {
         const searchText = `${employee.id || ""} ${employee.name || ""} ${employee.department || ""}`.trim();
         return `
-            <label class="paper-employee-option" data-paper-employee-item data-search-text="${escapeHtml(searchText.toLowerCase())}">
+            <label class="paper-employee-option" data-paper-employee-item data-department="${escapeHtml(employee.department || "")}" data-search-text="${escapeHtml(searchText.toLowerCase())}">
                 <input type="checkbox" name="employeeIds" value="${escapeHtml(employee.id)}" data-paper-employee-checkbox>
                 <span>
                     <strong>${escapeHtml(employee.id)}</strong>
@@ -9005,6 +9149,9 @@ function renderAdminPaperEmployeePicker(employees = [], labelText = "員工") {
             </div>
             <div class="paper-employee-tools">
                 <input type="search" data-paper-employee-search placeholder="輸入工號、姓名或部門篩選">
+                <select data-paper-employee-department>
+                    ${buildDepartmentOptions(departments, "", { enabledOnly: false, blankLabel: "全部部門" })}
+                </select>
                 <button class="outline-btn" type="button" data-action="paper-select-visible-employees">選取顯示</button>
                 <button class="outline-btn" type="button" data-action="paper-clear-employees">清除</button>
             </div>
@@ -9029,13 +9176,17 @@ function syncAdminPaperEmployeePicker(field) {
     if (count) count.textContent = `已選 ${checkedCount} 位 / 顯示 ${visibleCount} 位`;
 }
 
-function filterAdminPaperEmployeePicker(input) {
-    const field = input.closest("[data-paper-employee-field]");
+function filterAdminPaperEmployeePicker(control) {
+    const field = control.closest("[data-paper-employee-field]");
     if (!field) return;
-    const query = String(input.value || "").trim().toLowerCase();
+    const query = String(field.querySelector("[data-paper-employee-search]")?.value || "").trim().toLowerCase();
+    const selectedDepartment = String(field.querySelector("[data-paper-employee-department]")?.value || "").trim();
     field.querySelectorAll("[data-paper-employee-item]").forEach((item) => {
         const text = item.dataset.searchText || "";
-        item.classList.toggle("is-hidden", Boolean(query) && !text.includes(query));
+        const department = String(item.dataset.department || "").trim();
+        const hiddenByQuery = Boolean(query) && !text.includes(query);
+        const hiddenByDepartment = Boolean(selectedDepartment) && department !== selectedDepartment;
+        item.classList.toggle("is-hidden", hiddenByQuery || hiddenByDepartment);
     });
     syncAdminPaperEmployeePicker(field);
 }
@@ -9066,12 +9217,17 @@ handleDashboardChange = async function handleDashboardChangePaperEmployeePickerO
         if (field) syncAdminPaperEmployeePicker(field);
         return;
     }
+    if (event.target.matches("[data-paper-employee-department]")) {
+        filterAdminPaperEmployeePicker(event.target);
+        return;
+    }
     return originalHandleDashboardChangeWithPaperEmployeePicker(event);
 };
 
 function renderAdminPaperLeaveForm(datasets = {}) {
     const leave = datasets.leave || {};
     const employees = datasets.employees || [];
+    const departments = datasets.departments || [];
     const leaveTypes = leave.leaveTypes || [];
     const today = formatDateInputValue(new Date());
     return `
@@ -9085,44 +9241,44 @@ function renderAdminPaperLeaveForm(datasets = {}) {
             </div>
             <form id="admin-paper-leave-form" class="stack-form">
                 <div class="field-grid dense-form admin-paper-field-grid">
-                    ${renderAdminPaperEmployeePicker(employees, "請假員工")}
-                    <label class="field medium-field">
+                    ${renderAdminPaperEmployeePicker(employees, "請假員工", departments)}
+                    <label class="field paper-span-4">
                         <span>假別</span>
                         <select name="leaveTypeId" required>${renderLeaveTypeOptions(leaveTypes)}</select>
                     </label>
-                    <label class="field compact-field">
+                    <label class="field paper-span-2">
                         <span>開始日期</span>
                         <input name="startDate" type="date" value="${today}" required>
                     </label>
-                    <label class="field compact-field">
-                        <span>開始時間</span>
-                        <input name="startTime" type="time" value="09:00" required>
-                    </label>
-                    <label class="field compact-field">
+                    <label class="field paper-span-2">
                         <span>結束日期</span>
                         <input name="endDate" type="date" value="${today}" required>
                     </label>
-                    <label class="field compact-field">
+                    <label class="field paper-span-2">
+                        <span>開始時間</span>
+                        <input name="startTime" type="time" value="09:00" required>
+                    </label>
+                    <label class="field paper-span-2">
                         <span>結束時間</span>
                         <input name="endTime" type="time" value="18:00" required>
                     </label>
-                    <label class="field compact-field">
+                    <label class="field paper-span-4">
                         <span>請假時數</span>
                         <input name="durationHours" type="number" min="0.5" step="0.5" placeholder="未填則用時間差估算">
                     </label>
-                    <label class="field compact-field">
+                    <label class="field paper-span-4">
                         <span>紙本單號</span>
                         <input name="paperNo" type="text" placeholder="選填">
                     </label>
-                    <label class="field medium-field">
+                    <label class="field paper-span-4">
                         <span>紙本核准人</span>
                         <input name="approvedBy" type="text" placeholder="主管或核准人姓名">
                     </label>
-                    <label class="field wide-field">
+                    <label class="field paper-span-6">
                         <span>請假原因</span>
                         <textarea name="reason" rows="2" placeholder="請假原因或紙本內容摘要"></textarea>
                     </label>
-                    <label class="field wide-field">
+                    <label class="field paper-span-6">
                         <span>補登備註</span>
                         <textarea name="comment" rows="2" placeholder="例如紙本已由某主管核准、單據存放位置"></textarea>
                     </label>
@@ -9213,7 +9369,7 @@ function renderAdminLeaveSection(datasets) {
                     </div>
                 </div>
                 <form id="admin-leave-routes-form" class="stack-form">
-                    ${renderAdminLeaveRouteRows(leave.approvalRoutes || [], datasets.employees || [])}
+                    ${renderAdminLeaveRouteRows(leave.approvalRoutes || [], datasets.employees || [], datasets.departments || [])}
                     <div class="form-toolbar dense-toolbar">
                         <button class="primary-btn" type="submit">儲存審核路徑</button>
                     </div>
@@ -10121,6 +10277,7 @@ function renderOvertimeAlertRows(alerts = []) {
 
 function renderAdminPaperOvertimeForm(datasets = {}) {
     const employees = datasets.employees || [];
+    const departments = datasets.departments || [];
     const today = formatDateInputValue(new Date());
     return `
         <article class="sub-panel">
@@ -10133,40 +10290,40 @@ function renderAdminPaperOvertimeForm(datasets = {}) {
             </div>
             <form id="admin-paper-overtime-form" class="stack-form">
                 <div class="field-grid dense-form admin-paper-field-grid">
-                    ${renderAdminPaperEmployeePicker(employees, "加班員工")}
-                    <label class="field compact-field">
+                    ${renderAdminPaperEmployeePicker(employees, "加班員工", departments)}
+                    <label class="field paper-span-3">
                         <span>開始日期</span>
                         <input name="startDate" type="date" value="${today}" required>
                     </label>
-                    <label class="field compact-field">
-                        <span>開始時間</span>
-                        <input name="startTime" type="time" value="18:00" required>
-                    </label>
-                    <label class="field compact-field">
+                    <label class="field paper-span-3">
                         <span>結束日期</span>
                         <input name="endDate" type="date" value="${today}" required>
                     </label>
-                    <label class="field compact-field">
+                    <label class="field paper-span-3">
+                        <span>開始時間</span>
+                        <input name="startTime" type="time" value="18:00" required>
+                    </label>
+                    <label class="field paper-span-3">
                         <span>結束時間</span>
                         <input name="endTime" type="time" value="20:00" required>
                     </label>
-                    <label class="field compact-field">
+                    <label class="field paper-span-4">
                         <span>加班時數</span>
                         <input name="durationHours" type="number" min="0.5" step="0.5" placeholder="未填則用時間差估算">
                     </label>
-                    <label class="field compact-field">
+                    <label class="field paper-span-4">
                         <span>紙本單號</span>
                         <input name="paperNo" type="text" placeholder="選填">
                     </label>
-                    <label class="field medium-field">
+                    <label class="field paper-span-4">
                         <span>紙本核准人</span>
                         <input name="approvedBy" type="text" placeholder="主管或核准人姓名">
                     </label>
-                    <label class="field wide-field">
+                    <label class="field paper-span-6">
                         <span>加班原因</span>
                         <textarea name="reason" rows="2" placeholder="加班原因或紙本內容摘要"></textarea>
                     </label>
-                    <label class="field wide-field">
+                    <label class="field paper-span-6">
                         <span>補登備註</span>
                         <textarea name="comment" rows="2" placeholder="例如紙本已由某主管核准、單據存放位置"></textarea>
                     </label>
@@ -11503,10 +11660,11 @@ const workspaceSubnavConfigs = {
                     label: "人員主檔",
                     items: [
                         { id: "form", label: "新增 / 編輯員工", panelIndex: 1 },
+                        { id: "departments", label: "部門設定", panelIndex: 2 },
                         {
                             id: "roster",
                             label: "員工名冊資料",
-                            panelIndex: 2,
+                            panelIndex: 3,
                             badge: (datasets) => `${filterAdminEmployees(datasets.employees || []).length}/${(datasets.employees || []).length}`
                         }
                     ]

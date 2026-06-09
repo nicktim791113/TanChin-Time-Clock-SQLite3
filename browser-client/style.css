@@ -1094,12 +1094,32 @@ textarea:disabled {
 }
 
 .admin-paper-field-grid {
-    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    grid-template-columns: repeat(12, minmax(0, 1fr));
     align-items: start;
 }
 
 .admin-paper-field-grid .span-full {
     grid-column: 1 / -1;
+}
+
+.admin-paper-field-grid .paper-span-2 {
+    grid-column: span 2;
+    min-width: 150px;
+}
+
+.admin-paper-field-grid .paper-span-3 {
+    grid-column: span 3;
+    min-width: 180px;
+}
+
+.admin-paper-field-grid .paper-span-4 {
+    grid-column: span 4;
+    min-width: 210px;
+}
+
+.admin-paper-field-grid .paper-span-6 {
+    grid-column: span 6;
+    min-width: 260px;
 }
 
 .admin-paper-field-grid .compact-field {
@@ -1143,6 +1163,11 @@ textarea:disabled {
 .paper-employee-tools input {
     flex: 1 1 220px;
     min-width: 180px;
+}
+
+.paper-employee-tools select {
+    flex: 0 1 180px;
+    min-width: 160px;
 }
 
 .paper-employee-tools .outline-btn {
@@ -1208,7 +1233,43 @@ textarea:disabled {
     display: none;
 }
 
+.department-settings-list {
+    display: grid;
+    gap: 10px;
+}
+
+.department-setting-row {
+    display: grid;
+    grid-template-columns: minmax(180px, 1.4fr) minmax(90px, 0.55fr) minmax(220px, 1.6fr) minmax(170px, auto) minmax(92px, auto);
+    align-items: end;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid rgba(144, 190, 215, 0.24);
+    border-radius: 12px;
+    background: rgba(248, 253, 255, 0.72);
+}
+
+.department-usage-cell {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding-bottom: 8px;
+}
+
+.department-enabled-field {
+    align-self: center;
+}
+
 @media (max-width: 760px) {
+    .admin-paper-field-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .admin-paper-field-grid .paper-span-2,
+    .admin-paper-field-grid .paper-span-3,
+    .admin-paper-field-grid .paper-span-4,
+    .admin-paper-field-grid .paper-span-6,
     .admin-paper-field-grid .medium-field,
     .admin-paper-field-grid .wide-field {
         grid-column: 1 / -1;
@@ -1216,8 +1277,17 @@ textarea:disabled {
     }
 
     .paper-employee-tools input,
+    .paper-employee-tools select,
     .paper-employee-tools .outline-btn {
         flex: 1 1 100%;
+    }
+
+    .department-setting-row {
+        grid-template-columns: 1fr;
+    }
+
+    .department-usage-cell {
+        padding-bottom: 0;
     }
 }
 
@@ -1634,6 +1704,16 @@ textarea:disabled {
 .badge.danger {
     background: rgba(255, 124, 137, 0.14);
     color: var(--danger);
+}
+
+.badge.info {
+    background: rgba(86, 193, 236, 0.14);
+    color: var(--brand-dark);
+}
+
+.badge.neutral {
+    background: rgba(128, 155, 170, 0.12);
+    color: var(--muted);
 }
 
 .preview-card {

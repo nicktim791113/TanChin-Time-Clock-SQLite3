@@ -59,6 +59,15 @@ function init(dbFilePath) {
     CREATE TABLE IF NOT EXISTS bell_history ( timestamp INTEGER PRIMARY KEY, scheduleId TEXT, time TEXT, sound TEXT );
     CREATE TABLE IF NOT EXISTS custom_sounds ( id TEXT PRIMARY KEY, name TEXT, path TEXT );
     CREATE TABLE IF NOT EXISTS settings ( key TEXT PRIMARY KEY, value TEXT );
+    CREATE TABLE IF NOT EXISTS departments (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS external_api_keys (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -248,6 +257,7 @@ function init(dbFilePath) {
     CREATE INDEX IF NOT EXISTS idx_overtime_approval_steps_request_id ON overtime_approval_steps (request_id);
     CREATE INDEX IF NOT EXISTS idx_account_access_updated_at ON account_access (updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_workspace_nav_order_scope ON workspace_nav_order (role, nav_type, scope, employee_id);
+    CREATE INDEX IF NOT EXISTS idx_departments_enabled_order ON departments (enabled, display_order, name);
   `);
   
   // --- 魔法加固區：自動升級寶庫結構 ---
@@ -387,6 +397,7 @@ function init(dbFilePath) {
   }
 
   console.log('[資料庫] 所有寶庫隔間 (資料表) 檢查與建立完畢！');
+  seedDepartmentsFromExistingData();
   seedDefaultLeaveTypes();
 }
 
@@ -544,6 +555,126 @@ const saveEmployees = (employees) => {
 };
 const loadEmployees = () => all('SELECT * FROM employees ORDER BY id');
 const deleteAllEmployees = () => run('DELETE FROM employees');
+
+function normalizeDepartmentForStorage(department = {}, index = 0) {
+    const now = Date.now();
+    const name = String(department.name || department.department || '').trim();
+    return {
+        id: String(department.id || `dept_${now}_${index}_${Math.random().toString(16).slice(2, 8)}`).trim(),
+        name,
+        description: String(department.description || '').trim(),
+        enabled: department.enabled === false || department.enabled === 0 || department.enabled === '0' || department.enabled === 'false' ? 0 : 1,
+        display_order: Number(department.display_order ?? department.displayOrder ?? index * 10) || 0,
+        created_at: Number(department.created_at ?? department.createdAt ?? now) || now,
+        updated_at: Number(department.updated_at ?? department.updatedAt ?? now) || now
+    };
+}
+
+function mapDepartmentRow(row) {
+    return {
+        ...row,
+        enabled: row.enabled === 1,
+        displayOrder: row.display_order,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
+    };
+}
+
+const loadDepartments = () => all('SELECT * FROM departments ORDER BY display_order, name').map(mapDepartmentRow);
+
+function seedDepartmentsFromExistingData() {
+    const departmentNames = new Set();
+    all('SELECT DISTINCT department FROM employees')
+        .map((row) => String(row.department || '').trim())
+        .filter(Boolean)
+        .forEach((name) => departmentNames.add(name));
+    all('SELECT DISTINCT department FROM leave_approval_routes')
+        .map((row) => String(row.department || '').trim())
+        .filter((name) => name && !['*', '全部', '預設'].includes(name))
+        .forEach((name) => departmentNames.add(name));
+
+    if (!departmentNames.size) return;
+    const existingNames = new Set(loadDepartments().map((department) => department.name));
+    const insert = db.prepare(`
+        INSERT INTO departments (id, name, description, enabled, display_order, created_at, updated_at)
+        VALUES (@id, @name, @description, @enabled, @display_order, @created_at, @updated_at)
+    `);
+    const now = Date.now();
+    db.transaction(() => {
+        Array.from(departmentNames)
+            .sort((left, right) => left.localeCompare(right, 'zh-Hant'))
+            .forEach((name, index) => {
+                if (existingNames.has(name)) return;
+                insert.run({
+                    id: `dept_seed_${now}_${index}`,
+                    name,
+                    description: '由既有人員或主管路徑資料自動建立。',
+                    enabled: 1,
+                    display_order: (existingNames.size + index + 1) * 10,
+                    created_at: now,
+                    updated_at: now
+                });
+            });
+    })();
+}
+
+const saveDepartments = (departments = []) => {
+    const previousDepartments = loadDepartments();
+    const previousById = new Map(previousDepartments.map((department) => [department.id, department]));
+    const normalizedDepartments = [];
+    const seenNames = new Set();
+    departments.forEach((department, index) => {
+        const normalized = normalizeDepartmentForStorage(department, index);
+        if (!normalized.name) return;
+        const key = normalized.name.toLowerCase();
+        if (seenNames.has(key)) return;
+        seenNames.add(key);
+        const previous = previousById.get(normalized.id);
+        normalizedDepartments.push({
+            ...normalized,
+            created_at: previous?.created_at || normalized.created_at,
+            updated_at: Date.now()
+        });
+    });
+
+    const nextIds = new Set(normalizedDepartments.map((department) => department.id));
+    const nextById = new Map(normalizedDepartments.map((department) => [department.id, department]));
+    const employeeDepartments = new Set(loadEmployees().map((employee) => String(employee.department || '').trim()).filter(Boolean));
+    const routeDepartments = new Set(loadLeaveApprovalRoutes()
+        .map((route) => String(route.department || '').trim())
+        .filter((name) => name && !['*', '全部', '預設'].includes(name)));
+    const usedDepartments = new Set([...employeeDepartments, ...routeDepartments]);
+
+    previousDepartments.forEach((previous) => {
+        const next = nextById.get(previous.id);
+        const isUsed = usedDepartments.has(previous.name);
+        if (!next && isUsed) {
+            throw new Error(`部門「${previous.name}」仍被員工或主管審核路徑使用，不能刪除。`);
+        }
+        if (next && next.enabled !== 1 && isUsed) {
+            throw new Error(`部門「${previous.name}」仍被員工或主管審核路徑使用，不能停用。`);
+        }
+    });
+
+    const insert = db.prepare(`
+        INSERT OR REPLACE INTO departments (
+            id, name, description, enabled, display_order, created_at, updated_at
+        ) VALUES (
+            @id, @name, @description, @enabled, @display_order, @created_at, @updated_at
+        )
+    `);
+    db.transaction(() => {
+        previousDepartments.forEach((previous) => {
+            const next = nextById.get(previous.id);
+            if (next && previous.name !== next.name) {
+                run('UPDATE employees SET department = ? WHERE department = ?', next.name, previous.name);
+                run('UPDATE leave_approval_routes SET department = ? WHERE department = ?', next.name, previous.name);
+            }
+        });
+        run('DELETE FROM departments');
+        normalizedDepartments.forEach((department) => insert.run(department));
+    })();
+};
 
 function safeParseJsonValue(value) {
     if (value == null || value === '') return null;
@@ -1665,6 +1796,7 @@ module.exports = {
   init,
   getDatabasePath, backupDatabase, validateBackupDatabaseFile, replaceDatabaseFromBackup,
   saveEmployees, loadEmployees, deleteAllEmployees,
+  loadDepartments, saveDepartments,
   addPunchRecord, loadPunchRecords,
   deletePunchRecordsByDateRange, deletePunchRecordsBySource,
   saveShifts, loadShifts,

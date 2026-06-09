@@ -1,6 +1,6 @@
 {
   "name": "TanChin-Time-Clock-SQLite3", // 套件名稱，專案在 npm 或打包時的識別名稱
-  "version": "1.12.0", // 版本號，用於版本管理與更新時比對
+  "version": "1.13.0", // 版本號，用於版本管理與更新時比對
   "productName": "TanChin-Time-Clock-SQLite3", // 應用程式顯示名稱（安裝檔與視窗標題使用）
   "description": "一個神奇的AI作息打卡桌面應用程式，擁有自動更新魔法！", // 專案的簡短描述
   "main": "main.js", // 應用程式進入點檔案，Electron 從這裡開始執行主程序

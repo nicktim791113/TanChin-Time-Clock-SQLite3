@@ -269,6 +269,7 @@ const API_ROUTE_CATALOG = [
 
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/employees/save', auth: '管理者', description: '整批覆寫員工資料' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/employee/save', auth: '管理者', description: '新增或更新單一員工' },
+  { category: '管理者 API', method: 'POST', path: '/api/browser/admin/departments/save', auth: '管理者', description: '儲存部門設定' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/card-reader-capture/latest', auth: '管理者', description: '從最新打卡失敗稽核帶回讀到的卡號' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/card-reader-test-log', auth: '管理者', description: '寫入讀卡測試診斷紀錄' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/employee/delete', auth: '管理者', description: '刪除單一員工' },
@@ -2406,13 +2407,16 @@ function getAdminDatasets(session = {}) {
   const canShifts = hasAdminPermission(session, 'admin.shifts.manage');
   const canManualPunch = hasAdminPermission(session, 'admin.manualPunch.create');
   const canReports = hasAnyAdminPermission(session, ['admin.reports.view', 'admin.reports.export']);
-  const canLeave = hasAnyAdminPermission(session, ['admin.leave.review', 'admin.leave.settings']);
-  const canOvertime = hasAdminPermission(session, 'admin.overtime.view');
+  const canLeave = hasAnyAdminPermission(session, ['admin.leave.review', 'admin.leave.paperCreate', 'admin.leave.settings']);
+  const canOvertime = hasAnyAdminPermission(session, ['admin.overtime.view', 'admin.overtime.paperCreate']);
   const canSystem = hasAdminPermission(session, 'admin.system.manage');
   const canBells = hasAdminPermission(session, 'admin.bells.manage');
   const canThemes = hasAdminPermission(session, 'admin.themes.manage');
   const needsEmployees = canPeople || canSecurity || canManualPunch || canReports || canLeave || canOvertime;
   const needsShifts = canShifts || canManualPunch || canReports;
+  const departments = (canPeople || canSecurity || canManualPunch || canReports || canLeave || canOvertime)
+    ? dbModule.loadDepartments()
+    : [];
   const customSounds = canBells
     ? dbModule.loadCustomSounds().map((sound) => ({
       ...sound,
@@ -2434,6 +2438,7 @@ function getAdminDatasets(session = {}) {
 
   return {
     employees: needsEmployees ? employees : [],
+    departments,
     shifts: needsShifts ? dbModule.loadShifts() : [],
     greetings: canSystem ? dbModule.loadGreetings() : [],
     bellSchedules: canBells ? dbModule.loadBellSchedules() : [],
@@ -3370,6 +3375,45 @@ function normalizeEmployee(employee) {
     registered_address: String(employee.registered_address || '').trim(),
     family_status: String(employee.family_status || '').trim()
   };
+}
+
+function normalizeDepartmentPayload(department = {}, index = 0) {
+  return {
+    id: String(department.id || '').trim(),
+    name: String(department.name || '').trim(),
+    description: String(department.description || '').trim(),
+    enabled: department.enabled !== false && department.enabled !== 0 && department.enabled !== '0' && department.enabled !== 'false',
+    display_order: Number(department.display_order ?? department.displayOrder ?? index * 10) || 0
+  };
+}
+
+function getEnabledDepartmentNameSet(departments = dbModule.loadDepartments()) {
+  return new Set((departments || [])
+    .filter((department) => department.enabled !== false)
+    .map((department) => String(department.name || '').trim())
+    .filter(Boolean));
+}
+
+function isDefaultRouteDepartment(department) {
+  return ['*', '全部', '預設'].includes(String(department || '').trim());
+}
+
+function validateDepartmentNamesForEmployees(employees = [], departments = dbModule.loadDepartments()) {
+  const enabledDepartmentNames = getEnabledDepartmentNameSet(departments);
+  if (!enabledDepartmentNames.size) {
+    throw createHttpError('請先在人員資料的「部門設定」建立並啟用至少一個部門。', 400);
+  }
+  const invalidEmployees = (employees || []).filter((employee) => {
+    const department = String(employee.department || '').trim();
+    return !department || !enabledDepartmentNames.has(department);
+  });
+  if (invalidEmployees.length) {
+    const names = invalidEmployees
+      .slice(0, 8)
+      .map((employee) => `${employee.id || '-'} ${employee.name || ''}：${employee.department || '未設定部門'}`.trim())
+      .join('、');
+    throw createHttpError(`員工部門必須來自已啟用的部門設定，請先修正：${names}`, 400);
+  }
 }
 
 function normalizeGreeting(greeting) {
@@ -4701,7 +4745,7 @@ function attachBrowserRoutes(server) {
         data: { dashboard: buildDashboardForSession(request.browserSession) }
       });
     } catch (error) {
-      response.status(error.statusCode || 500).json({ success: false, error: error.message });
+      response.status(error.statusCode || 400).json({ success: false, error: error.message });
     }
   });
 
@@ -4786,74 +4830,114 @@ function attachBrowserRoutes(server) {
   });
 
   server.post('/api/browser/admin/employees/save', requireBrowserSession, requireAdminPermission('admin.people.edit'), (request, response) => {
-    const previousEmployees = dbModule.loadEmployees();
-    const employees = Array.isArray(request.body?.employees) ? request.body.employees.map(normalizeEmployee) : [];
-    dbModule.saveEmployees(employees);
-    const retainedIds = new Set(employees.map((employee) => employee.id));
-    previousEmployees
-      .filter((employee) => !retainedIds.has(employee.id))
-      .forEach((employee) => {
-        dbModule.deleteEmployeeDevicesByEmployee(employee.id);
-        dbModule.deleteAccountAccessByEmployee(employee.id);
+    try {
+      const previousEmployees = dbModule.loadEmployees();
+      const departments = dbModule.loadDepartments();
+      const employees = Array.isArray(request.body?.employees) ? request.body.employees.map(normalizeEmployee) : [];
+      validateDepartmentNamesForEmployees(employees, departments);
+      dbModule.saveEmployees(employees);
+      const retainedIds = new Set(employees.map((employee) => employee.id));
+      previousEmployees
+        .filter((employee) => !retainedIds.has(employee.id))
+        .forEach((employee) => {
+          dbModule.deleteEmployeeDevicesByEmployee(employee.id);
+          dbModule.deleteAccountAccessByEmployee(employee.id);
+        });
+      writeBrowserAuditLog(request, {
+        action: 'save',
+        target_type: 'employee_batch',
+        target_id: 'all',
+        summary: `整批覆寫員工資料，共 ${employees.length} 筆`,
+        before_data: { count: previousEmployees.length },
+        after_data: { count: employees.length }
       });
-    writeBrowserAuditLog(request, {
-      action: 'save',
-      target_type: 'employee_batch',
-      target_id: 'all',
-      summary: `整批覆寫員工資料，共 ${employees.length} 筆`,
-      before_data: { count: previousEmployees.length },
-      after_data: { count: employees.length }
-    });
-    notifyDesktop('employees', getBrowserSyncMeta(request));
-    response.json({ success: true, message: '員工資料已儲存。' });
+      notifyDesktop('employees', getBrowserSyncMeta(request));
+      response.json({ success: true, message: '員工資料已儲存。' });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
   });
 
   server.post('/api/browser/admin/employee/save', requireBrowserSession, requireAdminPermission('admin.people.edit'), (request, response) => {
-    const originalId = String(request.body?.originalId || '').trim();
-    const employee = normalizeEmployee(request.body?.employee || {});
+    try {
+      const originalId = String(request.body?.originalId || '').trim();
+      const employee = normalizeEmployee(request.body?.employee || {});
 
-    if (!employee.id || !employee.name || !employee.department || !employee.card || !employee.password) {
-      response.status(400).json({ success: false, error: '工號、姓名、部門、卡號與密碼為必填。' });
-      return;
-    }
-
-    const employees = dbModule.loadEmployees();
-    const compareId = originalId || employee.id;
-    const previousEmployee = employees.find((item) => item.id === compareId || item.id === employee.id) || null;
-    const duplicateCard = employees.some((item) => item.card === employee.card && item.id !== compareId);
-    if (duplicateCard) {
-      response.status(400).json({ success: false, error: '卡號不可與其他員工重複。' });
-      return;
-    }
-
-    const filteredEmployees = employees.filter((item) => item.id !== compareId && item.id !== employee.id);
-    filteredEmployees.push(employee);
-    filteredEmployees.sort((a, b) => String(a.id).localeCompare(String(b.id)));
-
-    dbModule.saveEmployees(filteredEmployees);
-    if (previousEmployee && compareId && compareId !== employee.id) {
-      const previousAccess = dbModule.getAccountAccessRecord(compareId);
-      dbModule.deleteEmployeeDevicesByEmployee(compareId);
-      dbModule.deleteAccountAccessByEmployee(compareId);
-      if (previousAccess) {
-        dbModule.saveAccountAccessRecord({
-          ...previousAccess,
-          employee_id: employee.id,
-          updated_at: Date.now(),
-          updated_by: request.browserSession?.realEmployeeId || request.browserSession?.employeeId || ''
-        });
+      if (!employee.id || !employee.name || !employee.department || !employee.card || !employee.password) {
+        response.status(400).json({ success: false, error: '工號、姓名、部門、卡號與密碼為必填。' });
+        return;
       }
+      validateDepartmentNamesForEmployees([employee]);
+
+      const employees = dbModule.loadEmployees();
+      const compareId = originalId || employee.id;
+      const previousEmployee = employees.find((item) => item.id === compareId || item.id === employee.id) || null;
+      const duplicateCard = employees.some((item) => item.card === employee.card && item.id !== compareId);
+      if (duplicateCard) {
+        response.status(400).json({ success: false, error: '卡號不可與其他員工重複。' });
+        return;
+      }
+
+      const filteredEmployees = employees.filter((item) => item.id !== compareId && item.id !== employee.id);
+      filteredEmployees.push(employee);
+      filteredEmployees.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+
+      dbModule.saveEmployees(filteredEmployees);
+      if (previousEmployee && compareId && compareId !== employee.id) {
+        const previousAccess = dbModule.getAccountAccessRecord(compareId);
+        dbModule.deleteEmployeeDevicesByEmployee(compareId);
+        dbModule.deleteAccountAccessByEmployee(compareId);
+        if (previousAccess) {
+          dbModule.saveAccountAccessRecord({
+            ...previousAccess,
+            employee_id: employee.id,
+            updated_at: Date.now(),
+            updated_by: request.browserSession?.realEmployeeId || request.browserSession?.employeeId || ''
+          });
+        }
+      }
+      writeBrowserAuditLog(request, {
+        action: previousEmployee ? 'update' : 'create',
+        target_type: 'employee',
+        target_id: employee.id,
+        summary: `${previousEmployee ? '更新' : '新增'}員工 ${employee.id} ${employee.name}`,
+        before_data: previousEmployee,
+        after_data: employee
+      });
+      notifyDesktop('employees', getBrowserSyncMeta(request));
+      response.json({ success: true, message: '員工資料已儲存。' });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ success: false, error: error.message });
     }
-    writeBrowserAuditLog(request, {
-      action: previousEmployee ? 'update' : 'create',
-      target_type: 'employee',
-      target_id: employee.id,
-      summary: `${previousEmployee ? '更新' : '新增'}員工 ${employee.id} ${employee.name}`,
-      before_data: previousEmployee,
-      after_data: employee
-    });
-    notifyDesktop('employees', getBrowserSyncMeta(request));
-    response.json({ success: true, message: '員工資料已儲存。' });
+  });
+
+  server.post('/api/browser/admin/departments/save', requireBrowserSession, requireAdminPermission('admin.people.edit'), (request, response) => {
+    try {
+      const previousDepartments = dbModule.loadDepartments();
+      const departments = Array.isArray(request.body?.departments)
+        ? request.body.departments.map(normalizeDepartmentPayload).filter((department) => department.name)
+        : [];
+      const names = departments.map((department) => department.name.toLowerCase());
+      if (new Set(names).size !== names.length) {
+        throw createHttpError('部門名稱不可重複。', 400);
+      }
+      if (!departments.some((department) => department.enabled !== false)) {
+        throw createHttpError('請至少保留一個啟用中的部門。', 400);
+      }
+      dbModule.saveDepartments(departments);
+      writeBrowserAuditLog(request, {
+        action: 'save',
+        target_type: 'department_setting',
+        target_id: 'all',
+        summary: `儲存部門設定，共 ${departments.length} 組`,
+        before_data: { count: previousDepartments.length },
+        after_data: { count: departments.length }
+      });
+      notifyDesktop('departments', getBrowserSyncMeta(request));
+      response.json({ success: true, message: '部門設定已儲存。' });
+    } catch (error) {
+      response.status(error.statusCode || 400).json({ success: false, error: error.message });
+    }
   });
 
   server.post('/api/browser/admin/card-reader-capture/latest', requireBrowserSession, requireAdminPermission('admin.people.edit'), (request, response) => {
@@ -5493,6 +5577,11 @@ function attachBrowserRoutes(server) {
       const missingSupervisor = routes.find((route) => !employeeIds.has(route.supervisor_id));
       if (missingSupervisor) {
         throw createHttpError(`找不到主管員工：${missingSupervisor.supervisor_id}`, 400);
+      }
+      const enabledDepartmentNames = getEnabledDepartmentNameSet();
+      const invalidDepartmentRoute = routes.find((route) => !isDefaultRouteDepartment(route.department) && !enabledDepartmentNames.has(route.department));
+      if (invalidDepartmentRoute) {
+        throw createHttpError(`請先在人員資料的「部門設定」建立並啟用部門：${invalidDepartmentRoute.department}`, 400);
       }
       dbModule.saveLeaveApprovalRoutes(routes);
       writeBrowserAuditLog(request, {
