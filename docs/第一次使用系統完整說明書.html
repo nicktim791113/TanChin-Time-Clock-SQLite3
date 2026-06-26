@@ -611,6 +611,7 @@
             <li>每組 Key 可個別開放員工名冊、出勤紀錄、請假資料、加班資料、外部打卡等範圍，停用或刪除後會立刻阻擋該組 Key。</li>
             <li>工作台只顯示 Key 名稱、末 4 碼、權限範圍、最近使用時間與來源 IP；完整金鑰只在新增或更換時輸入，不會再次顯示。</li>
             <li>建議外部系統使用 <code>x-api-key</code> header 傳入 API Key，不要把金鑰放在網址中。</li>
+            <li>員工名冊端點：<code>GET /api/employees</code> 與 <code>GET /api/employees/:id</code> 會回傳完整員工欄位，包含工號、姓名、性別、國籍、部門、職稱、卡號、密碼、身分證字號、生日、到職日、離職日、備註、銀行帳戶、聯絡手機、緊急聯絡人、緊急聯絡電話、聯絡地址、戶籍地址與家庭概況；回應也會附上 <code>fields</code> 欄位對照，並保留 <code>employeeId</code>、<code>employeeName</code>、<code>jobTitle</code> 等常用別名。</li>
             <li>常用資料端點：<code>GET /api/attendance/report?start=YYYY-MM-DD&amp;end=YYYY-MM-DD</code>、<code>GET /api/leave/requests</code>、<code>GET /api/overtime/requests</code>。</li>
             <li>ERP 同步可優先使用短路徑：<code>GET /api/leave-types</code>、<code>GET /api/leave-requests</code>、<code>GET /api/overtime-requests</code>。</li>
             <li>請假與加班紀錄可加上 <code>employeeId</code>、<code>status</code>、<code>start</code>、<code>end</code>、<code>limit</code> 條件，供 ERP 或薪資系統分批同步。</li>

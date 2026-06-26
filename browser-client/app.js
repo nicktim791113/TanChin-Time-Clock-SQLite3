@@ -7100,7 +7100,7 @@ function getExternalApiPermissionDefinitions(datasets = {}) {
         })).filter((permission) => permission.code);
     }
     return [
-        { code: "employees", label: "員工名冊", description: "查詢員工清單與單一員工資料", examples: ["GET /api/employees", "GET /api/employees/:id"] },
+        { code: "employees", label: "員工名冊", description: "查詢完整員工名冊與單一員工所有基本資料欄位", examples: ["GET /api/employees", "GET /api/employees/:id"] },
         { code: "attendance", label: "出勤紀錄", description: "查詢打卡紀錄與考勤報表", examples: ["GET /api/records", "GET /api/attendance/report"] },
         { code: "leave", label: "請假資料", description: "查詢假別與請假申請紀錄", examples: ["GET /api/leave-types", "GET /api/leave-requests"] },
         { code: "overtime", label: "加班資料", description: "查詢加班申請紀錄", examples: ["GET /api/overtime-requests"] },

@@ -175,7 +175,7 @@ const EXTERNAL_API_PERMISSION_DEFINITIONS = [
   {
     code: 'employees',
     label: '員工名冊',
-    description: '查詢員工清單與單一員工資料',
+    description: '查詢完整員工名冊與單一員工所有基本資料欄位',
     examples: ['GET /api/employees', 'GET /api/employees/:id']
   },
   {
@@ -205,6 +205,28 @@ const EXTERNAL_API_PERMISSION_DEFINITIONS = [
 ];
 const EXTERNAL_API_PERMISSION_CODES = new Set(EXTERNAL_API_PERMISSION_DEFINITIONS.map((item) => item.code));
 const DEFAULT_EXTERNAL_API_PERMISSIONS = EXTERNAL_API_PERMISSION_DEFINITIONS.map((item) => item.code);
+const EXTERNAL_EMPLOYEE_FIELD_DEFINITIONS = [
+  { key: 'id', label: '工號', alias: ['employeeId', 'employeeNo'] },
+  { key: 'name', label: '姓名', alias: ['employeeName'] },
+  { key: 'gender', label: '性別' },
+  { key: 'nationality', label: '國籍' },
+  { key: 'department', label: '部門' },
+  { key: 'job_title', label: '職稱', alias: ['jobTitle'] },
+  { key: 'card', label: '卡號' },
+  { key: 'password', label: '密碼' },
+  { key: 'national_id', label: '身分證字號', alias: ['nationalId'] },
+  { key: 'birth_date', label: '出生日', alias: ['birthDate'] },
+  { key: 'hire_date', label: '到職日', alias: ['hireDate'] },
+  { key: 'termination_date', label: '離職日', alias: ['terminationDate'] },
+  { key: 'notes', label: '備註' },
+  { key: 'bank_account', label: '銀行帳戶號碼', alias: ['bankAccount'] },
+  { key: 'mobile_phone', label: '聯絡手機', alias: ['mobilePhone'] },
+  { key: 'emergency_contact', label: '緊急聯絡人', alias: ['emergencyContact'] },
+  { key: 'emergency_phone', label: '緊急聯絡電話', alias: ['emergencyPhone'] },
+  { key: 'contact_address', label: '聯絡地址', alias: ['contactAddress'] },
+  { key: 'registered_address', label: '戶籍地址', alias: ['registeredAddress'] },
+  { key: 'family_status', label: '家庭概況', alias: ['familyStatus'] }
+];
 const LEAVE_ATTENDANCE_STATUS_TEXT = '已核准請假';
 const LEAVE_ATTENDANCE_SOURCE_TEXT = '請假模組';
 const LEAVE_RECORD_KIND_TEXT = '請假';
@@ -241,8 +263,8 @@ const THEME_STYLE_DEFAULTS = {
 };
 
 const API_ROUTE_CATALOG = [
-  { category: '外部 API', method: 'GET', path: '/api/employees', auth: 'API Key', description: '查詢全部員工名冊' },
-  { category: '外部 API', method: 'GET', path: '/api/employees/:id', auth: 'API Key', description: '查詢單一員工資料' },
+  { category: '外部 API', method: 'GET', path: '/api/employees', auth: 'API Key', description: '查詢完整員工名冊欄位' },
+  { category: '外部 API', method: 'GET', path: '/api/employees/:id', auth: 'API Key', description: '查詢單一員工所有基本資料欄位' },
   { category: '外部 API', method: 'GET', path: '/api/records', auth: 'API Key', description: '查詢全部打卡紀錄' },
   { category: '外部 API', method: 'GET', path: '/api/records/range?start=YYYY-MM-DD&end=YYYY-MM-DD', auth: 'API Key', description: '依日期區間查詢打卡紀錄' },
   { category: '外部 API', method: 'GET', path: '/api/records/employee/:id', auth: 'API Key', description: '查詢單一員工的打卡紀錄' },
@@ -1111,6 +1133,32 @@ function sanitizeEmployeeForProfile(employee) {
     contact_address: employee.contact_address,
     registered_address: employee.registered_address,
     family_status: employee.family_status
+  };
+}
+
+function formatEmployeeForExternal(employee = {}) {
+  const normalized = EXTERNAL_EMPLOYEE_FIELD_DEFINITIONS.reduce((record, field) => {
+    record[field.key] = String(employee[field.key] || '').trim();
+    return record;
+  }, {});
+
+  return {
+    ...normalized,
+    employeeId: normalized.id,
+    employeeNo: normalized.id,
+    employeeName: normalized.name,
+    jobTitle: normalized.job_title,
+    nationalId: normalized.national_id,
+    birthDate: normalized.birth_date,
+    hireDate: normalized.hire_date,
+    terminationDate: normalized.termination_date,
+    bankAccount: normalized.bank_account,
+    mobilePhone: normalized.mobile_phone,
+    emergencyContact: normalized.emergency_contact,
+    emergencyPhone: normalized.emergency_phone,
+    contactAddress: normalized.contact_address,
+    registeredAddress: normalized.registered_address,
+    familyStatus: normalized.family_status
   };
 }
 
@@ -4051,7 +4099,11 @@ async function executeAutomationTask(task) {
 
 function attachExternalApiRoutes(server) {
   server.get('/api/employees', requireExternalApiAccess, (request, response) => {
-    response.json({ success: true, data: dbModule.loadEmployees() });
+    response.json({
+      success: true,
+      fields: EXTERNAL_EMPLOYEE_FIELD_DEFINITIONS,
+      data: dbModule.loadEmployees().map(formatEmployeeForExternal)
+    });
   });
 
   server.get('/api/employees/:id', requireExternalApiAccess, (request, response) => {
@@ -4060,7 +4112,11 @@ function attachExternalApiRoutes(server) {
       response.status(404).json({ success: false, error: '找不到指定員工。' });
       return;
     }
-    response.json({ success: true, data: employee });
+    response.json({
+      success: true,
+      fields: EXTERNAL_EMPLOYEE_FIELD_DEFINITIONS,
+      data: formatEmployeeForExternal(employee)
+    });
   });
 
   server.get('/api/records', requireExternalApiAccess, (request, response) => {
