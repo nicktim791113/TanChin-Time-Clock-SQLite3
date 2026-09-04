@@ -8927,7 +8927,7 @@ function renderEmployeeLeaveRequestRows(requests = [], { showEmployee = false, r
     if (!requests.length) return renderEmptyState("目前沒有請假資料。");
     return `
         <div class="data-table-wrap">
-            <table class="data-table">
+            <table class="data-table request-record-table">
                 <thead>
                     <tr>
                         ${showEmployee ? "<th>員工</th>" : ""}
@@ -10459,7 +10459,7 @@ function renderOvertimeRequestRows(requests = [], { showEmployee = false, showAp
     if (!requests.length) return renderEmptyState("目前沒有加班申請資料。");
     return `
         <div class="data-table-wrap">
-            <table class="data-table">
+            <table class="data-table request-record-table">
                 <thead>
                     <tr>
                         ${showEmployee ? "<th>加班員工</th>" : ""}

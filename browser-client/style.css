@@ -3307,6 +3307,30 @@ body::after {
     min-width: 11rem;
 }
 
+.request-record-table th:last-child,
+.request-record-table td.actions:last-child {
+    position: sticky;
+    right: 0;
+    border-left: 1px solid var(--line);
+    box-shadow: -10px 0 14px -14px rgba(35, 75, 102, 0.7);
+}
+
+.request-record-table th:last-child {
+    z-index: 3;
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(235, 246, 252, 0.99)),
+        rgb(244, 249, 253);
+}
+
+.request-record-table td.actions:last-child {
+    z-index: 2;
+    background: rgb(252, 254, 255);
+}
+
+.request-record-table tbody tr:hover td.actions:last-child {
+    background: rgb(239, 248, 252);
+}
+
 .review-comment-input {
     min-height: 32px;
     padding: 6px 8px;
