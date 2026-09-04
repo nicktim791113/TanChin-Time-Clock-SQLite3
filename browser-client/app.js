@@ -769,7 +769,7 @@ async function loadPublicDisplaySettings() {
     }
 }
 
-async function reloadDashboard(message = "", type = "success") {
+async function reloadDashboard(message = "", type = "success", options = {}) {
     // ★ [7] 即時同步或一般重新載入時保留管理者目前的請假／加班篩選與頁碼。
     const previousRequestPages = state.dashboard?.role === "admin"
         ? {
@@ -785,15 +785,16 @@ async function reloadDashboard(message = "", type = "success") {
         ];
         for (const [kind, previousPage, endpoint] of requestRefreshes) {
             if (!previousPage) continue;
+            const resetSnapshot = Array.isArray(options.resetRequestKinds) && options.resetRequestKinds.includes(kind);
             try {
                 const result = await requestJson(endpoint, {
                     method: "POST",
                     auth: true,
                     body: {
                         ...(previousPage.filters || {}),
-                        page: previousPage.page || 1,
-                        snapshotCreatedAt: previousPage.snapshotCreatedAt,
-                        snapshotId: previousPage.snapshotId || ""
+                        page: resetSnapshot ? 1 : (previousPage.page || 1),
+                        snapshotCreatedAt: resetSnapshot ? null : previousPage.snapshotCreatedAt,
+                        snapshotId: resetSnapshot ? "" : (previousPage.snapshotId || "")
                     }
                 });
                 const target = kind === "leave" ? dashboard.datasets?.leave : dashboard.datasets?.overtime;
@@ -8918,7 +8919,7 @@ function renderLeaveTypeOptions(leaveTypes = [], selectedId = "") {
         .join("");
 }
 
-function renderEmployeeLeaveRequestRows(requests = [], { showEmployee = false, reviewMode = "" } = {}) {
+function renderEmployeeLeaveRequestRows(requests = [], { showEmployee = false, reviewMode = "", allowPaperManage = false } = {}) {
     if (!requests.length) return renderEmptyState("目前沒有請假資料。");
     return `
         <div class="data-table-wrap">
@@ -8963,6 +8964,10 @@ function renderEmployeeLeaveRequestRows(requests = [], { showEmployee = false, r
                                     ` : ""}
                                     ${!reviewMode && ["pending_supervisor", "pending_admin"].includes(request.status) ? `
                                         <button class="mini-btn" type="button" data-action="leave-withdraw" data-id="${escapeHtml(request.id)}">撤回</button>
+                                    ` : ""}
+                                    ${!reviewMode && allowPaperManage && request.approval_mode === "admin_paper_approved" && request.status === "approved" ? `
+                                        <button class="mini-btn" type="button" data-action="paper-leave-correct" data-id="${escapeHtml(request.id)}">修正</button>
+                                        <button class="mini-btn danger-text" type="button" data-action="paper-leave-cancel" data-id="${escapeHtml(request.id)}">作廢</button>
                                     ` : ""}
                                     </div>
                                 </div>
@@ -9252,10 +9257,122 @@ function filterAdminPaperEmployeePicker(control) {
     syncAdminPaperEmployeePicker(field);
 }
 
+function getAdminPaperRequest(kind, requestId) {
+    const source = state.dashboard?.datasets?.[kind] || {};
+    const records = source.requestsPage?.records || source.requests || [];
+    return records.find((request) => request.id === requestId) || null;
+}
+
+function getPaperFormDateTime(timestamp) {
+    const date = new Date(Number(timestamp));
+    if (!Number.isFinite(date.getTime())) return { date: "", time: "" };
+    const hours = String(date.getHours()).padStart(2, "0");
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    return { date: formatDateInputValue(date), time: `${hours}:${minutes}` };
+}
+
+function setPaperFormValue(form, name, value) {
+    const control = form.elements.namedItem(name);
+    if (control) control.value = value ?? "";
+}
+
+function resetAdminPaperCorrection(form) {
+    if (!form) return;
+    const kind = form.id === "admin-paper-leave-form" ? "leave" : "overtime";
+    form.querySelectorAll("option[data-paper-correction-only]").forEach((option) => option.remove());
+    form.reset();
+    delete form.dataset.correctionRequestId;
+    form.querySelectorAll('[data-paper-employee-checkbox]').forEach((checkbox) => {
+        checkbox.checked = false;
+    });
+    const field = form.querySelector("[data-paper-employee-field]");
+    if (field) {
+        filterAdminPaperEmployeePicker(field.querySelector("[data-paper-employee-search]") || field);
+    }
+    const title = form.closest("article")?.querySelector("[data-paper-form-title]");
+    const badge = form.closest("article")?.querySelector("[data-paper-form-badge]");
+    const submit = form.querySelector("[data-paper-submit]");
+    const cancel = form.querySelector('[data-action="cancel-paper-correction"]');
+    const modeHelp = form.querySelector("[data-paper-mode-help]");
+    const selectVisible = form.querySelector('[data-action="paper-select-visible-employees"]');
+    if (title) title.textContent = kind === "leave" ? "紙本請假補登" : "紙本加班補登";
+    if (badge) badge.textContent = "直接建立已核准紀錄";
+    if (submit) submit.textContent = kind === "leave" ? "建立紙本核准請假" : "建立紙本核准加班";
+    if (cancel) cancel.classList.add("hidden");
+    if (modeHelp) {
+        modeHelp.textContent = kind === "leave"
+            ? "儲存後會直接成為已核准請假，不會再進主管或管理部待審。"
+            : "儲存後只會建立加班核准紀錄，不會直接修改打卡或出勤時間。";
+    }
+    if (selectVisible) selectVisible.disabled = false;
+    setFormMessage(form.id, "");
+}
+
+function beginAdminPaperCorrection(kind, requestId) {
+    const request = getAdminPaperRequest(kind, requestId);
+    if (!request || request.approval_mode !== "admin_paper_approved" || request.status !== "approved") {
+        throw new Error("這筆紙本補登目前無法修正，請重新整理後再試。");
+    }
+    const formId = kind === "leave" ? "admin-paper-leave-form" : "admin-paper-overtime-form";
+    const form = document.getElementById(formId);
+    if (!form) throw new Error("找不到紙本補登表單。");
+
+    resetAdminPaperCorrection(form);
+    form.dataset.correctionRequestId = request.id;
+    const selectedEmployee = Array.from(form.querySelectorAll("[data-paper-employee-checkbox]"))
+        .find((checkbox) => checkbox.value === request.employeeId);
+    if (!selectedEmployee) throw new Error("原補登員工已不在名冊中，請先確認員工資料。");
+    selectedEmployee.checked = true;
+    syncAdminPaperEmployeePicker(selectedEmployee.closest("[data-paper-employee-field]"));
+
+    const start = getPaperFormDateTime(request.start_at);
+    const end = getPaperFormDateTime(request.end_at);
+    if (kind === "leave") {
+        const leaveTypeSelect = form.elements.namedItem("leaveTypeId");
+        const leaveTypeId = request.leaveTypeId || "";
+        if (leaveTypeSelect && leaveTypeId && !Array.from(leaveTypeSelect.options).some((option) => option.value === leaveTypeId)) {
+            const legacyOption = document.createElement("option");
+            legacyOption.value = leaveTypeId;
+            legacyOption.textContent = `${request.leaveTypeName || leaveTypeId}（已停用，修正時可保留）`;
+            legacyOption.dataset.paperCorrectionOnly = "true";
+            leaveTypeSelect.appendChild(legacyOption);
+        }
+        setPaperFormValue(form, "leaveTypeId", leaveTypeId);
+    }
+    setPaperFormValue(form, "startDate", start.date);
+    setPaperFormValue(form, "startTime", start.time);
+    setPaperFormValue(form, "endDate", end.date);
+    setPaperFormValue(form, "endTime", end.time);
+    setPaperFormValue(form, "durationHours", request.duration_hours ?? "");
+    setPaperFormValue(form, "reason", request.reason || "");
+    setPaperFormValue(form, "paperNo", request.paperNo || "");
+    setPaperFormValue(form, "approvedBy", request.paperApprovedBy || "");
+    setPaperFormValue(form, "comment", request.paperComment || "");
+
+    const title = form.closest("article")?.querySelector("[data-paper-form-title]");
+    const badge = form.closest("article")?.querySelector("[data-paper-form-badge]");
+    const submit = form.querySelector("[data-paper-submit]");
+    const cancel = form.querySelector('[data-action="cancel-paper-correction"]');
+    const modeHelp = form.querySelector("[data-paper-mode-help]");
+    const selectVisible = form.querySelector('[data-action="paper-select-visible-employees"]');
+    if (title) title.textContent = kind === "leave" ? "修正紙本請假補登" : "修正紙本加班補登";
+    if (badge) badge.textContent = `修正 ${request.employeeId || ""}`.trim();
+    if (submit) submit.textContent = kind === "leave" ? "儲存請假修正" : "儲存加班修正";
+    if (cancel) cancel.classList.remove("hidden");
+    if (modeHelp) modeHelp.textContent = "儲存修正後，原紀錄會保留為已取消，系統另建立新的已核准紀錄。";
+    if (selectVisible) selectVisible.disabled = true;
+    setFormMessage(formId, `正在修正補登紀錄 ${request.id}；一次只能選擇一位員工。`, "info");
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 const originalHandleDashboardClickWithPaperEmployeePicker = handleDashboardClick;
 handleDashboardClick = async function handleDashboardClickPaperEmployeePickerOverride(event) {
     const actionTarget = event.target.closest("[data-action]");
     const action = actionTarget?.dataset.action || "";
+    if (action === "cancel-paper-correction") {
+        resetAdminPaperCorrection(actionTarget.closest("form"));
+        return;
+    }
     if (action === "paper-select-visible-employees" || action === "paper-clear-employees") {
         const field = actionTarget.closest("[data-paper-employee-field]");
         if (!field) return;
@@ -9275,6 +9392,12 @@ const originalHandleDashboardChangeWithPaperEmployeePicker = handleDashboardChan
 handleDashboardChange = async function handleDashboardChangePaperEmployeePickerOverride(event) {
     if (event.target.matches("[data-paper-employee-checkbox]")) {
         const field = event.target.closest("[data-paper-employee-field]");
+        const form = event.target.closest("form");
+        if (form?.dataset.correctionRequestId && event.target.checked) {
+            field?.querySelectorAll("[data-paper-employee-checkbox]").forEach((checkbox) => {
+                if (checkbox !== event.target) checkbox.checked = false;
+            });
+        }
         if (field) syncAdminPaperEmployeePicker(field);
         return;
     }
@@ -9295,10 +9418,10 @@ function renderAdminPaperLeaveForm(datasets = {}) {
         <article class="sub-panel">
             <div class="list-toolbar">
                 <div>
-                    <h3>紙本請假補登</h3>
+                    <h3 data-paper-form-title>紙本請假補登</h3>
                     <p class="helper-text">員工已走紙本或現場核准流程時，由管理者直接補登為已核准請假；資料會進考勤報表與請假出勤查核。</p>
                 </div>
-                ${renderBadge("直接建立已核准紀錄", "warning")}
+                <span class="badge warning" data-paper-form-badge>直接建立已核准紀錄</span>
             </div>
             <form id="admin-paper-leave-form" class="stack-form">
                 <div class="field-grid dense-form admin-paper-field-grid">
@@ -9345,8 +9468,11 @@ function renderAdminPaperLeaveForm(datasets = {}) {
                     </label>
                 </div>
                 <div class="form-toolbar dense-toolbar">
-                    <button class="primary-btn" type="submit">建立紙本核准請假</button>
-                    <p class="helper-text">儲存後會直接成為已核准請假，不會再進主管或管理部待審。</p>
+                    <div class="inline-actions">
+                        <button class="primary-btn" type="submit" data-paper-submit>建立紙本核准請假</button>
+                        <button class="outline-btn hidden" type="button" data-action="cancel-paper-correction">取消修正</button>
+                    </div>
+                    <p class="helper-text" data-paper-mode-help>儲存後會直接成為已核准請假，不會再進主管或管理部待審。</p>
                 </div>
                 <div class="inline-message" data-form-message-for="admin-paper-leave-form" aria-live="polite"></div>
             </form>
@@ -9561,7 +9687,10 @@ function renderAdminLeaveSection(datasets) {
                     </div>
                 </div>
                 ${renderAdminRequestFilters("leave", datasets, pageState)}
-                ${renderEmployeeLeaveRequestRows(pageState.records, { showEmployee: true })}
+                ${renderEmployeeLeaveRequestRows(pageState.records, {
+                    showEmployee: true,
+                    allowPaperManage: hasCurrentAdminPermission("admin.leave.paperCreate")
+                })}
                 ${renderAdminRequestPagination("leave", pageState)}
             </article>
 
@@ -10155,10 +10284,18 @@ handleDashboardSubmit = async function handleDashboardSubmitLeaveOverride(event)
             const values = Object.fromEntries(new FormData(form).entries());
             const employeeIds = collectAdminPaperEmployeeIds(form);
             if (!employeeIds.length) throw new Error("請至少選擇一位請假員工。");
-            const result = await requestJson("/api/browser/admin/leave/paper-approved", {
+            const correctionRequestId = String(form.dataset.correctionRequestId || "");
+            if (correctionRequestId && employeeIds.length !== 1) {
+                throw new Error("修正補登時一次只能選擇一位請假員工。");
+            }
+            const endpoint = correctionRequestId
+                ? "/api/browser/admin/leave/paper-approved/correct"
+                : "/api/browser/admin/leave/paper-approved";
+            const result = await requestJson(endpoint, {
                 method: "POST",
                 auth: true,
                 body: {
+                    requestId: correctionRequestId,
                     employeeIds,
                     leaveTypeId: values.leaveTypeId,
                     startDate: values.startDate,
@@ -10172,9 +10309,10 @@ handleDashboardSubmit = async function handleDashboardSubmitLeaveOverride(event)
                     comment: values.comment?.trim() || ""
                 }
             });
-            // ★ [8] 補登後沿用目前紀錄篩選、頁碼與查詢快照，不再直接覆蓋成無篩選第一頁。
-            await reloadDashboard(result.message || "紙本核准請假已補登。", "success");
-            setFormMessage(formId, result.message || "紙本核准請假已補登。", "success");
+            // 補登後保留目前篩選，並重建快照回到第一頁，讓新紀錄與總筆數立即可見。
+            const successMessage = result.message || (correctionRequestId ? "紙本請假補登已修正。" : "紙本核准請假已補登。");
+            await reloadDashboard(successMessage, "success", { resetRequestKinds: ["leave"] });
+            setFormMessage(formId, successMessage, "success");
             return;
         }
 
@@ -10211,11 +10349,27 @@ handleDashboardClick = async function handleDashboardClickLeaveOverride(event) {
         setActiveLeaveTypeEditorPanel(form, targetId);
         return;
     }
-    if (!["leave-withdraw", "leave-supervisor-decision", "leave-admin-decision"].includes(action)) {
+    if (!["leave-withdraw", "leave-supervisor-decision", "leave-admin-decision", "paper-leave-correct", "paper-leave-cancel"].includes(action)) {
         return originalHandleDashboardClickWithLeave(event);
     }
 
     try {
+        if (action === "paper-leave-correct") {
+            beginAdminPaperCorrection("leave", actionTarget.dataset.id || "");
+            return;
+        }
+
+        if (action === "paper-leave-cancel") {
+            if (!window.confirm("確定要作廢這筆紙本請假補登嗎？原紀錄會保留為已取消，且不再列入已核准請假與薪資明細。")) return;
+            const result = await requestJson("/api/browser/admin/leave/paper-approved/cancel", {
+                method: "POST",
+                auth: true,
+                body: { requestId: actionTarget.dataset.id }
+            });
+            await reloadDashboard(result.message || "紙本請假補登已作廢。", "success");
+            return;
+        }
+
         if (action === "leave-withdraw") {
             if (!window.confirm("確定要撤回這張請假申請嗎？")) return;
             const result = await requestJson("/api/browser/employee/leave/withdraw", {
@@ -10297,7 +10451,7 @@ function renderOvertimeEmployeeOptions(employees = [], selectedId = "") {
     `).join("");
 }
 
-function renderOvertimeRequestRows(requests = [], { showEmployee = false, showApplicant = false, reviewMode = "", allowWithdraw = true } = {}) {
+function renderOvertimeRequestRows(requests = [], { showEmployee = false, showApplicant = false, reviewMode = "", allowWithdraw = true, allowPaperManage = false } = {}) {
     if (!requests.length) return renderEmptyState("目前沒有加班申請資料。");
     return `
         <div class="data-table-wrap">
@@ -10339,7 +10493,13 @@ function renderOvertimeRequestRows(requests = [], { showEmployee = false, showAp
                                         ${!reviewMode && allowWithdraw && request.status === "pending_supervisor" ? `
                                             <button class="mini-btn" type="button" data-action="overtime-withdraw" data-id="${escapeHtml(request.id)}">撤回</button>
                                         ` : ""}
-                                        ${!reviewMode && (!allowWithdraw || request.status !== "pending_supervisor") ? "<span>-</span>" : ""}
+                                        ${!reviewMode && allowPaperManage && request.approval_mode === "admin_paper_approved" && request.status === "approved" ? `
+                                            <button class="mini-btn" type="button" data-action="paper-overtime-correct" data-id="${escapeHtml(request.id)}">修正</button>
+                                            <button class="mini-btn danger-text" type="button" data-action="paper-overtime-cancel" data-id="${escapeHtml(request.id)}">作廢</button>
+                                        ` : ""}
+                                        ${!reviewMode
+                                            && !(allowPaperManage && request.approval_mode === "admin_paper_approved" && request.status === "approved")
+                                            && (!allowWithdraw || request.status !== "pending_supervisor") ? "<span>-</span>" : ""}
                                     </div>
                                 </div>
                             </td>
@@ -10503,10 +10663,10 @@ function renderAdminPaperOvertimeForm(datasets = {}) {
         <article class="sub-panel">
             <div class="list-toolbar">
                 <div>
-                    <h3>紙本加班補登</h3>
+                    <h3 data-paper-form-title>紙本加班補登</h3>
                     <p class="helper-text">員工已走紙本或現場核准流程時，由管理者直接補登為已核准加班；資料會進加班查核與申請匯出。</p>
                 </div>
-                ${renderBadge("直接建立已核准紀錄", "warning")}
+                <span class="badge warning" data-paper-form-badge>直接建立已核准紀錄</span>
             </div>
             <form id="admin-paper-overtime-form" class="stack-form">
                 <div class="field-grid dense-form admin-paper-field-grid">
@@ -10549,8 +10709,11 @@ function renderAdminPaperOvertimeForm(datasets = {}) {
                     </label>
                 </div>
                 <div class="form-toolbar dense-toolbar">
-                    <button class="primary-btn" type="submit">建立紙本核准加班</button>
-                    <p class="helper-text">儲存後只會建立加班核准紀錄，不會直接修改打卡或出勤時間。</p>
+                    <div class="inline-actions">
+                        <button class="primary-btn" type="submit" data-paper-submit>建立紙本核准加班</button>
+                        <button class="outline-btn hidden" type="button" data-action="cancel-paper-correction">取消修正</button>
+                    </div>
+                    <p class="helper-text" data-paper-mode-help>儲存後只會建立加班核准紀錄，不會直接修改打卡或出勤時間。</p>
                 </div>
                 <div class="inline-message" data-form-message-for="admin-paper-overtime-form" aria-live="polite"></div>
             </form>
@@ -10604,7 +10767,12 @@ function renderAdminOvertimeSection(datasets) {
                     <button class="outline-btn" type="button" data-action="export-overtime-requests">匯出申請 CSV</button>
                 </div>
                 ${renderAdminRequestFilters("overtime", datasets, pageState)}
-                ${renderOvertimeRequestRows(requests, { showEmployee: true, showApplicant: true, allowWithdraw: false })}
+                ${renderOvertimeRequestRows(requests, {
+                    showEmployee: true,
+                    showApplicant: true,
+                    allowWithdraw: false,
+                    allowPaperManage: hasCurrentAdminPermission("admin.overtime.paperCreate")
+                })}
                 ${renderAdminRequestPagination("overtime", pageState)}
             </article>
         </div>
@@ -10628,10 +10796,18 @@ handleDashboardSubmit = async function handleDashboardSubmitOvertimeOverride(eve
         if (formId === "admin-paper-overtime-form") {
             const employeeIds = collectAdminPaperEmployeeIds(form);
             if (!employeeIds.length) throw new Error("請至少選擇一位加班員工。");
-            const result = await requestJson("/api/browser/admin/overtime/paper-approved", {
+            const correctionRequestId = String(form.dataset.correctionRequestId || "");
+            if (correctionRequestId && employeeIds.length !== 1) {
+                throw new Error("修正補登時一次只能選擇一位加班員工。");
+            }
+            const endpoint = correctionRequestId
+                ? "/api/browser/admin/overtime/paper-approved/correct"
+                : "/api/browser/admin/overtime/paper-approved";
+            const result = await requestJson(endpoint, {
                 method: "POST",
                 auth: true,
                 body: {
+                    requestId: correctionRequestId,
                     employeeIds,
                     startDate: values.startDate,
                     startTime: values.startTime,
@@ -10644,9 +10820,10 @@ handleDashboardSubmit = async function handleDashboardSubmitOvertimeOverride(eve
                     comment: values.comment?.trim() || ""
                 }
             });
-            // ★ [8] 加班補登完成後保留使用者所在頁面及篩選條件。
-            await reloadDashboard(result.message || "紙本核准加班已補登。", "success");
-            setFormMessage(formId, result.message || "紙本核准加班已補登。", "success");
+            // 加班補登後保留目前篩選，並重建快照回到第一頁，讓新紀錄與總筆數立即可見。
+            const successMessage = result.message || (correctionRequestId ? "紙本加班補登已修正。" : "紙本核准加班已補登。");
+            await reloadDashboard(successMessage, "success", { resetRequestKinds: ["overtime"] });
+            setFormMessage(formId, successMessage, "success");
             return;
         }
 
@@ -10675,11 +10852,27 @@ const originalHandleDashboardClickWithOvertime = handleDashboardClick;
 handleDashboardClick = async function handleDashboardClickOvertimeOverride(event) {
     const actionTarget = event.target.closest("[data-action]");
     const action = actionTarget?.dataset.action || "";
-    if (!["overtime-withdraw", "overtime-supervisor-decision", "export-overtime-alerts", "export-overtime-requests", "export-leave-audit-alerts"].includes(action)) {
+    if (!["overtime-withdraw", "overtime-supervisor-decision", "export-overtime-alerts", "export-overtime-requests", "export-leave-audit-alerts", "paper-overtime-correct", "paper-overtime-cancel"].includes(action)) {
         return originalHandleDashboardClickWithOvertime(event);
     }
 
     try {
+        if (action === "paper-overtime-correct") {
+            beginAdminPaperCorrection("overtime", actionTarget.dataset.id || "");
+            return;
+        }
+
+        if (action === "paper-overtime-cancel") {
+            if (!window.confirm("確定要作廢這筆紙本加班補登嗎？原紀錄會保留為已取消，且不再列入核准加班與薪資明細。")) return;
+            const result = await requestJson("/api/browser/admin/overtime/paper-approved/cancel", {
+                method: "POST",
+                auth: true,
+                body: { requestId: actionTarget.dataset.id }
+            });
+            await reloadDashboard(result.message || "紙本加班補登已作廢。", "success");
+            return;
+        }
+
         if (action === "export-leave-audit-alerts") {
             const result = await requestJson("/api/browser/admin/leave-audit/export", {
                 method: "POST",
@@ -12376,6 +12569,8 @@ function activateWorkspaceSubsection(role, sectionId, subsectionId) {
 
 const workspaceSubnavEditRoutes = {
     "edit-employee": { role: "admin", section: "people", subsection: "form", run: (target) => fillEmployeeForm(target.dataset.id) },
+    "paper-leave-correct": { role: "admin", section: "leave", subsection: "paper", run: (target) => beginAdminPaperCorrection("leave", target.dataset.id || "") },
+    "paper-overtime-correct": { role: "admin", section: "overtime", subsection: "paper", run: (target) => beginAdminPaperCorrection("overtime", target.dataset.id || "") },
     "edit-greeting": { role: "admin", section: "system", subsection: "greetings", run: (target) => fillGreetingForm(target.dataset.id) },
     "edit-bell": { role: "admin", section: "bells", subsection: "schedules", run: (target) => fillBellForm(target.dataset.id) },
     "edit-effect": { role: "admin", section: "themes", subsection: "effects", run: (target) => fillEffectForm(target.dataset.id) },

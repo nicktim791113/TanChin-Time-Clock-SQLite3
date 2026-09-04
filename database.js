@@ -139,6 +139,10 @@ function init(dbFilePath) {
       admin_comment TEXT,
       admin_decided_at INTEGER,
       approval_mode TEXT,
+      paper_no TEXT,
+      paper_approved_by TEXT,
+      paper_comment TEXT,
+      corrected_from_request_id TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       withdrawn_at INTEGER,
@@ -170,6 +174,10 @@ function init(dbFilePath) {
       supervisor_comment TEXT,
       supervisor_decided_at INTEGER,
       approval_mode TEXT,
+      paper_no TEXT,
+      paper_approved_by TEXT,
+      paper_comment TEXT,
+      corrected_from_request_id TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       withdrawn_at INTEGER,
@@ -362,6 +370,20 @@ function init(dbFilePath) {
             run('ALTER TABLE leave_requests ADD COLUMN approval_mode TEXT');
             console.log('[資料庫] leave_requests approval_mode 升級成功！');
         }
+        const leavePaperColumnDefinitions = [
+            ['paper_no', 'paper_no TEXT'],
+            ['paper_approved_by', 'paper_approved_by TEXT'],
+            ['paper_comment', 'paper_comment TEXT'],
+            ['corrected_from_request_id', 'corrected_from_request_id TEXT']
+        ];
+        const missingLeavePaperColumns = leavePaperColumnDefinitions.filter(([columnName]) => !leaveRequestColumns.includes(columnName));
+        if (missingLeavePaperColumns.length) {
+            console.log('[資料庫] 偵測到舊版 leave_requests 結構，正在補上紙本補登欄位...');
+            for (const [, columnDefinition] of missingLeavePaperColumns) {
+                run(`ALTER TABLE leave_requests ADD COLUMN ${columnDefinition}`);
+            }
+            console.log('[資料庫] leave_requests 紙本補登欄位升級成功！');
+        }
 
         const overtimeRequestTableInfo = db.prepare("PRAGMA table_info(overtime_requests)").all();
         const overtimeRequestColumns = overtimeRequestTableInfo.map(col => col.name);
@@ -369,6 +391,20 @@ function init(dbFilePath) {
             console.log('[資料庫] 偵測到舊版 overtime_requests 結構，正在補上 approval_mode 欄位...');
             run('ALTER TABLE overtime_requests ADD COLUMN approval_mode TEXT');
             console.log('[資料庫] overtime_requests approval_mode 升級成功！');
+        }
+        const overtimePaperColumnDefinitions = [
+            ['paper_no', 'paper_no TEXT'],
+            ['paper_approved_by', 'paper_approved_by TEXT'],
+            ['paper_comment', 'paper_comment TEXT'],
+            ['corrected_from_request_id', 'corrected_from_request_id TEXT']
+        ];
+        const missingOvertimePaperColumns = overtimePaperColumnDefinitions.filter(([columnName]) => !overtimeRequestColumns.includes(columnName));
+        if (missingOvertimePaperColumns.length) {
+            console.log('[資料庫] 偵測到舊版 overtime_requests 結構，正在補上紙本補登欄位...');
+            for (const [, columnDefinition] of missingOvertimePaperColumns) {
+                run(`ALTER TABLE overtime_requests ADD COLUMN ${columnDefinition}`);
+            }
+            console.log('[資料庫] overtime_requests 紙本補登欄位升級成功！');
         }
 
         const employeeDevicesTableInfo = db.prepare("PRAGMA table_info(employee_devices)").all();
@@ -815,12 +851,14 @@ const createLeaveRequest = (request) => {
             id, employee_id, leave_type_id, start_at, end_at, duration_hours,
             reason, status, supervisor_id, supervisor_decision, supervisor_comment,
             supervisor_decided_at, admin_decision_by, admin_comment, admin_decided_at,
-            approval_mode, created_at, updated_at
+            approval_mode, paper_no, paper_approved_by, paper_comment,
+            corrected_from_request_id, created_at, updated_at
         ) VALUES (
             @id, @employee_id, @leave_type_id, @start_at, @end_at, @duration_hours,
             @reason, @status, @supervisor_id, @supervisor_decision, @supervisor_comment,
             @supervisor_decided_at, @admin_decision_by, @admin_comment, @admin_decided_at,
-            @approval_mode, @created_at, @updated_at
+            @approval_mode, @paper_no, @paper_approved_by, @paper_comment,
+            @corrected_from_request_id, @created_at, @updated_at
         )
     `);
     const insertStep = db.prepare(`
@@ -838,7 +876,11 @@ const createLeaveRequest = (request) => {
         admin_decision_by: request.admin_decision_by || null,
         admin_comment: request.admin_comment || null,
         admin_decided_at: request.admin_decided_at || null,
-        approval_mode: request.approval_mode || 'employee_request'
+        approval_mode: request.approval_mode || 'employee_request',
+        paper_no: request.paper_no ?? null,
+        paper_approved_by: request.paper_approved_by ?? null,
+        paper_comment: request.paper_comment ?? null,
+        corrected_from_request_id: request.corrected_from_request_id ?? null
     };
     db.transaction(() => {
         insertRequest.run(requestForDb);
@@ -1029,6 +1071,35 @@ const withdrawLeaveRequest = ({ requestId, withdrawnAt }) => run(
     requestId
 );
 
+const cancelPaperLeaveRequestRow = ({ requestId, cancelledAt }) => run(
+    `UPDATE leave_requests
+     SET status = 'cancelled', cancelled_at = ?, updated_at = ?
+     WHERE id = ?
+       AND approval_mode = 'admin_paper_approved'
+       AND status = 'approved'`,
+    cancelledAt,
+    cancelledAt,
+    requestId
+);
+
+const cancelPaperLeaveRequest = ({ requestId, cancelledAt, auditLog = null }) => db.transaction(() => {
+    const result = cancelPaperLeaveRequestRow({ requestId, cancelledAt });
+    if (result.changes === 1 && auditLog) addAuditLog(auditLog);
+    return result;
+})();
+
+const replacePaperLeaveRequest = ({ requestId, replacement, cancelledAt, auditLog = null }) => db.transaction(() => {
+    const result = cancelPaperLeaveRequestRow({ requestId, cancelledAt });
+    if (result.changes !== 1) {
+        const error = new Error('紙本請假補登狀態已變更，無法完成修正。');
+        error.code = 'PAPER_REQUEST_STATE_CHANGED';
+        throw error;
+    }
+    createLeaveRequest(replacement);
+    if (auditLog) addAuditLog(auditLog);
+    return { cancelledRequestId: requestId, replacementRequestId: replacement.id };
+})();
+
 function mapOvertimeRequestRow(row) {
     return {
         ...row,
@@ -1041,12 +1112,14 @@ const createOvertimeRequest = (request) => {
         INSERT INTO overtime_requests (
             id, employee_id, applicant_id, applicant_role, start_at, end_at,
             duration_hours, reason, status, supervisor_id, supervisor_decision,
-            supervisor_comment, supervisor_decided_at, approval_mode, created_at,
+            supervisor_comment, supervisor_decided_at, approval_mode, paper_no,
+            paper_approved_by, paper_comment, corrected_from_request_id, created_at,
             updated_at
         ) VALUES (
             @id, @employee_id, @applicant_id, @applicant_role, @start_at, @end_at,
             @duration_hours, @reason, @status, @supervisor_id, @supervisor_decision,
-            @supervisor_comment, @supervisor_decided_at, @approval_mode, @created_at,
+            @supervisor_comment, @supervisor_decided_at, @approval_mode, @paper_no,
+            @paper_approved_by, @paper_comment, @corrected_from_request_id, @created_at,
             @updated_at
         )
     `);
@@ -1062,7 +1135,12 @@ const createOvertimeRequest = (request) => {
             ...request,
             supervisor_decision: request.supervisor_decision || null,
             supervisor_comment: request.supervisor_comment || null,
-            supervisor_decided_at: request.supervisor_decided_at || null
+            supervisor_decided_at: request.supervisor_decided_at || null,
+            approval_mode: request.approval_mode || 'self_request',
+            paper_no: request.paper_no ?? null,
+            paper_approved_by: request.paper_approved_by ?? null,
+            paper_comment: request.paper_comment ?? null,
+            corrected_from_request_id: request.corrected_from_request_id ?? null
         });
         insertStep.run(
             request.id,
@@ -1209,6 +1287,35 @@ const withdrawOvertimeRequest = ({ requestId, withdrawnAt }) => run(
     withdrawnAt,
     requestId
 );
+
+const cancelPaperOvertimeRequestRow = ({ requestId, cancelledAt }) => run(
+    `UPDATE overtime_requests
+     SET status = 'cancelled', cancelled_at = ?, updated_at = ?
+     WHERE id = ?
+       AND approval_mode = 'admin_paper_approved'
+       AND status = 'approved'`,
+    cancelledAt,
+    cancelledAt,
+    requestId
+);
+
+const cancelPaperOvertimeRequest = ({ requestId, cancelledAt, auditLog = null }) => db.transaction(() => {
+    const result = cancelPaperOvertimeRequestRow({ requestId, cancelledAt });
+    if (result.changes === 1 && auditLog) addAuditLog(auditLog);
+    return result;
+})();
+
+const replacePaperOvertimeRequest = ({ requestId, replacement, cancelledAt, auditLog = null }) => db.transaction(() => {
+    const result = cancelPaperOvertimeRequestRow({ requestId, cancelledAt });
+    if (result.changes !== 1) {
+        const error = new Error('紙本加班補登狀態已變更，無法完成修正。');
+        error.code = 'PAPER_REQUEST_STATE_CHANGED';
+        throw error;
+    }
+    createOvertimeRequest(replacement);
+    if (auditLog) addAuditLog(auditLog);
+    return { cancelledRequestId: requestId, replacementRequestId: replacement.id };
+})();
 
 const addPunchRecord = (record) => run(
     `INSERT INTO punch_records (
@@ -1896,9 +2003,10 @@ module.exports = {
   createLeaveRequest, getLeaveRequestById, queryLeaveRequests, countLeaveRequests,
   hasOverlappingLeaveRequest, updateLeaveRequestSupervisorDecision,
   updateLeaveRequestAdminDecision, withdrawLeaveRequest,
+  cancelPaperLeaveRequest, replacePaperLeaveRequest,
   createOvertimeRequest, getOvertimeRequestById, queryOvertimeRequests, countOvertimeRequests,
   hasOverlappingOvertimeRequest, updateOvertimeRequestSupervisorDecision,
-  withdrawOvertimeRequest,
+  withdrawOvertimeRequest, cancelPaperOvertimeRequest, replacePaperOvertimeRequest,
   saveAutomationTasks, loadAutomationTasks,
   addAutomationLog, loadAutomationLog, clearAutomationLog,
   addAuditLog, getAuditLogsForArchive, deleteAuditLogsByIds,
