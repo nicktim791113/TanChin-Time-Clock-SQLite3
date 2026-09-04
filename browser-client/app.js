@@ -148,6 +148,8 @@ const attendanceExportTemplateLabels = {
     anomaly: "異常稽核",
     analysis: "報表分析",
     payroll_leave: "薪資含請假明細",
+    // ★ [1] 新版管理者手動匯出模板；既有 payroll_leave 保留供舊設定相容。
+    payroll_leave_overtime: "薪資請假／加班明細",
     full: "完整格式",
     custom: "自訂格式"
 };
@@ -768,7 +770,42 @@ async function loadPublicDisplaySettings() {
 }
 
 async function reloadDashboard(message = "", type = "success") {
+    // ★ [7] 即時同步或一般重新載入時保留管理者目前的請假／加班篩選與頁碼。
+    const previousRequestPages = state.dashboard?.role === "admin"
+        ? {
+            leave: state.dashboard?.datasets?.leave?.requestsPage || null,
+            overtime: state.dashboard?.datasets?.overtime?.requestsPage || null
+        }
+        : { leave: null, overtime: null };
     const dashboard = await fetchDashboard();
+    if (dashboard.role === "admin") {
+        const requestRefreshes = [
+            ["leave", previousRequestPages.leave, "/api/browser/admin/leave/requests/query"],
+            ["overtime", previousRequestPages.overtime, "/api/browser/admin/overtime/requests/query"]
+        ];
+        for (const [kind, previousPage, endpoint] of requestRefreshes) {
+            if (!previousPage) continue;
+            try {
+                const result = await requestJson(endpoint, {
+                    method: "POST",
+                    auth: true,
+                    body: {
+                        ...(previousPage.filters || {}),
+                        page: previousPage.page || 1,
+                        snapshotCreatedAt: previousPage.snapshotCreatedAt,
+                        snapshotId: previousPage.snapshotId || ""
+                    }
+                });
+                const target = kind === "leave" ? dashboard.datasets?.leave : dashboard.datasets?.overtime;
+                if (target) {
+                    target.requestsPage = result.data;
+                    target.requests = result.data?.records || [];
+                }
+            } catch (error) {
+                console.error(`同步管理者${kind === "leave" ? "請假" : "加班"}紀錄查詢狀態失敗:`, error);
+            }
+        }
+    }
     if (dashboard.role === "admin" && ensureAdminReportState().queried) {
         const reportState = ensureAdminReportState();
         try {
@@ -1935,10 +1972,12 @@ function renderAdminReportSection(datasets) {
                             <button class="outline-btn" type="button" data-action="reset-admin-report">重設條件</button>
                         </div>
                         <div class="inline-actions">
-                            <button class="secondary-btn" type="button" data-action="export-admin-report">匯出目前結果 CSV</button>
-                            <button class="outline-btn" type="button" data-action="export-admin-report" data-template="payroll_leave">匯出薪資請假明細 CSV</button>
+                            <!-- ★ [2] 明確區分舊薪資精簡格式與含核准單據的詳細格式，避免兩個按鈕用途看似重複。 -->
+                            <button class="secondary-btn" type="button" data-action="export-admin-report">匯出精簡考勤 CSV（舊薪資格式）</button>
+                            <button class="outline-btn" type="button" data-action="export-admin-report" data-template="payroll_leave_overtime">匯出薪資請假／加班明細 CSV</button>
                         </div>
                     </div>
+                    <p class="helper-text">精簡版固定 9 欄，保留舊薪資／ERP 匯入相容性；詳細版使用相同員工與日期條件，另列已核准請假與已核准加班單的起訖、核准時數、單號與原因。待審、駁回、撤回或取消的加班單不會進入薪資明細；跨日單會依各日涵蓋時段比例分攤原單核准時數。</p>
                 </form>
             </article>
 
@@ -3656,7 +3695,7 @@ async function handleDashboardClick(event) {
             if (!reportState.queried) {
                 throw new Error("請先查詢考勤報表，再進行匯出。");
             }
-            if (!reportState.records.length) {
+            if (!reportState.records.length && templateId !== "payroll_leave_overtime") {
                 throw new Error("目前查詢結果沒有可匯出的資料。");
             }
             const result = await requestJson("/api/browser/admin/reports/export", {
@@ -3670,7 +3709,7 @@ async function handleDashboardClick(event) {
                 auth: true
             });
             downloadTextFile(result.data.fileName, result.data.csvContent);
-            setMessage(ui.dashboardMessage, templateId === "payroll_leave" ? "薪資請假明細已匯出為 CSV。" : "考勤報表已匯出為 CSV。", "success");
+            setMessage(ui.dashboardMessage, templateId === "payroll_leave_overtime" ? (result.message || "薪資請假／加班明細已匯出為 CSV。") : "精簡考勤報表已匯出為 CSV。", "success");
             return;
         }
         if (action === "reset-employee-form") return resetEmployeeForm();
@@ -7101,6 +7140,7 @@ function getExternalApiPermissionDefinitions(datasets = {}) {
     }
     return [
         { code: "employees", label: "員工名冊", description: "查詢完整員工名冊與單一員工所有基本資料欄位", examples: ["GET /api/employees", "GET /api/employees/:id"] },
+        { code: "employees.write", label: "人員資料同步寫入", description: "允許外部系統以工號為鍵新增或更新員工基本資料", examples: ["POST /api/employees/upsert"] },
         { code: "attendance", label: "出勤紀錄", description: "查詢打卡紀錄與考勤報表", examples: ["GET /api/records", "GET /api/attendance/report"] },
         { code: "leave", label: "請假資料", description: "查詢假別與請假申請紀錄", examples: ["GET /api/leave-types", "GET /api/leave-requests"] },
         { code: "overtime", label: "加班資料", description: "查詢加班申請紀錄", examples: ["GET /api/overtime-requests"] },
@@ -7115,6 +7155,7 @@ function getExternalApiPermissionLabel(code, permissions = getExternalApiPermiss
 function getExternalApiPermissionCodeForRoute(route = {}) {
     const path = String(route.path || "").split("?")[0];
     const method = String(route.method || "").toUpperCase();
+    if (method === "POST" && path === "/api/employees/upsert") return "employees.write";
     if (method === "GET" && path.includes("/employees")) return "employees";
     if (method === "GET" && (path.includes("/attendance") || path.includes("/records"))) return "attendance";
     if (method === "GET" && path.includes("/leave")) return "leave";
@@ -7247,7 +7288,9 @@ function renderExternalApiSettingsPanel(datasets = {}) {
     const enabled = Boolean(settings.externalApiEnabled ?? health.externalApiEnabled);
     const authMode = settings.externalApiAuthMode || health.externalApiAuthMode || (enabled ? "api_key" : "disabled");
     const permissions = getExternalApiPermissionDefinitions(datasets);
-    const defaultPermissionCodes = permissions.map((permission) => permission.code);
+    const defaultPermissionCodes = permissions
+        .map((permission) => permission.code)
+        .filter((code) => code !== "employees.write");
     const keys = Array.isArray(settings.externalApiKeys) ? settings.externalApiKeys : [];
     const keyCount = Number(settings.externalApiKeyCount ?? health.externalApiKeyCount ?? keys.length) || keys.length;
     const enabledKeyCount = Number(settings.externalApiEnabledKeyCount ?? health.externalApiEnabledKeyCount ?? keys.filter((key) => key.enabled).length) || 0;
@@ -7353,7 +7396,9 @@ function resetExternalApiKeyForm() {
     form.reset();
     if (form.elements.keyId) form.elements.keyId.value = "";
     const permissions = getExternalApiPermissionDefinitions(getDatasets());
-    const defaultCodes = new Set(permissions.map((permission) => permission.code));
+    const defaultCodes = new Set(permissions
+        .map((permission) => permission.code)
+        .filter((code) => code !== "employees.write"));
     form.querySelectorAll('input[name="permissions"]').forEach((checkbox) => {
         checkbox.checked = defaultCodes.has(checkbox.value);
     });
@@ -8114,7 +8159,17 @@ handleLoginSubmit = async function handleLoginSubmitSecurityOverride(event) {
     }
 };
 
+// ★ [10] 瀏覽器打卡提交鎖，避免快速雙擊在第一個請求完成前重複送出。
+let employeePunchRequestInFlight = false;
+
 handleEmployeePunch = async function handleEmployeePunchSecurityOverride() {
+    if (employeePunchRequestInFlight) return;
+    employeePunchRequestInFlight = true;
+    document.querySelectorAll('[data-action="employee-punch"]').forEach((button) => {
+        button.disabled = true;
+        button.setAttribute("aria-busy", "true");
+    });
+
     try {
         const security = state.dashboard?.security || {};
         setMessage(ui.dashboardMessage, security.gpsRequiredOnPunch ? "正在取得 GPS 定位..." : "正在送出打卡...", "info");
@@ -8128,6 +8183,12 @@ handleEmployeePunch = async function handleEmployeePunchSecurityOverride() {
         setMessage(ui.dashboardMessage, result.message, result.message.includes("重複打卡") ? "info" : "success");
     } catch (error) {
         setMessage(ui.dashboardMessage, formatBrowserPunchError(error), "error");
+    } finally {
+        employeePunchRequestInFlight = false;
+        document.querySelectorAll('[data-action="employee-punch"]').forEach((button) => {
+            button.disabled = false;
+            button.removeAttribute("aria-busy");
+        });
     }
 };
 
@@ -9293,8 +9354,165 @@ function renderAdminPaperLeaveForm(datasets = {}) {
     `;
 }
 
+// ★ [3] 管理端請假／加班紀錄共用篩選與分頁元件；頁面固定顯示 50 筆，總數取自資料庫 COUNT。
+function hasCurrentAdminPermission(permissionCode) {
+    return (state.dashboard?.permissions?.admin || []).includes(permissionCode);
+}
+
+function getAdminRequestPageState(kind, datasets = {}) {
+    const source = kind === "leave" ? datasets.leave || {} : datasets.overtime || {};
+    const pageState = source.requestsPage || {};
+    return {
+        records: Array.isArray(pageState.records) ? pageState.records : (source.requests || []),
+        filters: pageState.filters || {
+            employeeId: "",
+            department: "",
+            status: "",
+            leaveTypeId: "",
+            startDate: "",
+            endDate: ""
+        },
+        page: Math.max(1, Number(pageState.page) || 1),
+        pageSize: 50,
+        totalCount: Math.max(0, Number(pageState.totalCount) || 0),
+        totalPages: Math.max(1, Number(pageState.totalPages) || 1),
+        snapshotCreatedAt: Number.isFinite(Number(pageState.snapshotCreatedAt))
+            ? Number(pageState.snapshotCreatedAt)
+            : null,
+        snapshotId: String(pageState.snapshotId || "")
+    };
+}
+
+function renderAdminRequestFilterOptions(items = [], selectedValue = "", getValue = (item) => item, getLabel = (item) => item) {
+    return items.map((item) => {
+        const value = String(getValue(item) ?? "");
+        return `<option value="${escapeHtml(value)}" ${value === selectedValue ? "selected" : ""}>${escapeHtml(getLabel(item))}</option>`;
+    }).join("");
+}
+
+function renderAdminRequestFilters(kind, datasets, pageState) {
+    const filters = pageState.filters || {};
+    const isLeave = kind === "leave";
+    const formId = isLeave ? "admin-leave-records-filter-form" : "admin-overtime-records-filter-form";
+    const employees = datasets.employees || [];
+    const departments = datasets.departments || [];
+    const statusItems = isLeave
+        ? [
+            ["pending_supervisor", "主管審核中"],
+            ["pending_admin", "管理部複核中"],
+            ["approved", "已核准"],
+            ["rejected", "已駁回"],
+            ["withdrawn", "已撤回"],
+            ["cancelled", "已取消"]
+        ]
+        : [
+            ["pending_supervisor", "主管審核中"],
+            ["approved", "已核准"],
+            ["rejected", "已駁回"],
+            ["withdrawn", "已撤回"],
+            ["cancelled", "已取消"]
+        ];
+    const employeeOptions = renderAdminRequestFilterOptions(
+        employees,
+        filters.employeeId || "",
+        (employee) => employee.id,
+        (employee) => `${employee.id} / ${employee.name || "-"} / ${employee.department || "未設定部門"}`
+    );
+    const departmentOptions = renderAdminRequestFilterOptions(
+        departments,
+        filters.department || "",
+        (department) => department.name || department.department || department,
+        (department) => department.name || department.department || department
+    );
+    const statusOptions = renderAdminRequestFilterOptions(
+        statusItems,
+        filters.status || "",
+        (item) => item[0],
+        (item) => item[1]
+    );
+    const leaveTypeField = isLeave ? `
+        <label class="field">
+            <span>假別</span>
+            <select name="leaveTypeId">
+                <option value="">全部假別</option>
+                ${renderAdminRequestFilterOptions(
+                    datasets.leave?.leaveTypes || [],
+                    filters.leaveTypeId || "",
+                    (type) => type.id,
+                    (type) => type.name || type.id
+                )}
+            </select>
+        </label>
+    ` : "";
+
+    return `
+        <form id="${formId}" class="stack-form admin-record-filter-form">
+            <div class="field-grid three">
+                <label class="field">
+                    <span>${isLeave ? "請假員工" : "加班員工"}</span>
+                    <select name="employeeId">
+                        <option value="">全部員工</option>
+                        ${employeeOptions}
+                    </select>
+                </label>
+                <label class="field">
+                    <span>部門</span>
+                    <select name="department">
+                        <option value="">全部部門</option>
+                        ${departmentOptions}
+                    </select>
+                </label>
+                <label class="field">
+                    <span>狀態</span>
+                    <select name="status">
+                        <option value="">全部狀態</option>
+                        ${statusOptions}
+                    </select>
+                </label>
+                ${leaveTypeField}
+                <label class="field">
+                    <span>區間開始</span>
+                    <input name="startDate" type="date" value="${escapeHtml(filters.startDate || "")}">
+                </label>
+                <label class="field">
+                    <span>區間結束</span>
+                    <input name="endDate" type="date" value="${escapeHtml(filters.endDate || "")}">
+                </label>
+            </div>
+            <div class="form-toolbar dense-toolbar">
+                <div class="inline-actions">
+                    <button class="primary-btn" type="submit">查詢紀錄</button>
+                    <button class="outline-btn" type="button" data-action="reset-admin-request-filters" data-record-kind="${kind}">清除篩選</button>
+                </div>
+                <p class="helper-text">日期條件會找出與所選區間有交集的申請；開始與結束日期需一起填寫。</p>
+            </div>
+        </form>
+    `;
+}
+
+function renderAdminRequestPagination(kind, pageState) {
+    const first = pageState.totalCount ? ((pageState.page - 1) * pageState.pageSize) + 1 : 0;
+    const last = pageState.totalCount ? Math.min(pageState.page * pageState.pageSize, pageState.totalCount) : 0;
+    const previousPage = Math.max(1, pageState.page - 1);
+    const nextPage = Math.min(pageState.totalPages, pageState.page + 1);
+    return `
+        <div class="form-toolbar dense-toolbar admin-record-pagination">
+            <p class="helper-text">顯示第 ${first}–${last} 筆，共 ${pageState.totalCount} 筆；第 ${pageState.page} / ${pageState.totalPages} 頁（每頁 50 筆）。</p>
+            <div class="inline-actions">
+                <button class="mini-btn" type="button" data-action="query-admin-request-page" data-record-kind="${kind}" data-page="1" ${pageState.page <= 1 ? "disabled" : ""}>第一頁</button>
+                <button class="mini-btn" type="button" data-action="query-admin-request-page" data-record-kind="${kind}" data-page="${previousPage}" ${pageState.page <= 1 ? "disabled" : ""}>上一頁</button>
+                <button class="mini-btn" type="button" data-action="query-admin-request-page" data-record-kind="${kind}" data-page="${nextPage}" ${pageState.page >= pageState.totalPages ? "disabled" : ""}>下一頁</button>
+                <button class="mini-btn" type="button" data-action="query-admin-request-page" data-record-kind="${kind}" data-page="${pageState.totalPages}" ${pageState.page >= pageState.totalPages ? "disabled" : ""}>最後一頁</button>
+            </div>
+        </div>
+    `;
+}
+// ★ [3] 結束。
+
 function renderAdminLeaveSection(datasets) {
     const leave = datasets.leave || {};
+    const pageState = getAdminRequestPageState("leave", datasets);
+    const canReview = hasCurrentAdminPermission("admin.leave.review");
     return `
         <div class="workspace-stack">
             <article class="workspace-card">
@@ -9304,9 +9522,9 @@ function renderAdminLeaveSection(datasets) {
                         <h3>請假管理</h3>
                     </div>
                     <div class="badge-row">
-                        ${renderBadge(`管理部待審 ${leave.pendingAdmin?.length || 0} 筆`, leave.pendingAdmin?.length ? "warning" : "success")}
-                        ${renderBadge(`查核警示 ${leave.alerts?.length || 0} 筆`, leave.alerts?.length ? "warning" : "success")}
-                        ${renderBadge(`全部請假 ${leave.requests?.length || 0} 筆`)}
+                        ${canReview ? renderBadge(`管理部待審 ${leave.pendingAdminTotalCount || 0} 筆`, leave.pendingAdminTotalCount ? "warning" : "success") : ""}
+                        ${canReview ? renderBadge(`查核警示 ${leave.alerts?.length || 0} 筆`, leave.alerts?.length ? "warning" : "success") : ""}
+                        ${canReview ? renderBadge(`全部請假 ${pageState.totalCount} 筆`) : ""}
                     </div>
                 </div>
                 <p class="helper-text">請假流程採「員工送出 → 部門主管審核 → 管理部終審」；只有終審核准後才視為生效。</p>
@@ -9329,7 +9547,7 @@ function renderAdminLeaveSection(datasets) {
                 <div class="list-toolbar">
                     <div>
                         <h3>管理部待複核</h3>
-                        <p class="helper-text">主管核准後的請假單會進入這裡，由管理者最後核准或駁回。</p>
+                        <p class="helper-text">主管核准後的請假單會進入這裡，由管理者最後核准或駁回；待審很多時先顯示最新 50 筆，徽章為完整總數。</p>
                     </div>
                 </div>
                 ${renderEmployeeLeaveRequestRows(leave.pendingAdmin || [], { showEmployee: true, reviewMode: "admin" })}
@@ -9339,10 +9557,12 @@ function renderAdminLeaveSection(datasets) {
                 <div class="list-toolbar">
                     <div>
                         <h3>請假紀錄</h3>
-                        <p class="helper-text">顯示最近 200 筆請假申請與審核狀態。</p>
+                        <p class="helper-text">可依員工、部門、假別、狀態與日期查詢全部請假申請。</p>
                     </div>
                 </div>
-                ${renderEmployeeLeaveRequestRows(leave.requests || [], { showEmployee: true })}
+                ${renderAdminRequestFilters("leave", datasets, pageState)}
+                ${renderEmployeeLeaveRequestRows(pageState.records, { showEmployee: true })}
+                ${renderAdminRequestPagination("leave", pageState)}
             </article>
 
             <article class="sub-panel">
@@ -9952,8 +10172,8 @@ handleDashboardSubmit = async function handleDashboardSubmitLeaveOverride(event)
                     comment: values.comment?.trim() || ""
                 }
             });
-            renderDashboard(result.data.dashboard);
-            setMessage(ui.dashboardMessage, result.message || "紙本核准請假已補登。", "success");
+            // ★ [8] 補登後沿用目前紀錄篩選、頁碼與查詢快照，不再直接覆蓋成無篩選第一頁。
+            await reloadDashboard(result.message || "紙本核准請假已補登。", "success");
             setFormMessage(formId, result.message || "紙本核准請假已補登。", "success");
             return;
         }
@@ -10341,7 +10561,10 @@ function renderAdminPaperOvertimeForm(datasets = {}) {
 function renderAdminOvertimeSection(datasets) {
     const overtime = datasets.overtime || {};
     const alerts = overtime.alerts || [];
-    const requests = overtime.requests || [];
+    const canView = hasCurrentAdminPermission("admin.overtime.view");
+    // ★ [4] 加班紀錄改讀伺服器端分頁狀態，徽章顯示資料庫總筆數而非目前頁長度。
+    const pageState = getAdminRequestPageState("overtime", datasets);
+    const requests = pageState.records;
     return `
         <div class="workspace-stack">
             <article class="workspace-card">
@@ -10351,9 +10574,9 @@ function renderAdminOvertimeSection(datasets) {
                         <h3>加班管理</h3>
                     </div>
                     <div class="badge-row">
-                        ${renderBadge(`待主管審核 ${overtime.pendingSupervisor?.length || 0} 筆`, overtime.pendingSupervisor?.length ? "warning" : "success")}
-                        ${renderBadge(`查核警示 ${alerts.length} 筆`, alerts.length ? "warning" : "success")}
-                        ${renderBadge(`加班申請 ${requests.length} 筆`)}
+                        ${canView ? renderBadge(`待主管審核 ${overtime.pendingSupervisorTotalCount || 0} 筆`, overtime.pendingSupervisorTotalCount ? "warning" : "success") : ""}
+                        ${canView ? renderBadge(`查核警示 ${alerts.length} 筆`, alerts.length ? "warning" : "success") : ""}
+                        ${canView ? renderBadge(`加班申請 ${pageState.totalCount} 筆`) : ""}
                     </div>
                 </div>
                 <p class="helper-text">加班申請與請假分開保存；查核只做比對與警示，不會直接改動出勤打卡時間。</p>
@@ -10376,11 +10599,13 @@ function renderAdminOvertimeSection(datasets) {
                 <div class="list-toolbar">
                     <div>
                         <h3>加班申請紀錄</h3>
-                        <p class="helper-text">顯示最近 300 筆加班申請、審核狀態與代申請流程。</p>
+                        <p class="helper-text">可依員工、部門、狀態與日期查詢全部加班申請；申請 CSV 會匯出目前篩選下的全部資料，不只目前頁。</p>
                     </div>
                     <button class="outline-btn" type="button" data-action="export-overtime-requests">匯出申請 CSV</button>
                 </div>
+                ${renderAdminRequestFilters("overtime", datasets, pageState)}
                 ${renderOvertimeRequestRows(requests, { showEmployee: true, showApplicant: true, allowWithdraw: false })}
+                ${renderAdminRequestPagination("overtime", pageState)}
             </article>
         </div>
     `;
@@ -10419,8 +10644,8 @@ handleDashboardSubmit = async function handleDashboardSubmitOvertimeOverride(eve
                     comment: values.comment?.trim() || ""
                 }
             });
-            renderDashboard(result.data.dashboard);
-            setMessage(ui.dashboardMessage, result.message || "紙本核准加班已補登。", "success");
+            // ★ [8] 加班補登完成後保留使用者所在頁面及篩選條件。
+            await reloadDashboard(result.message || "紙本核准加班已補登。", "success");
             setFormMessage(formId, result.message || "紙本核准加班已補登。", "success");
             return;
         }
@@ -11728,33 +11953,38 @@ const workspaceSubnavConfigs = {
                         {
                             id: "paper",
                             label: "紙本核准補登",
-                            panelIndex: 1
+                            panelIndex: 1,
+                            visible: () => hasCurrentAdminPermission("admin.leave.paperCreate")
                         },
                         {
                             id: "audit",
                             label: "請假出勤查核",
                             panelIndex: 2,
+                            visible: () => hasCurrentAdminPermission("admin.leave.review"),
                             badge: (datasets) => String(datasets.leave?.alerts?.length || 0)
                         },
                         {
                             id: "pending",
                             label: "管理部待複核",
                             panelIndex: 3,
-                            badge: (datasets) => String(datasets.leave?.pendingAdmin?.length || 0)
+                            visible: () => hasCurrentAdminPermission("admin.leave.review"),
+                            badge: (datasets) => String(datasets.leave?.pendingAdminTotalCount || 0)
                         },
                         {
                             id: "records",
                             label: "請假紀錄",
                             panelIndex: 4,
-                            badge: (datasets) => String(datasets.leave?.requests?.length || 0)
+                            visible: () => hasCurrentAdminPermission("admin.leave.review"),
+                            // ★ [5] 子導覽徽章同步顯示全部筆數，不再只顯示目前 50 筆頁面。
+                            badge: (datasets) => String(datasets.leave?.requestsPage?.totalCount || 0)
                         }
                     ]
                 },
                 {
                     label: "制度設定",
                     items: [
-                        { id: "types", label: "假別設定", panelIndex: 5 },
-                        { id: "routes", label: "主管審核路徑", panelIndex: 6 }
+                        { id: "types", label: "假別設定", panelIndex: 5, visible: () => hasCurrentAdminPermission("admin.leave.settings") },
+                        { id: "routes", label: "主管審核路徑", panelIndex: 6, visible: () => hasCurrentAdminPermission("admin.leave.settings") }
                     ]
                 }
             ]
@@ -11768,19 +11998,22 @@ const workspaceSubnavConfigs = {
                         {
                             id: "paper",
                             label: "紙本核准補登",
-                            panelIndex: 1
+                            panelIndex: 1,
+                            visible: () => hasCurrentAdminPermission("admin.overtime.paperCreate")
                         },
                         {
                             id: "alerts",
                             label: "出勤查核警示",
                             panelIndex: 2,
+                            visible: () => hasCurrentAdminPermission("admin.overtime.view"),
                             badge: (datasets) => String(datasets.overtime?.alerts?.length || 0)
                         },
                         {
                             id: "records",
                             label: "加班申請紀錄",
                             panelIndex: 3,
-                            badge: (datasets) => String(datasets.overtime?.requests?.length || 0)
+                            visible: () => hasCurrentAdminPermission("admin.overtime.view"),
+                            badge: (datasets) => String(datasets.overtime?.requestsPage?.totalCount || 0)
                         }
                     ]
                 }
@@ -12013,7 +12246,10 @@ function parseWorkspaceSubnavPanels(baseHtml, config = {}) {
 
 function prepareWorkspaceSubnavGroups(config, panels, datasets) {
     return (config.groups || []).map((group) => {
-        const items = (group.items || []).map((item) => {
+        // ★ [9] 子導覽依實際子權限裁切，避免只有補登／設定權限時仍顯示歷史與查核面板。
+        const items = (group.items || []).filter((item) => (
+            typeof item.visible !== "function" || item.visible(datasets || {})
+        )).map((item) => {
             const html = getWorkspaceSubnavItemPanelHtml(panels, item);
             const preparedItem = {
                 ...item,
@@ -12191,6 +12427,108 @@ handleDashboardClick = async function handleDashboardClickWorkspaceSubnavOverrid
 
     return originalHandleDashboardClickWithWorkspaceSubnav(event);
 };
+
+// ★ [6] 管理端紀錄查詢互動：送出篩選、切換頁碼、清除條件及依目前篩選匯出全部加班申請。
+function applyAdminRequestPage(kind, pageData) {
+    const datasets = state.dashboard?.datasets;
+    if (!datasets) return;
+    const target = kind === "leave" ? datasets.leave : datasets.overtime;
+    if (!target) return;
+    target.requestsPage = pageData;
+    target.requests = Array.isArray(pageData?.records) ? pageData.records : [];
+}
+
+async function queryAdminRequestPage(kind, payload = {}, { showMessage = true } = {}) {
+    const endpoint = kind === "leave"
+        ? "/api/browser/admin/leave/requests/query"
+        : "/api/browser/admin/overtime/requests/query";
+    const result = await requestJson(endpoint, {
+        method: "POST",
+        auth: true,
+        body: payload
+    });
+    applyAdminRequestPage(kind, result.data);
+    renderDashboard(state.dashboard);
+    if (showMessage) setMessage(ui.dashboardMessage, result.message || "紀錄查詢完成。", "success");
+    return result.data;
+}
+
+function getAdminRequestCurrentFilters(kind) {
+    return { ...getAdminRequestPageState(kind, state.dashboard?.datasets || {}).filters };
+}
+
+const originalHandleDashboardSubmitWithAdminRequestPages = handleDashboardSubmit;
+handleDashboardSubmit = async function handleDashboardSubmitAdminRequestPagesOverride(event) {
+    const form = event.target instanceof HTMLFormElement
+        ? event.target
+        : event.target?.closest?.("form");
+    const formId = form?.getAttribute("id") || "";
+    const kind = formId === "admin-leave-records-filter-form"
+        ? "leave"
+        : formId === "admin-overtime-records-filter-form"
+            ? "overtime"
+            : "";
+    if (!kind) return originalHandleDashboardSubmitWithAdminRequestPages(event);
+
+    event.preventDefault();
+    try {
+        const values = Object.fromEntries(new FormData(form).entries());
+        await queryAdminRequestPage(kind, {
+            employeeId: values.employeeId?.trim() || "",
+            department: values.department?.trim() || "",
+            status: values.status?.trim() || "",
+            leaveTypeId: values.leaveTypeId?.trim() || "",
+            startDate: values.startDate || "",
+            endDate: values.endDate || "",
+            page: 1
+        });
+    } catch (error) {
+        setMessage(ui.dashboardMessage, error.message, "error");
+    }
+};
+
+const originalHandleDashboardClickWithAdminRequestPages = handleDashboardClick;
+handleDashboardClick = async function handleDashboardClickAdminRequestPagesOverride(event) {
+    const actionTarget = event.target?.closest?.("[data-action]");
+    const action = actionTarget?.dataset.action || "";
+    if (!["query-admin-request-page", "reset-admin-request-filters", "export-overtime-requests"].includes(action)) {
+        return originalHandleDashboardClickWithAdminRequestPages(event);
+    }
+
+    event.preventDefault();
+    try {
+        if (action === "export-overtime-requests") {
+            const filters = getAdminRequestCurrentFilters("overtime");
+            const result = await requestJson("/api/browser/admin/overtime/export", {
+                method: "POST",
+                auth: true,
+                body: {
+                    reportType: "requests",
+                    ...filters
+                }
+            });
+            downloadTextFile(result.data.fileName, result.data.csvContent);
+            setMessage(ui.dashboardMessage, result.message || "加班申請紀錄已匯出為 CSV。", "success");
+            return;
+        }
+
+        const kind = actionTarget.dataset.recordKind === "leave" ? "leave" : "overtime";
+        if (action === "reset-admin-request-filters") {
+            await queryAdminRequestPage(kind, { page: 1 });
+            return;
+        }
+        const page = Math.max(1, Number(actionTarget.dataset.page) || 1);
+        await queryAdminRequestPage(kind, {
+            ...getAdminRequestCurrentFilters(kind),
+            page,
+            snapshotCreatedAt: getAdminRequestPageState(kind, state.dashboard?.datasets || {}).snapshotCreatedAt,
+            snapshotId: getAdminRequestPageState(kind, state.dashboard?.datasets || {}).snapshotId
+        }, { showMessage: false });
+    } catch (error) {
+        setMessage(ui.dashboardMessage, error.message, "error");
+    }
+};
+// ★ [6] 結束。
 
 function initialize() {
     ui.roleSelector.addEventListener("click", (event) => {

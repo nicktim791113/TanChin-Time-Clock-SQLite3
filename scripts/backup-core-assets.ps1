@@ -109,6 +109,7 @@ $projectDirectories = @(
 
 $projectFiles = @(
     "attendance-export.js",
+    "database-backup.js",
     "database.js",
     "icon.ico",
     "icon.png",

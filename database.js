@@ -248,12 +248,15 @@ function init(dbFilePath) {
     CREATE INDEX IF NOT EXISTS idx_leave_requests_status ON leave_requests (status);
     CREATE INDEX IF NOT EXISTS idx_leave_requests_supervisor_id ON leave_requests (supervisor_id);
     CREATE INDEX IF NOT EXISTS idx_leave_requests_start_at ON leave_requests (start_at);
+    -- ★ [3] 管理端穩定分頁排序索引，避免大量同時建立的批次申請跨頁重複或漏列。
+    CREATE INDEX IF NOT EXISTS idx_leave_requests_created_at_id ON leave_requests (created_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_leave_approval_steps_request_id ON leave_approval_steps (request_id);
     CREATE INDEX IF NOT EXISTS idx_overtime_requests_employee_id ON overtime_requests (employee_id);
     CREATE INDEX IF NOT EXISTS idx_overtime_requests_applicant_id ON overtime_requests (applicant_id);
     CREATE INDEX IF NOT EXISTS idx_overtime_requests_status ON overtime_requests (status);
     CREATE INDEX IF NOT EXISTS idx_overtime_requests_supervisor_id ON overtime_requests (supervisor_id);
     CREATE INDEX IF NOT EXISTS idx_overtime_requests_start_at ON overtime_requests (start_at);
+    CREATE INDEX IF NOT EXISTS idx_overtime_requests_created_at_id ON overtime_requests (created_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_overtime_approval_steps_request_id ON overtime_approval_steps (request_id);
     CREATE INDEX IF NOT EXISTS idx_account_access_updated_at ON account_access (updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_workspace_nav_order_scope ON workspace_nav_order (role, nav_type, scope, employee_id);
@@ -867,12 +870,26 @@ const getLeaveRequestById = (requestId) => {
     return row ? mapLeaveRequestRow(row) : null;
 };
 
-const queryLeaveRequests = (filters = {}) => {
+// ★ [1] 請假管理查詢共用條件：讓畫面分頁、總筆數與既有查詢使用完全相同的篩選規則。
+const buildLeaveRequestWhere = (filters = {}) => {
     const clauses = [];
     const params = [];
     if (filters.employeeId) {
         clauses.push('employee_id = ?');
         params.push(String(filters.employeeId));
+    }
+    if (Array.isArray(filters.employeeIds)) {
+        const employeeIds = [...new Set(filters.employeeIds.map((value) => String(value || '').trim()).filter(Boolean))];
+        if (employeeIds.length) {
+            clauses.push(`employee_id IN (${employeeIds.map(() => '?').join(',')})`);
+            params.push(...employeeIds);
+        } else {
+            clauses.push('1 = 0');
+        }
+    }
+    if (filters.leaveTypeId) {
+        clauses.push('leave_type_id = ?');
+        params.push(String(filters.leaveTypeId));
     }
     if (filters.supervisorId) {
         clauses.push('supervisor_id = ?');
@@ -894,14 +911,38 @@ const queryLeaveRequests = (filters = {}) => {
         clauses.push('start_at <= ? AND end_at > ?');
         params.push(Number(filters.overlapEndAt) || 0, Number(filters.overlapStartAt) || 0);
     }
+    if (Number.isFinite(Number(filters.snapshotCreatedAt)) && filters.snapshotId) {
+        // ★ [3] 固定在首次查詢的最新資料上界，讓 OFFSET 翻頁不受後續新申請插入影響。
+        clauses.push('(created_at < ? OR (created_at = ? AND id <= ?))');
+        params.push(
+            Number(filters.snapshotCreatedAt),
+            Number(filters.snapshotCreatedAt),
+            String(filters.snapshotId)
+        );
+    }
+    return {
+        whereSql: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '',
+        params
+    };
+};
+
+const queryLeaveRequests = (filters = {}) => {
+    const { whereSql, params } = buildLeaveRequestWhere(filters);
     const shouldLimit = filters.limit !== null && filters.limit !== false && filters.limit !== 'all';
     const maxLimit = Math.max(1, Number(filters.maxLimit) || 500);
     const limit = shouldLimit ? Math.max(1, Math.min(Number(filters.limit) || 100, maxLimit)) : null;
-    const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-    const limitSql = shouldLimit ? ' LIMIT ?' : '';
-    const queryParams = shouldLimit ? [...params, limit] : params;
-    return all(`SELECT * FROM leave_requests ${whereSql} ORDER BY created_at DESC${limitSql}`, ...queryParams).map(mapLeaveRequestRow);
+    const offset = shouldLimit ? Math.max(0, Number(filters.offset) || 0) : 0;
+    const limitSql = shouldLimit ? ' LIMIT ? OFFSET ?' : '';
+    const queryParams = shouldLimit ? [...params, limit, offset] : params;
+    return all(`SELECT * FROM leave_requests ${whereSql} ORDER BY created_at DESC, id DESC${limitSql}`, ...queryParams).map(mapLeaveRequestRow);
 };
+
+const countLeaveRequests = (filters = {}) => {
+    const { whereSql, params } = buildLeaveRequestWhere(filters);
+    const row = get(`SELECT COUNT(*) AS total FROM leave_requests ${whereSql}`, ...params);
+    return Number(row?.total || 0);
+};
+// ★ [1] 結束。
 
 const hasOverlappingLeaveRequest = (employeeId, startAt, endAt, excludeId = '') => {
     const rows = all(
@@ -1041,12 +1082,22 @@ const getOvertimeRequestById = (requestId) => {
     return row ? mapOvertimeRequestRow(row) : null;
 };
 
-const queryOvertimeRequests = (filters = {}) => {
+// ★ [2] 加班管理查詢共用條件：支援部門員工集合、正確總筆數與資料庫端分頁。
+const buildOvertimeRequestWhere = (filters = {}) => {
     const clauses = [];
     const params = [];
     if (filters.employeeId) {
         clauses.push('employee_id = ?');
         params.push(String(filters.employeeId));
+    }
+    if (Array.isArray(filters.employeeIds)) {
+        const employeeIds = [...new Set(filters.employeeIds.map((value) => String(value || '').trim()).filter(Boolean))];
+        if (employeeIds.length) {
+            clauses.push(`employee_id IN (${employeeIds.map(() => '?').join(',')})`);
+            params.push(...employeeIds);
+        } else {
+            clauses.push('1 = 0');
+        }
     }
     if (filters.applicantId) {
         clauses.push('applicant_id = ?');
@@ -1076,14 +1127,38 @@ const queryOvertimeRequests = (filters = {}) => {
         clauses.push('start_at <= ? AND end_at > ?');
         params.push(Number(filters.overlapEndAt) || 0, Number(filters.overlapStartAt) || 0);
     }
+    if (Number.isFinite(Number(filters.snapshotCreatedAt)) && filters.snapshotId) {
+        // ★ [3] 請假與加班分頁共用同一種快照上界語意。
+        clauses.push('(created_at < ? OR (created_at = ? AND id <= ?))');
+        params.push(
+            Number(filters.snapshotCreatedAt),
+            Number(filters.snapshotCreatedAt),
+            String(filters.snapshotId)
+        );
+    }
+    return {
+        whereSql: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '',
+        params
+    };
+};
+
+const queryOvertimeRequests = (filters = {}) => {
+    const { whereSql, params } = buildOvertimeRequestWhere(filters);
     const shouldLimit = filters.limit !== null && filters.limit !== false && filters.limit !== 'all';
     const maxLimit = Math.max(1, Number(filters.maxLimit) || 500);
     const limit = shouldLimit ? Math.max(1, Math.min(Number(filters.limit) || 100, maxLimit)) : null;
-    const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-    const limitSql = shouldLimit ? ' LIMIT ?' : '';
-    const queryParams = shouldLimit ? [...params, limit] : params;
-    return all(`SELECT * FROM overtime_requests ${whereSql} ORDER BY created_at DESC${limitSql}`, ...queryParams).map(mapOvertimeRequestRow);
+    const offset = shouldLimit ? Math.max(0, Number(filters.offset) || 0) : 0;
+    const limitSql = shouldLimit ? ' LIMIT ? OFFSET ?' : '';
+    const queryParams = shouldLimit ? [...params, limit, offset] : params;
+    return all(`SELECT * FROM overtime_requests ${whereSql} ORDER BY created_at DESC, id DESC${limitSql}`, ...queryParams).map(mapOvertimeRequestRow);
 };
+
+const countOvertimeRequests = (filters = {}) => {
+    const { whereSql, params } = buildOvertimeRequestWhere(filters);
+    const row = get(`SELECT COUNT(*) AS total FROM overtime_requests ${whereSql}`, ...params);
+    return Number(row?.total || 0);
+};
+// ★ [2] 結束。
 
 const hasOverlappingOvertimeRequest = (employeeId, startAt, endAt, excludeId = '') => {
     const rows = all(
@@ -1818,10 +1893,10 @@ module.exports = {
   saveCustomThemes, loadCustomThemes,
   loadLeaveTypes, saveLeaveTypes,
   loadLeaveApprovalRoutes, saveLeaveApprovalRoutes,
-  createLeaveRequest, getLeaveRequestById, queryLeaveRequests,
+  createLeaveRequest, getLeaveRequestById, queryLeaveRequests, countLeaveRequests,
   hasOverlappingLeaveRequest, updateLeaveRequestSupervisorDecision,
   updateLeaveRequestAdminDecision, withdrawLeaveRequest,
-  createOvertimeRequest, getOvertimeRequestById, queryOvertimeRequests,
+  createOvertimeRequest, getOvertimeRequestById, queryOvertimeRequests, countOvertimeRequests,
   hasOverlappingOvertimeRequest, updateOvertimeRequestSupervisorDecision,
   withdrawOvertimeRequest,
   saveAutomationTasks, loadAutomationTasks,

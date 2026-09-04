@@ -98,6 +98,11 @@ export async function handlePunch() {
     const punchValue = ui.punchInput.value.trim();
     if (!punchValue) return;
 
+    // ★ [1] 讀卡器可能以 Enter、Tab 或兩者連續送出結束字元。必須在第一次非同步
+    // 資料庫操作前就消耗輸入，避免同一張卡重入 handlePunch()，也避免較晚
+    // 完成的舊請求清掉下一張卡已經輸入的內容。
+    ui.punchInput.value = '';
+
     const employee = state.employees.find(e => matchesPunchCredential(e, punchValue));
     if (!employee) {
         await writePunchFailureAuditLog({
@@ -106,7 +111,6 @@ export async function handlePunch() {
             punchValue
         });
         showMessage(formatPunchNotice(punchValue, 'P001', '打卡失敗，請通報管理者'), 'error');
-        ui.punchInput.value = '';
         return;
     }
 
@@ -161,14 +165,12 @@ export async function handlePunch() {
                 }
             });
             showPunchSaveError(punchValue, 'P004');
-            ui.punchInput.value = '';
             resetSelectorsToAuto();
             return;
         }
         const updatedRecords = [duplicateRecord, ...state.punchRecords];
         setState({ punchRecords: updatedRecords });
         showMessage(formatPunchNotice(punchValue, 'P002', `1 分鐘內重複打卡已記錄（${punchStatusText}），有疑問請通報`), 'info');
-        ui.punchInput.value = '';
         resetSelectorsToAuto();
         return;
     }
@@ -226,7 +228,6 @@ export async function handlePunch() {
         });
         showPunchSaveError(punchValue);
     }
-    ui.punchInput.value = '';
 }
 
 /**

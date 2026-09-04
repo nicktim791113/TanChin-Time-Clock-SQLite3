@@ -15,7 +15,15 @@ const ATTENDANCE_EXPORT_FIELD_DEFINITIONS = [
   { id: 'leaveStartText', label: '請假開始', description: '請假當日區段開始時間' },
   { id: 'leaveEndText', label: '請假結束', description: '請假當日區段結束時間' },
   { id: 'leaveDurationHours', label: '請假時數', description: '請假當日區段核准時數，可含 0.5 小時' },
-  { id: 'leaveRequestId', label: '假單編號', description: '對應原始請假申請單號' }
+  { id: 'leaveRequestId', label: '假單編號', description: '對應原始請假申請單號' },
+  // ★ [1] 新版手動薪資明細在既有請假欄位後追加核准加班單欄位，舊模板欄位順序保持不變。
+  { id: 'overtimeStartText', label: '加班開始', description: '核准加班當日區段開始時間' },
+  { id: 'overtimeEndText', label: '加班結束', description: '核准加班當日區段結束時間' },
+  { id: 'overtimeDurationHours', label: '核准加班時數', description: '核准加班當日區段時數，不代表實際出勤時數' },
+  { id: 'overtimeRequestId', label: '加班單編號', description: '對應原始加班申請單號' },
+  { id: 'overtimeReason', label: '加班原因', description: '加班申請填寫的原因' },
+  { id: 'overtimeStatusText', label: '加班狀態', description: '薪資明細只會輸出已核准加班' },
+  { id: 'overtimeApprovalModeText', label: '加班核准方式', description: '本人申請、主管代申請或紙本補登流程' }
 ];
 
 const ATTENDANCE_EXPORT_TARGETS = [
@@ -46,7 +54,8 @@ const ATTENDANCE_SOURCE_LABELS = {
   manual: '手動補登',
   api: '遠端介接',
   browser: '瀏覽器打卡',
-  leave: '請假模組'
+  leave: '請假模組',
+  overtime: '加班模組'
 };
 
 const ATTENDANCE_EXPORT_TEMPLATE_DEFINITIONS = [
@@ -73,6 +82,14 @@ const ATTENDANCE_EXPORT_TEMPLATE_DEFINITIONS = [
     label: '薪資含請假明細',
     description: '保留薪資系統既有欄位，並追加假別、起訖、時數與假單編號。',
     fieldIds: ['employeeId', 'employeeName', 'department', 'jobTitle', 'dateText', 'timeText', 'shift', 'typeText', 'attendanceStatusText', 'sourceText', 'recordKindText', 'leaveTypeName', 'leaveStartText', 'leaveEndText', 'leaveDurationHours', 'leaveRequestId']
+  },
+  // ★ [2] 新增管理者手動匯出專用模板；不放入自動化模板清單，避免舊自動化流程輸出同名但不同資料。
+  {
+    id: 'payroll_leave_overtime',
+    label: '薪資請假／加班明細',
+    description: '保留既有薪資請假欄位，並追加已核准加班的起訖、時數、單號、原因與流程。',
+    manualReportOnly: true,
+    fieldIds: ['employeeId', 'employeeName', 'department', 'jobTitle', 'dateText', 'timeText', 'shift', 'typeText', 'attendanceStatusText', 'sourceText', 'recordKindText', 'leaveTypeName', 'leaveStartText', 'leaveEndText', 'leaveDurationHours', 'leaveRequestId', 'overtimeStartText', 'overtimeEndText', 'overtimeDurationHours', 'overtimeRequestId', 'overtimeReason', 'overtimeStatusText', 'overtimeApprovalModeText']
   },
   {
     id: 'full',
@@ -115,7 +132,10 @@ function formatCsvTime(timestamp) {
 }
 
 function escapeCsvValue(value) {
-  return `"${String(value ?? '').replace(/"/g, '""')}"`;
+  const text = String(value ?? '');
+  // ★ [3] 防止員工姓名、請假／加班原因等可輸入文字在 Excel 開啟 CSV 時被當成公式執行。
+  const spreadsheetSafeText = /^[\u0000-\u0020]*[=+\-@]/.test(text) ? `'${text}` : text;
+  return `"${spreadsheetSafeText.replace(/"/g, '""')}"`;
 }
 
 function normalizeAttendanceExportTemplateId(templateId) {
@@ -147,6 +167,7 @@ function getAttendanceTypeLabel(type) {
   if (type === 'in') return '上班';
   if (type === 'out') return '下班';
   if (type === 'leave') return '請假';
+  if (type === 'overtime') return '加班';
   return String(type || '');
 }
 
@@ -161,6 +182,9 @@ function getAttendanceStatusLabel(status) {
   if (normalizedStatus === 'approved_leave' || normalizedStatus === '已核准請假') {
     return '已核准請假';
   }
+  if (normalizedStatus === 'approved_overtime' || normalizedStatus === '已核准加班') {
+    return '已核准加班';
+  }
   return normalizedStatus;
 }
 
@@ -168,24 +192,26 @@ function getAttendanceSourceLabel(source) {
   return ATTENDANCE_SOURCE_LABELS[source] || String(source || ATTENDANCE_SOURCE_LABELS.auto);
 }
 
-function getAttendanceExportTemplateDefinitions(customFieldIds = DEFAULT_CUSTOM_EXPORT_FIELDS) {
+function getAttendanceExportTemplateDefinitions(customFieldIds = DEFAULT_CUSTOM_EXPORT_FIELDS, options = {}) {
   const normalizedCustomFieldIds = normalizeAttendanceExportCustomFields(customFieldIds);
-  return ATTENDANCE_EXPORT_TEMPLATE_DEFINITIONS.map((template) => {
-    const fieldIds = template.id === 'custom'
-      ? normalizedCustomFieldIds
-      : [...template.fieldIds];
+  return ATTENDANCE_EXPORT_TEMPLATE_DEFINITIONS
+    .filter((template) => options.includeManualReportTemplates === true || !template.manualReportOnly)
+    .map((template) => {
+      const fieldIds = template.id === 'custom'
+        ? normalizedCustomFieldIds
+        : [...template.fieldIds];
 
-    return {
-      id: template.id,
-      label: template.label,
-      description: template.description,
-      fieldIds,
-      fields: fieldIds
-        .map((fieldId) => FIELD_DEFINITION_MAP.get(fieldId))
-        .filter(Boolean)
-        .map((field) => ({ ...field }))
-    };
-  });
+      return {
+        id: template.id,
+        label: template.label,
+        description: template.description,
+        fieldIds,
+        fields: fieldIds
+          .map((fieldId) => FIELD_DEFINITION_MAP.get(fieldId))
+          .filter(Boolean)
+          .map((field) => ({ ...field }))
+      };
+    });
 }
 
 function getAttendanceExportTemplateLabel(templateId) {
@@ -233,14 +259,29 @@ function normalizeAttendanceRecord(record, employeeMap) {
     typeText: String(record?.typeText ?? (record?.type ? getAttendanceTypeLabel(record.type) : '')),
     attendanceStatusText: String(record?.attendanceStatusText ?? (record?.status ? getAttendanceStatusLabel(record.status) : getAttendanceStatusLabel())),
     sourceText: String(record?.sourceText ?? (record?.source ? getAttendanceSourceLabel(record.source) : getAttendanceSourceLabel())),
-    recordKindText: String(record?.recordKindText ?? (record?.recordKind === 'leave' || record?.type === 'leave' ? '請假' : '打卡')),
+    recordKindText: String(record?.recordKindText ?? (
+      record?.recordKind === 'leave' || record?.type === 'leave'
+        ? '請假'
+        : record?.recordKind === 'overtime' || record?.type === 'overtime'
+          ? '加班'
+          : '打卡'
+    )),
     leaveTypeName: String(record?.leaveTypeName ?? ''),
     leaveStartText: String(record?.leaveStartText ?? ''),
     leaveEndText: String(record?.leaveEndText ?? ''),
     leaveDurationHours: record?.leaveDurationHours === undefined || record?.leaveDurationHours === null
       ? ''
       : String(record.leaveDurationHours),
-    leaveRequestId: String(record?.leaveRequestId ?? '')
+    leaveRequestId: String(record?.leaveRequestId ?? ''),
+    overtimeStartText: String(record?.overtimeStartText ?? ''),
+    overtimeEndText: String(record?.overtimeEndText ?? ''),
+    overtimeDurationHours: record?.overtimeDurationHours === undefined || record?.overtimeDurationHours === null
+      ? ''
+      : String(record.overtimeDurationHours),
+    overtimeRequestId: String(record?.overtimeRequestId ?? ''),
+    overtimeReason: String(record?.overtimeReason ?? ''),
+    overtimeStatusText: String(record?.overtimeStatusText ?? ''),
+    overtimeApprovalModeText: String(record?.overtimeApprovalModeText ?? '')
   };
 }
 

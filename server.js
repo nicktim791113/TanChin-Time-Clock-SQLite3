@@ -54,6 +54,9 @@ const ADMIN_PERMISSION_DEFINITIONS = [
   { code: 'admin.themes.manage', category: '系統外觀與提醒', label: '主題與特效設定', section: 'themes' }
 ];
 const ADMIN_PERMISSION_CODES = new Set(ADMIN_PERMISSION_DEFINITIONS.map((permission) => permission.code));
+const AUTOMATION_ATTENDANCE_EXPORT_TEMPLATE_IDS = new Set(
+  getAttendanceExportTemplateDefinitions().map((template) => template.id)
+);
 const ADMIN_SECTION_RULES = [
   { id: 'people', label: '人員資料', permissions: ['admin.people.view', 'admin.people.edit', 'admin.people.delete'] },
   { id: 'security', label: '安全設定', permissions: ['admin.security.view', 'admin.security.manage', 'admin.security.password'] },
@@ -179,6 +182,12 @@ const EXTERNAL_API_PERMISSION_DEFINITIONS = [
     examples: ['GET /api/employees', 'GET /api/employees/:id']
   },
   {
+    code: 'employees.write',
+    label: '人員資料同步寫入',
+    description: '允許外部系統（ERP）以工號為鍵新增或更新員工基本資料，僅寫入既有欄位',
+    examples: ['POST /api/employees/upsert']
+  },
+  {
     code: 'attendance',
     label: '出勤紀錄',
     description: '查詢打卡紀錄與含核准請假的考勤報表',
@@ -204,7 +213,13 @@ const EXTERNAL_API_PERMISSION_DEFINITIONS = [
   }
 ];
 const EXTERNAL_API_PERMISSION_CODES = new Set(EXTERNAL_API_PERMISSION_DEFINITIONS.map((item) => item.code));
-const DEFAULT_EXTERNAL_API_PERMISSIONS = EXTERNAL_API_PERMISSION_DEFINITIONS.map((item) => item.code);
+// 舊版單一 API Key 轉入多組 Key 時，不可自動取得升級後新增的寫入權限。
+const LEGACY_EXTERNAL_API_PERMISSIONS = EXTERNAL_API_PERMISSION_DEFINITIONS
+  .filter((item) => item.code !== 'employees.write')
+  .map((item) => item.code);
+const LEGACY_EXTERNAL_API_KEY_ID_PREFIX = 'legacy_external_api_';
+const LEGACY_EXTERNAL_API_KEY_NOTES = '由舊版單一 API Key 自動轉入。';
+const LEGACY_EMPLOYEE_WRITE_REVIEW_SETTING = 'legacyExternalApiEmployeeWriteReviewedV1151';
 const EXTERNAL_EMPLOYEE_FIELD_DEFINITIONS = [
   { key: 'id', label: '工號', alias: ['employeeId', 'employeeNo'] },
   { key: 'name', label: '姓名', alias: ['employeeName'] },
@@ -230,6 +245,10 @@ const EXTERNAL_EMPLOYEE_FIELD_DEFINITIONS = [
 const LEAVE_ATTENDANCE_STATUS_TEXT = '已核准請假';
 const LEAVE_ATTENDANCE_SOURCE_TEXT = '請假模組';
 const LEAVE_RECORD_KIND_TEXT = '請假';
+// ★ [3] 考勤報表新增已核准加班單的標準識別文字，與打卡、請假紀錄明確分流。
+const OVERTIME_ATTENDANCE_STATUS_TEXT = '已核准加班';
+const OVERTIME_ATTENDANCE_SOURCE_TEXT = '加班模組';
+const OVERTIME_RECORD_KIND_TEXT = '加班';
 const PUNCH_RECORD_KIND_TEXT = '打卡';
 
 const THEME_STYLE_DEFAULTS = {
@@ -265,6 +284,7 @@ const THEME_STYLE_DEFAULTS = {
 const API_ROUTE_CATALOG = [
   { category: '外部 API', method: 'GET', path: '/api/employees', auth: 'API Key', description: '查詢完整員工名冊欄位' },
   { category: '外部 API', method: 'GET', path: '/api/employees/:id', auth: 'API Key', description: '查詢單一員工所有基本資料欄位' },
+  { category: '外部 API', method: 'POST', path: '/api/employees/upsert', auth: 'API Key', description: 'ERP 人員資料同步：以工號為鍵單筆或批次新增/更新員工（僅既有欄位；卡號/密碼有提供即覆寫、未提供不變更）' },
   { category: '外部 API', method: 'GET', path: '/api/records', auth: 'API Key', description: '查詢全部打卡紀錄' },
   { category: '外部 API', method: 'GET', path: '/api/records/range?start=YYYY-MM-DD&end=YYYY-MM-DD', auth: 'API Key', description: '依日期區間查詢打卡紀錄' },
   { category: '外部 API', method: 'GET', path: '/api/records/employee/:id', auth: 'API Key', description: '查詢單一員工的打卡紀錄' },
@@ -299,6 +319,9 @@ const API_ROUTE_CATALOG = [
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/manual-punch', auth: '管理者', description: '建立手動補登打卡' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/reports/query', auth: '管理者', description: '查詢考勤報表資料' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/reports/export', auth: '管理者', description: '匯出考勤報表 CSV' },
+  // ★ [4] 管理端請假／加班紀錄改由專用查詢端點提供總筆數、篩選與每頁 50 筆資料。
+  { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/requests/query', auth: '管理者', description: '分頁查詢請假申請紀錄' },
+  { category: '管理者 API', method: 'POST', path: '/api/browser/admin/overtime/requests/query', auth: '管理者', description: '分頁查詢加班申請紀錄' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/paper-approved', auth: '管理者', description: '依紙本核准資料直接補登已核准請假' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/final-decision', auth: '管理者', description: '管理部終審請假申請' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-types/save', auth: '管理者', description: '儲存請假假別設定' },
@@ -730,27 +753,89 @@ function formatExternalApiKeyForDashboard(key = {}) {
   };
 }
 
-function ensureLegacyExternalApiKeyMigrated() {
-  const legacyApiKey = String(getSettingValue('externalApiKey', '') || '').trim();
-  if (!legacyApiKey) return;
+function reviewLegacyExternalApiWritePermissions() {
+  if (normalizeBoolean(getSettingValue(LEGACY_EMPLOYEE_WRITE_REVIEW_SETTING, false))) return;
 
-  const keyHash = hashExternalApiKey(legacyApiKey);
-  const existing = dbModule.getExternalApiKeyByHash(keyHash);
-  if (!existing) {
+  const correctedKeyIds = [];
+  const manuallyChangedKeyIds = [];
+  dbModule.loadExternalApiKeys().forEach((key) => {
+    const keyId = String(key.id || '').trim();
+    const notes = String(key.notes || '').trim();
+    const permissions = normalizeExternalApiPermissions(key.permissions);
+    if (
+      !keyId.startsWith(LEGACY_EXTERNAL_API_KEY_ID_PREFIX)
+      || notes !== LEGACY_EXTERNAL_API_KEY_NOTES
+      || !permissions.includes('employees.write')
+    ) {
+      return;
+    }
+
+    const createdAt = Number(key.createdAt || key.created_at) || 0;
+    const updatedAt = Number(key.updatedAt || key.updated_at) || 0;
+    if (createdAt && updatedAt && createdAt !== updatedAt) {
+      // 曾由使用者編輯過的舊 Key 不自動撤權，保留給開發者人工確認。
+      manuallyChangedKeyIds.push(keyId);
+      return;
+    }
+
     const now = Date.now();
     dbModule.saveExternalApiKey({
-      id: `legacy_external_api_${now}`,
-      name: '舊版外部 API Key',
-      keyHash,
-      keySuffix: getExternalApiKeySuffix(legacyApiKey),
-      permissions: DEFAULT_EXTERNAL_API_PERMISSIONS,
-      enabled: true,
-      notes: '由舊版單一 API Key 自動轉入。',
-      createdAt: now,
-      updatedAt: now
+      id: keyId,
+      name: key.name,
+      keyHash: key.keyHash || key.key_hash,
+      keySuffix: key.keySuffix || key.key_suffix,
+      permissions: permissions.filter((permission) => permission !== 'employees.write'),
+      enabled: key.enabled,
+      notes,
+      createdAt,
+      updatedAt: now,
+      lastUsedAt: key.lastUsedAt || key.last_used_at,
+      lastUsedIp: key.lastUsedIp || key.last_used_ip
+    });
+    correctedKeyIds.push(keyId);
+  });
+
+  dbModule.setSetting(LEGACY_EMPLOYEE_WRITE_REVIEW_SETTING, true);
+  if (correctedKeyIds.length || manuallyChangedKeyIds.length) {
+    writeAuditLog({
+      actor_id: null,
+      actor_name: 'system',
+      role: 'system',
+      channel: 'system',
+      action: 'permission_migration',
+      target_type: 'external_api_key',
+      target_id: 'legacy_employee_write_review_v1151',
+      summary: `舊版 API Key 寫入權限檢查：自動移除 ${correctedKeyIds.length} 組、保留人工確認 ${manuallyChangedKeyIds.length} 組。`,
+      after_data: {
+        correctedKeyIds,
+        manuallyChangedKeyIds
+      }
     });
   }
-  dbModule.setSetting('externalApiKey', '');
+}
+
+function ensureLegacyExternalApiKeyMigrated() {
+  const legacyApiKey = String(getSettingValue('externalApiKey', '') || '').trim();
+  if (legacyApiKey) {
+    const keyHash = hashExternalApiKey(legacyApiKey);
+    const existing = dbModule.getExternalApiKeyByHash(keyHash);
+    if (!existing) {
+      const now = Date.now();
+      dbModule.saveExternalApiKey({
+        id: `${LEGACY_EXTERNAL_API_KEY_ID_PREFIX}${now}`,
+        name: '舊版外部 API Key',
+        keyHash,
+        keySuffix: getExternalApiKeySuffix(legacyApiKey),
+        permissions: LEGACY_EXTERNAL_API_PERMISSIONS,
+        enabled: true,
+        notes: LEGACY_EXTERNAL_API_KEY_NOTES,
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+    dbModule.setSetting('externalApiKey', '');
+  }
+  reviewLegacyExternalApiWritePermissions();
 }
 
 function getExternalApiAccessSettings() {
@@ -1333,6 +1418,57 @@ function buildApprovedLeaveAttendanceRecords({ employees, employeeMap, employeeI
   });
 }
 
+// ★ [5] 薪資考勤查詢納入「已核准」加班單；待審、駁回與撤回資料不會進入薪資明細。
+function buildApprovedOvertimeAttendanceRecords({ employeeMap, employeeId = '', rangeStartMs = null, rangeEndMs = null } = {}) {
+  const query = {
+    status: 'approved',
+    limit: null
+  };
+  if (employeeId) query.employeeId = employeeId;
+  if (rangeStartMs !== null && rangeEndMs !== null) {
+    query.overlapStartAt = rangeStartMs;
+    query.overlapEndAt = rangeEndMs;
+  }
+
+  return dbModule.queryOvertimeRequests(query).flatMap((request) => {
+    const employee = employeeMap.get(request.employee_id) || {};
+    const segments = splitLeaveRequestIntoAttendanceSegments(request);
+    const segmentDurations = allocateLeaveSegmentDurations(segments, request.duration_hours);
+    return segments
+      .map((segment, index) => ({ segment, durationHours: segmentDurations[index] }))
+      .filter(({ segment }) => (rangeStartMs === null || segment.segmentEndAt > rangeStartMs) &&
+        (rangeEndMs === null || segment.segmentStartAt <= rangeEndMs))
+      .map(({ segment, durationHours }) => ({
+        employeeId: request.employee_id,
+        employeeName: employee.name || '未知員工',
+        department: employee.department || '',
+        jobTitle: employee.job_title || '',
+        shift: OVERTIME_RECORD_KIND_TEXT,
+        timestamp: segment.segmentStartAt,
+        dateText: formatLocalDate(new Date(segment.dayStartAt)),
+        timeText: formatLocalTime(new Date(segment.segmentStartAt)),
+        type: 'overtime',
+        typeText: OVERTIME_RECORD_KIND_TEXT,
+        status: 'approved_overtime',
+        attendanceStatusText: OVERTIME_ATTENDANCE_STATUS_TEXT,
+        source: 'overtime',
+        sourceText: OVERTIME_ATTENDANCE_SOURCE_TEXT,
+        recordKind: 'overtime',
+        recordKindText: OVERTIME_RECORD_KIND_TEXT,
+        overtimeRequestId: request.id,
+        overtimeStartText: formatAttendanceDateTime(segment.segmentStartAt),
+        overtimeEndText: formatAttendanceDateTime(segment.segmentEndAt),
+        overtimeDurationHours: durationHours,
+        overtimeRequestDurationHours: roundAttendanceHours(request.duration_hours),
+        overtimeReason: request.reason || '',
+        overtimeStatusText: getOvertimeStatusText(request.status),
+        overtimeApprovalModeText: getOvertimeApprovalModeText(request.approval_mode),
+        durationHours
+      }));
+  });
+}
+// ★ [5] 結束。
+
 function buildAttendanceRecordsWithApprovedLeave(options = {}) {
   const employees = options.employees || getAllEmployees();
   const employeeMap = options.employeeMap || new Map(employees.map((employee) => [employee.id, employee]));
@@ -1350,8 +1486,12 @@ function buildAttendanceRecordsWithApprovedLeave(options = {}) {
   const leaveRecords = options.includeLeave === false
     ? []
     : buildApprovedLeaveAttendanceRecords({ employees, employeeMap, employeeId, rangeStartMs, rangeEndMs });
+  // ★ [6] 只有明確選用新版薪資明細模板時才加入加班列，避免改變既有自動化與舊薪資格式。
+  const overtimeRecords = options.includeOvertime === true
+    ? buildApprovedOvertimeAttendanceRecords({ employeeMap, employeeId, rangeStartMs, rangeEndMs })
+    : [];
 
-  return [...punchRecords, ...leaveRecords].sort((a, b) => b.timestamp - a.timestamp);
+  return [...punchRecords, ...leaveRecords, ...overtimeRecords].sort((a, b) => b.timestamp - a.timestamp);
 }
 
 function getAllEmployees() {
@@ -1495,7 +1635,8 @@ function getEmployeeRecentRecords(employeeId, days = 7) {
     .map(formatPunchRecord);
 }
 
-function buildAdminAttendanceReport(input = {}) {
+// ★ [7] 報表產生器接受明確的加班納入選項，舊版查詢與精簡匯出維持原資料列集合。
+function buildAdminAttendanceReport(input = {}, options = {}) {
   const employeeId = String(input.employeeId || '').trim();
   const startDate = String(input.startDate || '').trim();
   const endDate = String(input.endDate || '').trim();
@@ -1533,7 +1674,8 @@ function buildAdminAttendanceReport(input = {}) {
     employeeMap,
     employeeId,
     rangeStartMs: rangeStart.getTime(),
-    rangeEndMs: rangeEnd.getTime()
+    rangeEndMs: rangeEnd.getTime(),
+    includeOvertime: options.includeOvertime === true
   });
 
   return {
@@ -1549,9 +1691,11 @@ function buildAdminAttendanceReport(input = {}) {
       abnormalCount: records.filter((record) =>
         record.attendanceStatusText !== '正常' &&
         record.attendanceStatusText !== '重複打卡' &&
-        record.attendanceStatusText !== LEAVE_ATTENDANCE_STATUS_TEXT
+        record.attendanceStatusText !== LEAVE_ATTENDANCE_STATUS_TEXT &&
+        record.attendanceStatusText !== OVERTIME_ATTENDANCE_STATUS_TEXT
       ).length,
       leaveCount: records.filter((record) => record.recordKind === 'leave' || record.attendanceStatusText === LEAVE_ATTENDANCE_STATUS_TEXT).length,
+      overtimeCount: records.filter((record) => record.recordKind === 'overtime' || record.attendanceStatusText === OVERTIME_ATTENDANCE_STATUS_TEXT).length,
       duplicateCount: records.filter((record) => record.attendanceStatusText === '重複打卡').length,
       employeeCount: new Set(records.map((record) => record.employeeId)).size,
       inCount: records.filter((record) => record.type === 'in').length,
@@ -1808,17 +1952,29 @@ function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rang
   return alerts.sort((a, b) => Number(b.punchAt || b.startAt || 0) - Number(a.punchAt || a.startAt || 0)).slice(0, 200);
 }
 
-function getAdminLeaveState(employees = dbModule.loadEmployees()) {
-  const leaveTypes = dbModule.loadLeaveTypes();
+function getAdminLeaveState(employees = dbModule.loadEmployees(), options = {}) {
+  const canReview = options.canReview !== false;
+  const canPaperCreate = options.canPaperCreate !== false;
+  const canSettings = options.canSettings !== false;
+  const leaveTypes = (canReview || canPaperCreate || canSettings) ? dbModule.loadLeaveTypes() : [];
   const lookup = buildLeaveLookup(employees, leaveTypes);
-  const allRequests = dbModule.queryLeaveRequests({ limit: 200 })
-    .map((request) => formatLeaveRequestForDashboard(request, lookup));
+  // ★ [8] 首次載入只取第一頁 50 筆，總筆數由 COUNT 查詢取得，不再用 200 筆上限冒充全部資料。
+  const requestsPage = canReview
+    ? buildAdminLeaveRequestsPage({}, employees, leaveTypes)
+    : { records: [], filters: {}, page: 1, pageSize: 50, totalCount: 0, totalPages: 1, snapshotCreatedAt: null, snapshotId: '' };
+  const pendingAdminTotalCount = canReview ? dbModule.countLeaveRequests({ status: 'pending_admin' }) : 0;
+  const pendingAdmin = canReview
+    ? dbModule.queryLeaveRequests({ status: 'pending_admin', limit: 50, maxLimit: 50 })
+      .map((request) => formatLeaveRequestForDashboard(request, lookup))
+    : [];
   return {
     leaveTypes,
-    approvalRoutes: dbModule.loadLeaveApprovalRoutes(),
-    requests: allRequests,
-    pendingAdmin: allRequests.filter((request) => request.status === 'pending_admin'),
-    alerts: buildLeaveAttendanceAlerts({ employees })
+    approvalRoutes: canSettings ? dbModule.loadLeaveApprovalRoutes() : [],
+    requests: requestsPage.records,
+    requestsPage,
+    pendingAdmin,
+    pendingAdminTotalCount,
+    alerts: canReview ? buildLeaveAttendanceAlerts({ employees }) : []
   };
 }
 
@@ -1871,6 +2027,183 @@ function formatOvertimeRequestForDashboard(request, lookup = buildOvertimeLookup
     supervisorDecidedText: formatDateTimeText(request.supervisor_decided_at)
   };
 }
+
+// ★ [10] 管理端請假／加班紀錄使用固定 50 筆伺服器端分頁，並共用員工、部門、狀態與日期區間篩選。
+const ADMIN_REQUEST_PAGE_SIZE = 50;
+
+function parseAdminRequestDateRange(input = {}) {
+  const startDate = String(input.startDate || '').trim();
+  const endDate = String(input.endDate || '').trim();
+  if (Boolean(startDate) !== Boolean(endDate)) {
+    throw createHttpError('開始日期與結束日期必須一起填寫。', 400);
+  }
+  if (!startDate && !endDate) {
+    return { startDate: '', endDate: '', startAt: null, endAt: null };
+  }
+  const isStrictCalendarDate = (value) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const parsed = new Date(`${value}T00:00:00`);
+    return Number.isFinite(parsed.getTime()) && formatLocalDate(parsed) === value;
+  };
+  if (!isStrictCalendarDate(startDate) || !isStrictCalendarDate(endDate)) {
+    throw createHttpError('日期格式或日曆日期不正確，請重新選擇。', 400);
+  }
+  const startAt = new Date(`${startDate}T00:00:00`).getTime();
+  const endAt = new Date(`${endDate}T23:59:59.999`).getTime();
+  if (startAt > endAt) {
+    throw createHttpError('開始日期不能晚於結束日期。', 400);
+  }
+  return { startDate, endDate, startAt, endAt };
+}
+
+function buildAdminRequestEmployeeFilters(input = {}, employees = []) {
+  const employeeId = String(input.employeeId || '').trim();
+  const department = String(input.department || '').trim();
+  if (employeeId && !employees.some((employee) => employee.id === employeeId)) {
+    throw createHttpError('找不到指定的員工資料。', 404);
+  }
+  const filters = {};
+  if (employeeId) filters.employeeId = employeeId;
+  if (department) {
+    filters.employeeIds = employees
+      .filter((employee) => String(employee.department || '').trim() === department)
+      .map((employee) => employee.id);
+  }
+  return { employeeId, department, filters };
+}
+
+function buildAdminLeaveRequestQueryContext(input = {}, employees = dbModule.loadEmployees()) {
+  const dateRange = parseAdminRequestDateRange(input);
+  const employeeScope = buildAdminRequestEmployeeFilters(input, employees);
+  const status = String(input.status || '').trim();
+  const leaveTypeId = String(input.leaveTypeId || '').trim();
+  if (status && !Object.prototype.hasOwnProperty.call(LEAVE_STATUS_LABELS, status)) {
+    throw createHttpError('請假狀態篩選值不正確。', 400);
+  }
+  const dbFilters = {
+    ...employeeScope.filters
+  };
+  if (status) dbFilters.status = status;
+  if (leaveTypeId) dbFilters.leaveTypeId = leaveTypeId;
+  if (dateRange.startAt !== null && dateRange.endAt !== null) {
+    dbFilters.overlapStartAt = dateRange.startAt;
+    dbFilters.overlapEndAt = dateRange.endAt;
+  }
+  return {
+    dbFilters,
+    filters: {
+      employeeId: employeeScope.employeeId,
+      department: employeeScope.department,
+      status,
+      leaveTypeId,
+      startDate: dateRange.startDate,
+      endDate: dateRange.endDate
+    }
+  };
+}
+
+function buildAdminOvertimeRequestQueryContext(input = {}, employees = dbModule.loadEmployees()) {
+  const dateRange = parseAdminRequestDateRange(input);
+  const employeeScope = buildAdminRequestEmployeeFilters(input, employees);
+  const status = String(input.status || '').trim();
+  if (status && !Object.prototype.hasOwnProperty.call(OVERTIME_STATUS_LABELS, status)) {
+    throw createHttpError('加班狀態篩選值不正確。', 400);
+  }
+  const dbFilters = {
+    ...employeeScope.filters
+  };
+  if (status) dbFilters.status = status;
+  if (dateRange.startAt !== null && dateRange.endAt !== null) {
+    dbFilters.overlapStartAt = dateRange.startAt;
+    dbFilters.overlapEndAt = dateRange.endAt;
+  }
+  return {
+    dbFilters,
+    filters: {
+      employeeId: employeeScope.employeeId,
+      department: employeeScope.department,
+      status,
+      startDate: dateRange.startDate,
+      endDate: dateRange.endDate
+    }
+  };
+}
+
+function buildAdminLeaveRequestsPage(input = {}, employees = dbModule.loadEmployees(), leaveTypes = dbModule.loadLeaveTypes()) {
+  const context = buildAdminLeaveRequestQueryContext(input, employees);
+  const requestedSnapshotCreatedAt = Number(input.snapshotCreatedAt);
+  const requestedSnapshotId = String(input.snapshotId || '').trim();
+  const latestRequest = Number.isFinite(requestedSnapshotCreatedAt) && requestedSnapshotId
+    ? null
+    : dbModule.queryLeaveRequests({ ...context.dbFilters, limit: 1, maxLimit: 1 })[0] || null;
+  const snapshotCreatedAt = latestRequest
+    ? Number(latestRequest.created_at)
+    : (Number.isFinite(requestedSnapshotCreatedAt) ? requestedSnapshotCreatedAt : null);
+  const snapshotId = latestRequest?.id || requestedSnapshotId;
+  const snapshotFilters = snapshotCreatedAt !== null && snapshotId
+    ? { ...context.dbFilters, snapshotCreatedAt, snapshotId }
+    : context.dbFilters;
+  const totalCount = dbModule.countLeaveRequests(snapshotFilters);
+  const totalPages = Math.max(1, Math.ceil(totalCount / ADMIN_REQUEST_PAGE_SIZE));
+  const requestedPage = Math.max(1, Number.parseInt(input.page, 10) || 1);
+  const page = Math.min(requestedPage, totalPages);
+  const lookup = buildLeaveLookup(employees, leaveTypes);
+  const records = dbModule.queryLeaveRequests({
+    ...snapshotFilters,
+    limit: ADMIN_REQUEST_PAGE_SIZE,
+    maxLimit: ADMIN_REQUEST_PAGE_SIZE,
+    offset: (page - 1) * ADMIN_REQUEST_PAGE_SIZE
+  }).map((request) => formatLeaveRequestForDashboard(request, lookup));
+  return {
+    records,
+    filters: context.filters,
+    page,
+    pageSize: ADMIN_REQUEST_PAGE_SIZE,
+    totalCount,
+    totalPages,
+    snapshotCreatedAt,
+    snapshotId
+  };
+}
+
+function buildAdminOvertimeRequestsPage(input = {}, employees = dbModule.loadEmployees()) {
+  const context = buildAdminOvertimeRequestQueryContext(input, employees);
+  // ★ [10] 首頁建立查詢快照上界；翻頁時沿用，避免同時新增申請造成 OFFSET 跨頁重複或漏列。
+  const requestedSnapshotCreatedAt = Number(input.snapshotCreatedAt);
+  const requestedSnapshotId = String(input.snapshotId || '').trim();
+  const latestRequest = Number.isFinite(requestedSnapshotCreatedAt) && requestedSnapshotId
+    ? null
+    : dbModule.queryOvertimeRequests({ ...context.dbFilters, limit: 1, maxLimit: 1 })[0] || null;
+  const snapshotCreatedAt = latestRequest
+    ? Number(latestRequest.created_at)
+    : (Number.isFinite(requestedSnapshotCreatedAt) ? requestedSnapshotCreatedAt : null);
+  const snapshotId = latestRequest?.id || requestedSnapshotId;
+  const snapshotFilters = snapshotCreatedAt !== null && snapshotId
+    ? { ...context.dbFilters, snapshotCreatedAt, snapshotId }
+    : context.dbFilters;
+  const totalCount = dbModule.countOvertimeRequests(snapshotFilters);
+  const totalPages = Math.max(1, Math.ceil(totalCount / ADMIN_REQUEST_PAGE_SIZE));
+  const requestedPage = Math.max(1, Number.parseInt(input.page, 10) || 1);
+  const page = Math.min(requestedPage, totalPages);
+  const lookup = buildOvertimeLookup(employees);
+  const records = dbModule.queryOvertimeRequests({
+    ...snapshotFilters,
+    limit: ADMIN_REQUEST_PAGE_SIZE,
+    maxLimit: ADMIN_REQUEST_PAGE_SIZE,
+    offset: (page - 1) * ADMIN_REQUEST_PAGE_SIZE
+  }).map((request) => formatOvertimeRequestForDashboard(request, lookup));
+  return {
+    records,
+    filters: context.filters,
+    page,
+    pageSize: ADMIN_REQUEST_PAGE_SIZE,
+    totalCount,
+    totalPages,
+    snapshotCreatedAt,
+    snapshotId
+  };
+}
+// ★ [10] 結束。
 
 function parseExternalApiDate(value, endOfDay = false) {
   if (value === null || value === undefined || value === '') return null;
@@ -2161,15 +2494,25 @@ function buildOvertimeAttendanceAlerts({ employees = dbModule.loadEmployees(), r
   return alerts.sort((a, b) => Number(b.startAt || 0) - Number(a.startAt || 0)).slice(0, 200);
 }
 
-function getAdminOvertimeState(employees = dbModule.loadEmployees()) {
+function getAdminOvertimeState(employees = dbModule.loadEmployees(), options = {}) {
+  const canView = options.canView !== false;
   const lookup = buildOvertimeLookup(employees);
-  const requests = dbModule.queryOvertimeRequests({ limit: 300 })
-    .map((request) => formatOvertimeRequestForDashboard(request, lookup));
-  const alerts = buildOvertimeAttendanceAlerts({ employees });
+  // ★ [9] 首次載入只取第一頁 50 筆，並獨立計算全部加班單與待審數量。
+  const requestsPage = canView
+    ? buildAdminOvertimeRequestsPage({}, employees)
+    : { records: [], filters: {}, page: 1, pageSize: 50, totalCount: 0, totalPages: 1, snapshotCreatedAt: null, snapshotId: '' };
+  const pendingSupervisorTotalCount = canView ? dbModule.countOvertimeRequests({ status: 'pending_supervisor' }) : 0;
+  const pendingSupervisor = canView
+    ? dbModule.queryOvertimeRequests({ status: 'pending_supervisor', limit: 50, maxLimit: 50 })
+      .map((request) => formatOvertimeRequestForDashboard(request, lookup))
+    : [];
+  const alerts = canView ? buildOvertimeAttendanceAlerts({ employees }) : [];
   return {
-    requests,
+    requests: requestsPage.records,
+    requestsPage,
     alerts,
-    pendingSupervisor: requests.filter((request) => request.status === 'pending_supervisor')
+    pendingSupervisor,
+    pendingSupervisorTotalCount
   };
 }
 
@@ -2455,8 +2798,13 @@ function getAdminDatasets(session = {}) {
   const canShifts = hasAdminPermission(session, 'admin.shifts.manage');
   const canManualPunch = hasAdminPermission(session, 'admin.manualPunch.create');
   const canReports = hasAnyAdminPermission(session, ['admin.reports.view', 'admin.reports.export']);
-  const canLeave = hasAnyAdminPermission(session, ['admin.leave.review', 'admin.leave.paperCreate', 'admin.leave.settings']);
-  const canOvertime = hasAnyAdminPermission(session, ['admin.overtime.view', 'admin.overtime.paperCreate']);
+  const canLeaveReview = hasAdminPermission(session, 'admin.leave.review');
+  const canLeavePaperCreate = hasAdminPermission(session, 'admin.leave.paperCreate');
+  const canLeaveSettings = hasAdminPermission(session, 'admin.leave.settings');
+  const canLeave = canLeaveReview || canLeavePaperCreate || canLeaveSettings;
+  const canOvertimeView = hasAdminPermission(session, 'admin.overtime.view');
+  const canOvertimePaperCreate = hasAdminPermission(session, 'admin.overtime.paperCreate');
+  const canOvertime = canOvertimeView || canOvertimePaperCreate;
   const canSystem = hasAdminPermission(session, 'admin.system.manage');
   const canBells = hasAdminPermission(session, 'admin.bells.manage');
   const canThemes = hasAdminPermission(session, 'admin.themes.manage');
@@ -2498,8 +2846,16 @@ function getAdminDatasets(session = {}) {
     specialEffects: canThemes ? dbModule.loadSpecialEffects() : [],
     themeSchedules: canThemes ? dbModule.loadThemeSchedules() : [],
     customThemes,
-    leave: canLeave ? getAdminLeaveState(employees) : null,
-    overtime: canOvertime ? getAdminOvertimeState(employees) : null,
+    // ★ [14] 子權限只取得職責所需資料；補登或制度設定權限不再連帶收到全部申請、原因與查核資料。
+    leave: canLeave ? getAdminLeaveState(employees, {
+      canReview: canLeaveReview,
+      canPaperCreate: canLeavePaperCreate,
+      canSettings: canLeaveSettings
+    }) : null,
+    overtime: canOvertime ? getAdminOvertimeState(employees, {
+      canView: canOvertimeView,
+      canPaperCreate: canOvertimePaperCreate
+    }) : null,
     security: canSecurity ? getAdminSecurityDatasets() : null,
     accountAccess: null,
     settings: {
@@ -3182,6 +3538,7 @@ function extractExternalApiKey(request) {
 function getExternalApiPermissionForRequest(request) {
   const pathText = String(request.path || request.originalUrl || '').split('?')[0];
   const method = String(request.method || '').toUpperCase();
+  if (method === 'POST' && pathText === '/api/employees/upsert') return 'employees.write';
   if (method === 'GET' && (pathText === '/api/employees' || pathText.startsWith('/api/employees/'))) return 'employees';
   if (method === 'GET' && (
     pathText === '/api/records' ||
@@ -3425,6 +3782,21 @@ function normalizeEmployee(employee) {
   };
 }
 
+// ★ [ERP-SYNC] 外部人員同步：把 ERP 送來的單筆資料正規化成「有送才算」的欄位集合。
+// 只接受 employees 資料表既有欄位（含 camelCase 別名）；沒送或送 null 的欄位不變更。
+function normalizeExternalEmployeeUpsertItem(raw = {}) {
+  const providedFields = {};
+  for (const definition of EXTERNAL_EMPLOYEE_FIELD_DEFINITIONS) {
+    const candidateKeys = [definition.key, ...(definition.alias || [])];
+    const matchedKey = candidateKeys.find(
+      (key) => Object.prototype.hasOwnProperty.call(raw, key) && raw[key] != null
+    );
+    if (matchedKey === undefined) continue;
+    providedFields[definition.key] = String(raw[matchedKey] ?? '').trim();
+  }
+  return providedFields;
+}
+
 function normalizeDepartmentPayload(department = {}, index = 0) {
   return {
     id: String(department.id || '').trim(),
@@ -3536,6 +3908,7 @@ function normalizeAutomationTask(task) {
   const requestedTaskType = String(task.task_type || 'export');
   const taskType = ['export', 'delete', 'backup'].includes(requestedTaskType) ? requestedTaskType : 'export';
   const target = taskType === 'backup' ? 'database_full' : String(task.target || 'last_week_records');
+  const normalizedExportTemplate = normalizeAttendanceExportTemplateId(task.export_template);
   return {
     id: String(task.id || `auto_task_${Date.now()}`),
     frequency: String(task.frequency || 'immediate'),
@@ -3544,7 +3917,10 @@ function normalizeAutomationTask(task) {
     task_type: taskType,
     target,
     export_template: isAttendanceExportTarget(target) && taskType === 'export'
-      ? normalizeAttendanceExportTemplateId(task.export_template)
+      // ★ [15] 手動報表專用的加班明細不可繞過 UI 存成自動化模板，以免欄位存在但自動任務沒有加班資料列。
+      ? (AUTOMATION_ATTENDANCE_EXPORT_TEMPLATE_IDS.has(normalizedExportTemplate)
+        ? normalizedExportTemplate
+        : DEFAULT_ATTENDANCE_EXPORT_TEMPLATE_ID)
       : DEFAULT_ATTENDANCE_EXPORT_TEMPLATE_ID,
     export_directory: ['export', 'backup'].includes(taskType)
       ? String(task.export_directory || '').trim()
@@ -4117,6 +4493,223 @@ function attachExternalApiRoutes(server) {
       fields: EXTERNAL_EMPLOYEE_FIELD_DEFINITIONS,
       data: formatEmployeeForExternal(employee)
     });
+  });
+
+  // ★ [ERP-SYNC] ERP → 考勤系統人員資料同步（單筆或批次 upsert，以工號為鍵）。
+  // 卡號/密碼有提供就覆寫；未提供、null 或空字串不變更、不清空。
+  // 新建時未提供卡號/密碼則以工號代入；任一筆驗證失敗時整批不寫入。
+  server.post('/api/employees/upsert', requireExternalApiAccess, (request, response) => {
+    try {
+      const body = request.body || {};
+      const rawItems = Array.isArray(body.employees)
+        ? body.employees
+        : (body.employee && typeof body.employee === 'object' ? [body.employee] : []);
+      if (!rawItems.length) {
+        response.status(400).json({ success: false, error: withSupportCode('P111', '請提供 employee（單筆物件）或 employees（陣列）。') });
+        return;
+      }
+      if (rawItems.length > 500) {
+        response.status(400).json({ success: false, error: withSupportCode('P112', '單次人員同步最多 500 筆，請分批送出。') });
+        return;
+      }
+      const allowCreate = body.allowCreate !== false;
+      const autoCreateDepartments = body.autoCreateDepartments !== false;
+
+      const existingEmployees = dbModule.loadEmployees();
+      const departments = dbModule.loadDepartments();
+      const enabledDepartmentNames = getEnabledDepartmentNameSet(departments);
+      const knownDepartmentNames = new Set(
+        departments.map((department) => String(department.name || '').trim()).filter(Boolean)
+      );
+      const canonicalDepartmentNames = new Map();
+      departments.forEach((department) => {
+        const name = String(department.name || '').trim();
+        const key = name.toLowerCase();
+        if (name && !canonicalDepartmentNames.has(key)) {
+          canonicalDepartmentNames.set(key, name);
+        }
+      });
+      const employeesById = new Map(existingEmployees.map((employee) => [String(employee.id), employee]));
+
+      // 必填欄位及卡號/密碼送空字串時，一律視為不變更。
+      const protectedEmptyFields = new Set(['id', 'name', 'department', 'card', 'password']);
+      const problems = [];
+      const plannedById = new Map();
+      const requiredDepartmentNames = new Set();
+
+      rawItems.forEach((raw, index) => {
+        const rowLabel = `第 ${index + 1} 筆`;
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+          problems.push(`${rowLabel}不是有效的員工物件。`);
+          return;
+        }
+        const provided = normalizeExternalEmployeeUpsertItem(raw);
+        const employeeId = String(provided.id || '').trim();
+        if (!employeeId) {
+          problems.push(`${rowLabel}缺少工號（id / employeeNo）。`);
+          return;
+        }
+        if (plannedById.has(employeeId)) {
+          problems.push(`${rowLabel}工號 ${employeeId} 在本批重複出現。`);
+          return;
+        }
+        const previous = employeesById.get(employeeId) || null;
+        if (!previous && !allowCreate) {
+          plannedById.set(employeeId, { action: 'skipped', employee: null, previous: null });
+          return;
+        }
+
+        const mergedSource = previous ? { ...previous } : {};
+        for (const [field, value] of Object.entries(provided)) {
+          if (value === '' && protectedEmptyFields.has(field)) continue;
+          mergedSource[field] = value;
+        }
+        mergedSource.id = employeeId;
+        if (!previous) {
+          if (!String(mergedSource.card || '').trim()) mergedSource.card = employeeId;
+          if (!String(mergedSource.password || '').trim()) mergedSource.password = employeeId;
+        }
+        const requestedDepartmentName = String(mergedSource.department || '').trim();
+        if (requestedDepartmentName) {
+          const departmentKey = requestedDepartmentName.toLowerCase();
+          if (!canonicalDepartmentNames.has(departmentKey)) {
+            canonicalDepartmentNames.set(departmentKey, requestedDepartmentName);
+          }
+          mergedSource.department = canonicalDepartmentNames.get(departmentKey);
+        }
+        const employee = normalizeEmployee(mergedSource);
+        if (!employee.name) {
+          problems.push(`${rowLabel}（工號 ${employeeId}）缺少姓名。`);
+          return;
+        }
+        if (!employee.department) {
+          problems.push(`${rowLabel}（工號 ${employeeId}）缺少部門。`);
+          return;
+        }
+        requiredDepartmentNames.add(employee.department);
+        plannedById.set(employeeId, { action: previous ? 'updated' : 'created', employee, previous });
+      });
+
+      // 卡號與資料庫其他員工、以及本批之間都不可重複。
+      const cardOwners = new Map();
+      existingEmployees.forEach((employee) => {
+        const card = String(employee.card || '').trim();
+        if (card && !plannedById.has(String(employee.id))) {
+          cardOwners.set(card, String(employee.id));
+        }
+      });
+      plannedById.forEach((planned, employeeId) => {
+        if (!planned.employee) return;
+        const card = String(planned.employee.card || '').trim();
+        if (!card) return;
+        const owner = cardOwners.get(card);
+        if (owner && owner !== employeeId) {
+          problems.push(`工號 ${employeeId} 的卡號 ${card} 與員工 ${owner} 重複。`);
+          return;
+        }
+        cardOwners.set(card, employeeId);
+      });
+
+      // 已停用部門一律擋下；不存在時依 autoCreateDepartments 自動建立或擋下。
+      const missingDepartments = [];
+      requiredDepartmentNames.forEach((name) => {
+        if (enabledDepartmentNames.has(name)) return;
+        if (knownDepartmentNames.has(name)) {
+          problems.push(`部門「${name}」目前已停用，請先在人員資料的部門設定啟用。`);
+          return;
+        }
+        missingDepartments.push(name);
+      });
+      if (missingDepartments.length && !autoCreateDepartments) {
+        problems.push(`部門不存在：${missingDepartments.join('、')}（請先建立部門，或送出 autoCreateDepartments: true）。`);
+      }
+
+      if (problems.length) {
+        response.status(400).json({
+          success: false,
+          error: withSupportCode('P113', `人員同步整批未寫入，共 ${problems.length} 個問題。`),
+          details: problems.slice(0, 20)
+        });
+        return;
+      }
+
+      const departmentsCreated = [];
+      if (missingDepartments.length) {
+        const now = Date.now();
+        const maxOrder = departments.reduce(
+          (max, department) => Math.max(max, Number(department.displayOrder ?? department.display_order ?? 0) || 0),
+          0
+        );
+        dbModule.saveDepartments([
+          ...departments,
+          ...missingDepartments.map((name, index) => ({
+            id: `dept_erp_${now}_${index}`,
+            name,
+            description: '由 ERP 人員同步自動建立。',
+            enabled: true,
+            display_order: maxOrder + (index + 1) * 10
+          }))
+        ]);
+        departmentsCreated.push(...missingDepartments);
+      }
+
+      const created = [];
+      const updated = [];
+      const skipped = [];
+      plannedById.forEach((planned, employeeId) => {
+        if (planned.action === 'created') created.push(employeeId);
+        else if (planned.action === 'updated') updated.push(employeeId);
+        else skipped.push(employeeId);
+      });
+
+      if (created.length || updated.length) {
+        const nextEmployees = existingEmployees
+          .filter((employee) => {
+            const planned = plannedById.get(String(employee.id));
+            return !planned || !planned.employee;
+          })
+          .concat([...plannedById.values()].filter((planned) => planned.employee).map((planned) => planned.employee));
+        nextEmployees.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+        dbModule.saveEmployees(nextEmployees);
+      }
+
+      const keyName = request.externalApiKey?.name || '外部 API';
+      writeAuditLog({
+        actor_id: null,
+        actor_name: keyName,
+        role: 'external_api',
+        channel: 'external_api',
+        action: created.length && !updated.length ? 'create' : 'upsert',
+        target_type: 'employee_sync',
+        target_id: created.length + updated.length === 1 ? (created[0] || updated[0]) : `batch_${rawItems.length}`,
+        summary: `外部人員同步（${keyName}）：新增 ${created.length} 筆、更新 ${updated.length} 筆、略過 ${skipped.length} 筆${departmentsCreated.length ? `、自動建立部門 ${departmentsCreated.length} 個` : ''}`,
+        after_data: { created, updated, skipped, departmentsCreated },
+        ip_address: getRequestIpAddress(request)
+      });
+      if (created.length || updated.length) {
+        notifyDesktop('employees');
+        if (departmentsCreated.length) notifyDesktop('departments');
+      }
+
+      response.json({
+        success: true,
+        message: `人員同步完成：新增 ${created.length} 筆、更新 ${updated.length} 筆、略過 ${skipped.length} 筆。`,
+        data: {
+          createdCount: created.length,
+          updatedCount: updated.length,
+          skippedCount: skipped.length,
+          created,
+          updated,
+          skipped,
+          departmentsCreated
+        }
+      });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({
+        success: false,
+        error: withSupportCode('P114', `人員同步失敗：${error.message}`)
+      });
+    }
   });
 
   server.get('/api/records', requireExternalApiAccess, (request, response) => {
@@ -5298,29 +5891,71 @@ function attachBrowserRoutes(server) {
     }
   });
 
+  // ★ [11] 管理端紀錄查詢端點回傳篩選後總筆數與固定 50 筆頁面，不再依賴 dashboard 的截斷陣列。
+  server.post('/api/browser/admin/leave/requests/query', requireBrowserSession, requireAdminPermission('admin.leave.review'), (request, response) => {
+    try {
+      const page = buildAdminLeaveRequestsPage(request.body || {});
+      response.json({
+        success: true,
+        message: `請假紀錄查詢完成，共 ${page.totalCount} 筆。`,
+        data: page
+      });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+  });
+
+  server.post('/api/browser/admin/overtime/requests/query', requireBrowserSession, requireAdminPermission('admin.overtime.view'), (request, response) => {
+    try {
+      const page = buildAdminOvertimeRequestsPage(request.body || {});
+      response.json({
+        success: true,
+        message: `加班申請紀錄查詢完成，共 ${page.totalCount} 筆。`,
+        data: page
+      });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+  });
+  // ★ [11] 結束。
+
   server.post('/api/browser/admin/reports/export', requireBrowserSession, requireAdminPermission('admin.reports.export'), (request, response) => {
     try {
-      const report = buildAdminAttendanceReport(request.body || {});
+      // ★ [12] 新版詳細模板才納入已核准加班；既有 payroll 與 payroll_leave 模板維持原列集合與欄位相容性。
+      const templateId = normalizeAttendanceExportTemplateId(request.body?.templateId || 'payroll');
+      const includeOvertime = templateId === 'payroll_leave_overtime';
+      const report = buildAdminAttendanceReport(request.body || {}, { includeOvertime });
       const startDate = new Date(`${report.filters.startDate}T00:00:00`);
       const endDate = new Date(`${report.filters.endDate}T23:59:59.999`);
-      const templateId = normalizeAttendanceExportTemplateId(request.body?.templateId || 'payroll');
-      const exportPrefix = templateId === 'payroll_leave' ? '考勤薪資請假明細' : '考勤報表';
+      const exportPrefix = templateId === 'payroll_leave_overtime'
+        ? '考勤薪資請假加班明細'
+        : templateId === 'payroll_leave'
+          ? '考勤薪資請假明細'
+          : '考勤報表';
+      const overtimeRecords = report.records.filter((record) => record.recordKind === 'overtime');
+      const overtimeRequestCount = new Set(overtimeRecords.map((record) => record.overtimeRequestId).filter(Boolean)).size;
+      const overtimeHours = roundAttendanceHours(overtimeRecords.reduce((total, record) => total + Number(record.overtimeDurationHours || 0), 0));
       writeBrowserAuditLog(request, {
         action: 'export',
         target_type: 'attendance_report',
         target_id: `${report.filters.startDate}_${report.filters.endDate}`,
-        summary: `匯出考勤報表，共 ${report.records.length} 筆`,
+        summary: `匯出${exportPrefix}，共 ${report.records.length} 筆`,
         after_data: {
           employee_id: report.filters.employeeId || '',
           start_date: report.filters.startDate,
           end_date: report.filters.endDate,
-          record_count: report.records.length
+          template_id: templateId,
+          record_count: report.records.length,
+          overtime_request_count: overtimeRequestCount,
+          approved_overtime_hours: overtimeHours
         }
       });
 
       response.json({
         success: true,
-        message: '考勤報表匯出內容已產生。',
+        message: includeOvertime
+          ? `薪資請假／加班明細已產生，含 ${overtimeRequestCount} 張核准加班單、${overtimeHours} 小時。`
+          : '考勤報表匯出內容已產生。',
         data: {
           fileName: buildExportFileName(exportPrefix, startDate, endDate),
           csvContent: buildAttendanceExportCsv(report.records, [], {
@@ -5334,7 +5969,7 @@ function attachBrowserRoutes(server) {
     }
   });
 
-  server.post('/api/browser/admin/leave-audit/export', requireBrowserSession, requireAnyAdminPermission('admin.leave.review', 'admin.leave.settings'), (request, response) => {
+  server.post('/api/browser/admin/leave-audit/export', requireBrowserSession, requireAdminPermission('admin.leave.review'), (request, response) => {
     try {
       const employees = dbModule.loadEmployees();
       const leaveState = getAdminLeaveState(employees);
@@ -5454,9 +6089,16 @@ function attachBrowserRoutes(server) {
   server.post('/api/browser/admin/overtime/export', requireBrowserSession, requireAdminPermission('admin.overtime.view'), (request, response) => {
     try {
       const employees = dbModule.loadEmployees();
-      const overtimeState = getAdminOvertimeState(employees);
       const reportType = String(request.body?.reportType || 'alerts').trim() === 'requests' ? 'requests' : 'alerts';
-      const rows = reportType === 'requests' ? overtimeState.requests : overtimeState.alerts;
+      // ★ [13] 申請 CSV 依目前篩選匯出「全部符合資料」，不受畫面每頁 50 筆或舊 300 筆上限影響。
+      const queryContext = reportType === 'requests'
+        ? buildAdminOvertimeRequestQueryContext(request.body || {}, employees)
+        : null;
+      const overtimeLookup = buildOvertimeLookup(employees);
+      const rows = reportType === 'requests'
+        ? dbModule.queryOvertimeRequests({ ...queryContext.dbFilters, limit: null })
+          .map((item) => formatOvertimeRequestForDashboard(item, overtimeLookup))
+        : buildOvertimeAttendanceAlerts({ employees });
       const csvContent = reportType === 'requests'
         ? buildOvertimeRequestsCsv(rows)
         : buildOvertimeAlertsCsv(rows);
@@ -5470,7 +6112,8 @@ function attachBrowserRoutes(server) {
         summary: `匯出${prefix}，共 ${rows.length} 筆`,
         after_data: {
           report_type: reportType,
-          record_count: rows.length
+          record_count: rows.length,
+          filters: queryContext?.filters || {}
         }
       });
 
