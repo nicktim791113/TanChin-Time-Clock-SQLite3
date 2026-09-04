@@ -323,14 +323,14 @@ const API_ROUTE_CATALOG = [
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/requests/query', auth: '管理者', description: '分頁查詢請假申請紀錄' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/overtime/requests/query', auth: '管理者', description: '分頁查詢加班申請紀錄' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/paper-approved', auth: '管理者', description: '依紙本核准資料直接補登已核准請假' },
-  { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/paper-approved/correct', auth: '管理者', description: '修正紙本請假補登並保留原紀錄為已取消' },
+  { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/paper-approved/correct', auth: '管理者', description: '直接修正同一筆紙本請假補登' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/paper-approved/cancel', auth: '管理者', description: '作廢紙本請假補登' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/final-decision', auth: '管理者', description: '管理部終審請假申請' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-types/save', auth: '管理者', description: '儲存請假假別設定' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-routes/save', auth: '管理者', description: '儲存請假主管審核路徑' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-audit/export', auth: '管理者', description: '匯出請假與實際打卡查核 CSV' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/overtime/paper-approved', auth: '管理者', description: '依紙本核准資料直接補登已核准加班' },
-  { category: '管理者 API', method: 'POST', path: '/api/browser/admin/overtime/paper-approved/correct', auth: '管理者', description: '修正紙本加班補登並保留原紀錄為已取消' },
+  { category: '管理者 API', method: 'POST', path: '/api/browser/admin/overtime/paper-approved/correct', auth: '管理者', description: '直接修正同一筆紙本加班補登' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/overtime/paper-approved/cancel', auth: '管理者', description: '作廢紙本加班補登' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/overtime/export', auth: '管理者', description: '匯出加班申請或加班出勤查核 CSV' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/data-settings', auth: '管理者', description: '更新主畫面標題與副標題' },
@@ -2538,16 +2538,14 @@ function getAdminOvertimeState(employees = dbModule.loadEmployees(), options = {
   };
 }
 
-function buildPaperApprovalComment({ paperNo = '', approvedBy = '', comment = '', correctedFromRequestId = '' } = {}) {
+function buildPaperApprovalComment({ paperNo = '', approvedBy = '', comment = '' } = {}) {
   const parts = [];
   const normalizedPaperNo = String(paperNo || '').trim();
   const normalizedApprovedBy = String(approvedBy || '').trim();
   const normalizedComment = String(comment || '').trim();
-  const normalizedCorrectedFromRequestId = String(correctedFromRequestId || '').trim();
   if (normalizedPaperNo) parts.push(`紙本單號：${normalizedPaperNo}`);
   if (normalizedApprovedBy) parts.push(`紙本核准人：${normalizedApprovedBy}`);
   if (normalizedComment) parts.push(`補登備註：${normalizedComment}`);
-  if (normalizedCorrectedFromRequestId) parts.push(`修正原補登：${normalizedCorrectedFromRequestId}`);
   return parts.join('；') || '管理者依紙本核准資料補登。';
 }
 
@@ -6192,55 +6190,46 @@ function attachBrowserRoutes(server) {
       const paperComment = buildPaperApprovalComment({
         paperNo,
         approvedBy: paperApprovedBy,
-        comment: paperNote,
-        correctedFromRequestId: original.id
+        comment: paperNote
       });
-      const replacement = {
-        id: `leave_paper_correction_${now}_${crypto.randomBytes(4).toString('hex')}`,
+      const updates = {
         employee_id: employee.id,
         leave_type_id: leaveType.id,
         start_at: startAt,
         end_at: endAt,
         duration_hours: durationHours,
         reason: String(request.body?.reason || '').trim(),
-        status: 'approved',
-        supervisor_id: getLeaveSupervisorForEmployee(employee) || '',
+        supervisor_id: original.supervisor_id || getLeaveSupervisorForEmployee(employee) || '',
         supervisor_decision: 'approved',
         supervisor_comment: paperComment,
-        supervisor_decided_at: now,
-        admin_decision_by: request.browserSession.employeeId,
+        supervisor_decided_at: original.supervisor_decided_at || now,
+        admin_decision_by: original.admin_decision_by || request.browserSession.employeeId,
         admin_comment: paperComment,
-        admin_decided_at: now,
-        approval_mode: 'admin_paper_approved',
+        admin_decided_at: original.admin_decided_at || now,
         paper_no: paperNo,
         paper_approved_by: paperApprovedBy,
         paper_comment: paperNote,
-        corrected_from_request_id: original.id,
-        created_at: now,
         updated_at: now
       };
       const auditLog = buildBrowserAuditLogEntry(request, {
         action: 'correct',
         target_type: 'leave_request',
         target_id: original.id,
-        summary: `修正紙本請假補登 ${original.id}，替代紀錄 ${replacement.id}`,
+        summary: `修正紙本請假補登 ${original.id}`,
         before_data: original,
         after_data: {
-          ...replacement,
-          replaces_request_id: original.id,
-          paper_no: paperNo,
-          paper_approved_by: paperApprovedBy
+          ...original,
+          ...updates
         }
       });
-      dbModule.replacePaperLeaveRequest({ requestId: original.id, replacement, cancelledAt: now, auditLog });
+      const updatedRequest = dbModule.updatePaperLeaveRequest({ requestId: original.id, updates, auditLog });
       notifyDesktop('auditLogs', getBrowserSyncMeta(request));
       notifyDesktop('leaveRequests', getBrowserSyncMeta(request));
       response.json({
         success: true,
-        message: '紙本請假補登已修正；原紀錄保留為已取消，並已建立新的核准紀錄。',
+        message: '紙本請假補登已直接修正，補登編號維持不變。',
         data: {
-          cancelledRequestId: original.id,
-          replacementRequestId: replacement.id,
+          requestId: updatedRequest.id,
           dashboard: buildDashboardForSession(request.browserSession)
         }
       });
@@ -6450,53 +6439,44 @@ function attachBrowserRoutes(server) {
       const paperComment = buildPaperApprovalComment({
         paperNo,
         approvedBy: paperApprovedBy,
-        comment: paperNote,
-        correctedFromRequestId: original.id
+        comment: paperNote
       });
-      const replacement = {
-        id: `overtime_paper_correction_${now}_${crypto.randomBytes(4).toString('hex')}`,
+      const updates = {
         employee_id: employee.id,
-        applicant_id: request.browserSession.employeeId,
-        applicant_role: 'admin_paper_proxy',
+        applicant_id: original.applicant_id || request.browserSession.employeeId,
+        applicant_role: original.applicant_role || 'admin_paper_proxy',
         start_at: startAt,
         end_at: endAt,
         duration_hours: durationHours,
         reason: String(request.body?.reason || '').trim(),
-        status: 'approved',
-        supervisor_id: request.browserSession.employeeId,
+        supervisor_id: original.supervisor_id || request.browserSession.employeeId,
         supervisor_decision: 'approved',
         supervisor_comment: paperComment,
-        supervisor_decided_at: now,
-        approval_mode: 'admin_paper_approved',
+        supervisor_decided_at: original.supervisor_decided_at || now,
         paper_no: paperNo,
         paper_approved_by: paperApprovedBy,
         paper_comment: paperNote,
-        corrected_from_request_id: original.id,
-        created_at: now,
         updated_at: now
       };
       const auditLog = buildBrowserAuditLogEntry(request, {
         action: 'correct',
         target_type: 'overtime_request',
         target_id: original.id,
-        summary: `修正紙本加班補登 ${original.id}，替代紀錄 ${replacement.id}`,
+        summary: `修正紙本加班補登 ${original.id}`,
         before_data: original,
         after_data: {
-          ...replacement,
-          replaces_request_id: original.id,
-          paper_no: paperNo,
-          paper_approved_by: paperApprovedBy
+          ...original,
+          ...updates
         }
       });
-      dbModule.replacePaperOvertimeRequest({ requestId: original.id, replacement, cancelledAt: now, auditLog });
+      const updatedRequest = dbModule.updatePaperOvertimeRequest({ requestId: original.id, updates, auditLog });
       notifyDesktop('auditLogs', getBrowserSyncMeta(request));
       notifyDesktop('overtimeRequests', getBrowserSyncMeta(request));
       response.json({
         success: true,
-        message: '紙本加班補登已修正；原紀錄保留為已取消，並已建立新的核准紀錄。',
+        message: '紙本加班補登已直接修正，補登編號維持不變。',
         data: {
-          cancelledRequestId: original.id,
-          replacementRequestId: replacement.id,
+          requestId: updatedRequest.id,
           dashboard: buildDashboardForSession(request.browserSession)
         }
       });

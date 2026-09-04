@@ -104,7 +104,8 @@ $projectDirectories = @(
     "docs",
     "modals",
     "renderer-scripts",
-    "scripts"
+    "scripts",
+    "tests"
 )
 
 $projectFiles = @(

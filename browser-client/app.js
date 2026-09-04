@@ -109,6 +109,8 @@ const auditActionLabels = {
     create: "新增",
     save: "儲存",
     update: "更新",
+    correct: "修正",
+    cancel: "作廢",
     delete: "刪除",
     clear: "清除",
     upload: "上傳",
@@ -137,6 +139,8 @@ const auditTargetTypeLabels = {
     database_backup_setting: "資料庫備份設定",
     audit_log: "操作稽核",
     audit_archive_setting: "稽核封存設定",
+    leave_request: "請假申請",
+    overtime_request: "加班申請",
     setting: "系統設定",
     report: "報表"
 };
@@ -9359,9 +9363,9 @@ function beginAdminPaperCorrection(kind, requestId) {
     if (badge) badge.textContent = `修正 ${request.employeeId || ""}`.trim();
     if (submit) submit.textContent = kind === "leave" ? "儲存請假修正" : "儲存加班修正";
     if (cancel) cancel.classList.remove("hidden");
-    if (modeHelp) modeHelp.textContent = "儲存修正後，原紀錄會保留為已取消，系統另建立新的已核准紀錄。";
+    if (modeHelp) modeHelp.textContent = "儲存修正後會直接更新這筆補登；補登編號維持不變，並保留完整修改稽核。";
     if (selectVisible) selectVisible.disabled = true;
-    setFormMessage(formId, `正在修正補登紀錄 ${request.id}；一次只能選擇一位員工。`, "info");
+    setFormMessage(formId, `正在修正補登紀錄 ${request.id}；會直接更新同一筆資料，一次只能選擇一位員工。`, "info");
     form.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 

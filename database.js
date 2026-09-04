@@ -440,6 +440,13 @@ function init(dbFilePath) {
   seedDefaultLeaveTypes();
 }
 
+function close() {
+  if (!db) return;
+  db.close();
+  db = null;
+  currentDbFilePath = '';
+}
+
 function run(sql, ...params) { return db.prepare(sql).run(...params); }
 function get(sql, ...params) { return db.prepare(sql).get(...params); }
 function all(sql, ...params) { return db.prepare(sql).all(...params); }
@@ -1088,16 +1095,64 @@ const cancelPaperLeaveRequest = ({ requestId, cancelledAt, auditLog = null }) =>
     return result;
 })();
 
-const replacePaperLeaveRequest = ({ requestId, replacement, cancelledAt, auditLog = null }) => db.transaction(() => {
-    const result = cancelPaperLeaveRequestRow({ requestId, cancelledAt });
+const updatePaperLeaveRequest = ({ requestId, updates, auditLog }) => db.transaction(() => {
+    if (!auditLog) {
+        throw new Error('修正紙本請假補登時必須同時寫入稽核紀錄。');
+    }
+    const result = run(
+        `UPDATE leave_requests
+         SET employee_id = ?, leave_type_id = ?, start_at = ?, end_at = ?, duration_hours = ?,
+             reason = ?, supervisor_id = ?, supervisor_decision = ?, supervisor_comment = ?,
+             supervisor_decided_at = ?, admin_decision_by = ?, admin_comment = ?,
+             admin_decided_at = ?, paper_no = ?, paper_approved_by = ?, paper_comment = ?,
+             updated_at = ?
+         WHERE id = ?
+           AND approval_mode = 'admin_paper_approved'
+           AND status = 'approved'`,
+        updates.employee_id,
+        updates.leave_type_id,
+        updates.start_at,
+        updates.end_at,
+        updates.duration_hours,
+        updates.reason || '',
+        updates.supervisor_id || '',
+        updates.supervisor_decision || 'approved',
+        updates.supervisor_comment || '',
+        updates.supervisor_decided_at || null,
+        updates.admin_decision_by || '',
+        updates.admin_comment || '',
+        updates.admin_decided_at || null,
+        updates.paper_no ?? null,
+        updates.paper_approved_by ?? null,
+        updates.paper_comment ?? null,
+        updates.updated_at,
+        requestId
+    );
     if (result.changes !== 1) {
         const error = new Error('紙本請假補登狀態已變更，無法完成修正。');
         error.code = 'PAPER_REQUEST_STATE_CHANGED';
         throw error;
     }
-    createLeaveRequest(replacement);
-    if (auditLog) addAuditLog(auditLog);
-    return { cancelledRequestId: requestId, replacementRequestId: replacement.id };
+    run(
+        `UPDATE leave_approval_steps
+         SET reviewer_id = ?, status = 'approved', comment = ?, decided_at = ?
+         WHERE request_id = ? AND reviewer_role = 'supervisor'`,
+        updates.supervisor_id || null,
+        updates.supervisor_comment || '',
+        updates.supervisor_decided_at || null,
+        requestId
+    );
+    run(
+        `UPDATE leave_approval_steps
+         SET reviewer_id = ?, status = 'approved', comment = ?, decided_at = ?
+         WHERE request_id = ? AND reviewer_role = 'admin'`,
+        updates.admin_decision_by || null,
+        updates.admin_comment || '',
+        updates.admin_decided_at || null,
+        requestId
+    );
+    addAuditLog(auditLog);
+    return getLeaveRequestById(requestId);
 })();
 
 function mapOvertimeRequestRow(row) {
@@ -1305,16 +1360,52 @@ const cancelPaperOvertimeRequest = ({ requestId, cancelledAt, auditLog = null })
     return result;
 })();
 
-const replacePaperOvertimeRequest = ({ requestId, replacement, cancelledAt, auditLog = null }) => db.transaction(() => {
-    const result = cancelPaperOvertimeRequestRow({ requestId, cancelledAt });
+const updatePaperOvertimeRequest = ({ requestId, updates, auditLog }) => db.transaction(() => {
+    if (!auditLog) {
+        throw new Error('修正紙本加班補登時必須同時寫入稽核紀錄。');
+    }
+    const result = run(
+        `UPDATE overtime_requests
+         SET employee_id = ?, applicant_id = ?, applicant_role = ?, start_at = ?, end_at = ?,
+             duration_hours = ?, reason = ?, supervisor_id = ?, supervisor_decision = ?,
+             supervisor_comment = ?, supervisor_decided_at = ?, paper_no = ?,
+             paper_approved_by = ?, paper_comment = ?, updated_at = ?
+         WHERE id = ?
+           AND approval_mode = 'admin_paper_approved'
+           AND status = 'approved'`,
+        updates.employee_id,
+        updates.applicant_id,
+        updates.applicant_role || 'admin_paper_proxy',
+        updates.start_at,
+        updates.end_at,
+        updates.duration_hours,
+        updates.reason || '',
+        updates.supervisor_id || '',
+        updates.supervisor_decision || 'approved',
+        updates.supervisor_comment || '',
+        updates.supervisor_decided_at || null,
+        updates.paper_no ?? null,
+        updates.paper_approved_by ?? null,
+        updates.paper_comment ?? null,
+        updates.updated_at,
+        requestId
+    );
     if (result.changes !== 1) {
         const error = new Error('紙本加班補登狀態已變更，無法完成修正。');
         error.code = 'PAPER_REQUEST_STATE_CHANGED';
         throw error;
     }
-    createOvertimeRequest(replacement);
-    if (auditLog) addAuditLog(auditLog);
-    return { cancelledRequestId: requestId, replacementRequestId: replacement.id };
+    run(
+        `UPDATE overtime_approval_steps
+         SET reviewer_id = ?, status = 'approved', comment = ?, decided_at = ?
+         WHERE request_id = ? AND reviewer_role = 'supervisor'`,
+        updates.supervisor_id || null,
+        updates.supervisor_comment || '',
+        updates.supervisor_decided_at || null,
+        requestId
+    );
+    addAuditLog(auditLog);
+    return getOvertimeRequestById(requestId);
 })();
 
 const addPunchRecord = (record) => run(
@@ -1975,7 +2066,7 @@ const countPunchFailureAuditLogsSince = (startTimestamp, excludedFailureCodes = 
 
 
 module.exports = {
-  init,
+  init, close,
   getDatabasePath, backupDatabase, validateBackupDatabaseFile, replaceDatabaseFromBackup,
   saveEmployees, loadEmployees, deleteAllEmployees,
   loadDepartments, saveDepartments,
@@ -2003,10 +2094,10 @@ module.exports = {
   createLeaveRequest, getLeaveRequestById, queryLeaveRequests, countLeaveRequests,
   hasOverlappingLeaveRequest, updateLeaveRequestSupervisorDecision,
   updateLeaveRequestAdminDecision, withdrawLeaveRequest,
-  cancelPaperLeaveRequest, replacePaperLeaveRequest,
+  cancelPaperLeaveRequest, updatePaperLeaveRequest,
   createOvertimeRequest, getOvertimeRequestById, queryOvertimeRequests, countOvertimeRequests,
   hasOverlappingOvertimeRequest, updateOvertimeRequestSupervisorDecision,
-  withdrawOvertimeRequest, cancelPaperOvertimeRequest, replacePaperOvertimeRequest,
+  withdrawOvertimeRequest, cancelPaperOvertimeRequest, updatePaperOvertimeRequest,
   saveAutomationTasks, loadAutomationTasks,
   addAutomationLog, loadAutomationLog, clearAutomationLog,
   addAuditLog, getAuditLogsForArchive, deleteAuditLogsByIds,

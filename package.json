@@ -1,6 +1,6 @@
 {
   "name": "TanChin-Time-Clock-SQLite3",
-  "version": "1.16.0",
+  "version": "1.16.1",
   "productName": "TanChin-Time-Clock-SQLite3",
   "description": "TanChin time clock desktop and browser system.",
   "main": "main.js",
@@ -14,6 +14,7 @@
     "pack": "electron-builder --dir",
     "build": "electron-builder",
     "publish": "electron-builder --publish always",
+    "test": "node scripts/run-tests.js",
     "postinstall": "electron-builder install-app-deps"
   },
   "_scriptNotes": {
