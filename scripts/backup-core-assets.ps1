@@ -123,6 +123,8 @@ $projectFiles = @(
     "server.js",
     "browser-accounts.js",
     "web-credentials.js",
+    "meal-management.js",
+    "meal-routes.js",
     "tailwind.config.js"
 )
 

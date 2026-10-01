@@ -3,12 +3,15 @@ const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
 const webCredentials = require('./web-credentials');
+const { createMealStore } = require('./meal-management');
 let db = null;
+let meals = null;
 let currentDbFilePath = '';
 
 function init(dbFilePath) {
   currentDbFilePath = path.resolve(dbFilePath);
   db = new Database(currentDbFilePath);
+  meals = createMealStore(db, (entry) => addAuditLog(entry));
   console.log('[資料庫] 魔法寶庫已在路徑開啟:', dbFilePath);
 
   // ✨ 魔法修正：在 employees 資料表中新增 job_title 欄位
@@ -454,6 +457,7 @@ function close() {
   if (!db) return;
   db.close();
   db = null;
+  meals = null;
   currentDbFilePath = '';
 }
 
@@ -2108,6 +2112,7 @@ const countPunchFailureAuditLogsSince = (startTimestamp, excludedFailureCodes = 
 
 
 module.exports = {
+  getMeals: () => meals,
   init, close,
   getDatabasePath, backupDatabase, validateBackupDatabaseFile, replaceDatabaseFromBackup,
   saveEmployees, loadEmployees, deleteAllEmployees,

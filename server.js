@@ -6,6 +6,7 @@ const { app, dialog } = require('electron');
 const dbModule = require('./database');
 const databaseBackup = require('./database-backup');
 const { createBrowserAccounts, RESET_PERMISSION, REVEAL_PERMISSION } = require('./browser-accounts');
+const { attachMealRoutes } = require('./meal-routes');
 const {
   ATTENDANCE_EXPORT_FIELD_DEFINITIONS,
   DEFAULT_ATTENDANCE_EXPORT_TEMPLATE_ID,
@@ -51,6 +52,10 @@ const ADMIN_PERMISSION_DEFINITIONS = [
   { code: 'admin.leave.settings', category: '請假管理', label: '假別與審核路徑設定', section: 'leave' },
   { code: 'admin.overtime.view', category: '加班管理', label: '查看加班申請、警示與匯出', section: 'overtime' },
   { code: 'admin.overtime.paperCreate', category: '加班管理', label: '紙本加班補登', section: 'overtime', highRisk: true },
+  { code: 'admin.meals.view', category: '午餐團膳', label: '查看團膳名單、餐數與匯出', section: 'meals' },
+  { code: 'admin.meals.manage', category: '午餐團膳', label: '參加資格與代登用餐', section: 'meals' },
+  { code: 'admin.meals.settings', category: '午餐團膳', label: '供餐日與截止時間設定', section: 'meals' },
+  { code: 'admin.meals.close', category: '午餐團膳', label: '結單與更新供應商訂餐', section: 'meals', highRisk: true },
   { code: 'admin.system.manage', category: '系統外觀與提醒', label: '主畫面與問候語設定', section: 'system' },
   { code: 'admin.bells.manage', category: '系統外觀與提醒', label: '響鈴與聲音設定', section: 'bells' },
   { code: 'admin.themes.manage', category: '系統外觀與提醒', label: '主題與特效設定', section: 'themes' }
@@ -67,6 +72,7 @@ const ADMIN_SECTION_RULES = [
   { id: 'reports', label: '考勤報表', permissions: ['admin.reports.view', 'admin.reports.export'] },
   { id: 'leave', label: '請假管理', permissions: ['admin.leave.review', 'admin.leave.paperCreate', 'admin.leave.settings'] },
   { id: 'overtime', label: '加班管理', permissions: ['admin.overtime.view', 'admin.overtime.paperCreate'] },
+  { id: 'meals', label: '午餐團膳', permissions: ['admin.meals.view'] },
   { id: 'system', label: '系統設定', permissions: ['admin.system.manage'] },
   { id: 'bells', label: '響鈴設定', permissions: ['admin.bells.manage'] },
   { id: 'themes', label: '主題特效', permissions: ['admin.themes.manage'] }
@@ -115,6 +121,10 @@ const ADMIN_PERMISSION_PRESETS = [
       'admin.leave.settings',
       'admin.overtime.view',
       'admin.overtime.paperCreate',
+      'admin.meals.view',
+      'admin.meals.manage',
+      'admin.meals.settings',
+      'admin.meals.close',
       'admin.reports.view'
     ]
   },
@@ -404,6 +414,15 @@ API_ROUTE_CATALOG.push(
 );
 API_ROUTE_CATALOG.push(
   { category: '系統管理者 API', method: 'POST', path: '/api/browser/system-admin/credentials/save', auth: '系統管理者', description: '更新網頁端系統管理者帳號與密碼' }
+);
+
+API_ROUTE_CATALOG.push(
+  { category: '午餐團膳 API', method: 'GET', path: '/api/browser/employee/meals', auth: '員工本人', description: '自己的午餐月曆與請假提醒' },
+  { category: '午餐團膳 API', method: 'POST', path: '/api/browser/employee/meals/choice', auth: '員工本人', description: '截止前登記午餐例外' },
+  { category: '午餐團膳 API', method: 'GET', path: '/api/browser/admin/meals', auth: '團膳查看', description: '團膳名單、月曆與交單差額' },
+  { category: '午餐團膳 API', method: 'GET', path: '/api/browser/admin/meals/export', auth: '團膳查看', description: '匯出午餐預訂月報 CSV' },
+  ...[['choice', '團膳代登', '代登或修正午餐'], ['membership', '團膳代登', '參加資格'], ['schedule', '團膳設定', '供餐制度'], ['day', '團膳設定', '每日供餐與截止時間'], ['close', '團膳結單', '保存供應商交單快照']]
+    .map(([action, auth, description]) => ({ category: '午餐團膳 API', method: 'POST', path: `/api/browser/admin/meals/${action}`, auth: `${auth}與團膳查看`, description }))
 );
 
 function ensureDirectory(directoryPath) {
@@ -2925,6 +2944,7 @@ function getAdminDatasets(session = {}) {
     }) : null,
     security: canSecurity ? getAdminSecurityDatasets() : null,
     accountAccess: null,
+    meals: hasAdminPermission(session, 'admin.meals.view') ? dbModule.getMeals().calendar() : null,
     settings: {
       mainTitle: canSystem ? settings.mainTitle : '',
       subtitle: canSystem ? settings.subtitle : '',
@@ -3003,6 +3023,7 @@ function buildEmployeeDashboard(employee, session = null) {
     },
     leave: getEmployeeLeaveState(employee),
     overtime: getEmployeeOvertimeState(employee),
+    meals: dbModule.getMeals().calendar({ employeeId: employee.id }),
     recentRecords
   };
 }
@@ -7467,6 +7488,11 @@ function createServerApp() {
 
   attachExternalApiRoutes(server);
   attachBrowserRoutes(server);
+  attachMealRoutes(server, {
+    db: dbModule, requireSession: requireBrowserSession, requireRole: requireBrowserRole,
+    requirePermission: requireAdminPermission, auditEntry: buildBrowserAuditLogEntry,
+    notify: (request) => { notifyDesktop('meals', getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); }
+  });
   return server;
 }
 
