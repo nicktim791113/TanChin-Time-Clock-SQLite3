@@ -100,6 +100,8 @@ function enforceBackupRetention(directoryPath, retentionCount, kind = 'standard'
       fs.unlinkSync(manifestPath);
     }
     removed.push(file.filePath);
+    const credentialKeyPath = `${file.filePath}.web-credentials.json`;
+    if (fs.existsSync(credentialKeyPath)) fs.unlinkSync(credentialKeyPath);
   }
   return removed;
 }
@@ -133,6 +135,8 @@ async function createFullDatabaseBackup({
     databaseFileName: path.basename(result.filePath),
     sizeBytes: result.sizeBytes,
     sha256: checksum,
+    credentialKeyFileName: result.credentialKeyPath ? path.basename(result.credentialKeyPath) : '',
+    credentialKeySha256: result.credentialKeyPath ? computeFileSha256(result.credentialKeyPath) : '',
     ...metadata
   };
   const manifestPath = writeBackupManifest(result.filePath, manifest);
@@ -195,6 +199,8 @@ async function restoreDatabaseFromBackup({
         sizeBytes: restoreResult.emergencyBackup.sizeBytes,
         sha256: computeFileSha256(restoreResult.emergencyBackup.filePath),
         restoreSourcePath: resolvedSource,
+        credentialKeyFileName: restoreResult.emergencyBackup.credentialKeyPath ? path.basename(restoreResult.emergencyBackup.credentialKeyPath) : '',
+        credentialKeySha256: restoreResult.emergencyBackup.credentialKeyPath ? computeFileSha256(restoreResult.emergencyBackup.credentialKeyPath) : '',
         ...metadata
       }
     : null;

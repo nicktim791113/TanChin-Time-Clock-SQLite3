@@ -12,6 +12,8 @@ yarn-error.log*
 pnpm-debug.log*
 
 .env
+WebCredentials/
+*.web-credentials.json
 .env.*
 !.env.example
 

@@ -1,0 +1,54 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { test } = require('node:test');
+const Database = require('better-sqlite3');
+const db = require('../database');
+const credentials = require('../web-credentials');
+const backups = require('../database-backup');
+
+test('encrypted credentials survive real cross-directory database restore and legacy schema migration', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tanchin-credential-backup-'));
+    t.after(() => { db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+    const sourcePath = path.join(root, 'source', 'app_data.db');
+    fs.mkdirSync(path.dirname(sourcePath));
+    const legacy = new Database(sourcePath);
+    legacy.exec('CREATE TABLE employees (id TEXT PRIMARY KEY, name TEXT, gender TEXT, nationality TEXT, department TEXT, card TEXT UNIQUE, password TEXT); CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);');
+    legacy.prepare('INSERT INTO employees (id, name, card, password) VALUES (?, ?, ?, ?)').run('E001', 'Legacy Employee', 'legacy-card', 'legacy-desktop-password');
+    legacy.close();
+    db.init(sourcePath);
+    assert.equal(db.loadEmployees()[0].card, 'legacy-card');
+    assert.equal(db.loadEmployees()[0].password, 'legacy-desktop-password');
+    assert.equal(db.getWebCredential('E001'), null);
+    const credential = await credentials.createCredential(sourcePath, 'E001', 'source-personal-password');
+    const encryptedAgain = await credentials.createCredential(sourcePath, 'E001', 'source-personal-password');
+    assert.notEqual(credential.iv, encryptedAgain.iv);
+    assert.notEqual(credential.salt, encryptedAgain.salt);
+    assert.throws(() => credentials.validatePassword('same-card', 'same-card'));
+    assert.throws(() => credentials.validatePassword(' short '));
+    assert.throws(() => credentials.validatePassword(' padded-password '));
+    db.saveWebCredential({ employee_id: 'E001', credential, revision: crypto.randomUUID(), must_change_password: false, updated_by: 'test' }, { action: 'test_seed' });
+    const backup = await backups.createFullDatabaseBackup({ dbModule: db, directoryPath: path.join(root, 'backups') });
+    assert.ok(backup.credentialKeySha256);
+    assert.ok(backup.credentialKeyFileName.endsWith('.db.web-credentials.json'));
+    db.close();
+    const targetPath = path.join(root, 'relocated', 'app_data.db');
+    fs.mkdirSync(path.dirname(targetPath));
+    db.init(targetPath);
+    db.saveEmployees([{ id: 'KEEP', name: 'Before Restore', card: 'keep-card' }]);
+    const restored = await backups.restoreDatabaseFromBackup({ dbModule: db, sourceFilePath: backup.filePath,
+        emergencyDirectoryPath: path.join(root, 'emergency') });
+    assert.ok(fs.existsSync(restored.emergencyBackup.filePath));
+    assert.equal(db.loadEmployees()[0].id, 'E001');
+    assert.equal(await credentials.verifyPassword(db.getWebCredential('E001').credential, 'source-personal-password'), true);
+    assert.equal(credentials.revealPassword(targetPath, 'E001', db.getWebCredential('E001').credential), 'source-personal-password');
+    assert.equal(db.loadEmployees()[0].password, 'legacy-desktop-password');
+    const rollback = await backups.restoreDatabaseFromBackup({ dbModule: db, sourceFilePath: restored.emergencyBackup.filePath,
+        emergencyDirectoryPath: path.join(root, 'emergency-again') });
+    assert.equal(db.loadEmployees()[0].id, 'KEEP');
+    assert.equal(db.getWebCredential('E001'), null);
+    assert.ok(rollback.emergencyBackup.credentialKeyFileName);
+    assert.equal(credentials.revealPassword(targetPath, 'E001', credential), 'source-personal-password');
+});

@@ -736,6 +736,7 @@ function escapeHtml(text) {
 
 async function requestJson(url, { method = "GET", body, auth = false } = {}) {
     const headers = {};
+    const requestToken = auth ? state.token : "";
     if (body !== undefined) headers["Content-Type"] = "application/json";
     if (auth && state.token) headers.Authorization = `Bearer ${state.token}`;
 
@@ -745,6 +746,10 @@ async function requestJson(url, { method = "GET", body, auth = false } = {}) {
         body: body !== undefined ? JSON.stringify(body) : undefined
     });
     const result = await response.json().catch(() => ({}));
+
+    if (auth && requestToken !== state.token) {
+        throw new Error("登入狀態已切換，請在目前工作台重新操作。");
+    }
 
     if (response.status === 401) {
         await handleLogout(true);
@@ -2250,13 +2255,13 @@ function renderAdminSystemSection(datasets) {
             </article>
 
             <article class="sub-panel">
-                <h3>變更管理者密碼</h3>
+                <h3>變更桌面管理者密碼</h3>
                 <form id="admin-password-form" class="stack-form">
                     <div class="field-grid">
-                        <label class="field"><span>目前系統密碼</span><input name="currentSystemPassword" type="password" required></label>
-                        <label class="field"><span>新管理者密碼</span><input name="newPassword" type="password" required></label>
+                        <label class="field"><span>目前桌面開發人員密碼</span><input name="currentSystemPassword" type="password" required></label>
+                        <label class="field"><span>新桌面管理者密碼</span><input name="newPassword" type="password" required></label>
                     </div>
-                    <button class="primary-btn" type="submit">更新管理者密碼</button>
+                    <button class="primary-btn" type="submit">更新桌面管理者密碼</button>
                     <div class="inline-message" data-form-message-for="admin-password-form" aria-live="polite"></div>
                 </form>
             </article>
@@ -2791,13 +2796,13 @@ function renderDeveloperLogsSection(datasets) {
             </article>
 
             <article class="sub-panel">
-                <h3>變更系統密碼</h3>
+                <h3>變更桌面開發人員密碼</h3>
                 <form id="system-password-form" class="stack-form">
                     <div class="field-grid">
-                        <label class="field"><span>目前系統密碼</span><input name="currentPassword" type="password" required></label>
-                        <label class="field"><span>新系統密碼</span><input name="newPassword" type="password" required></label>
+                        <label class="field"><span>目前桌面開發人員密碼</span><input name="currentPassword" type="password" required></label>
+                        <label class="field"><span>新桌面開發人員密碼</span><input name="newPassword" type="password" required></label>
                     </div>
-                    <button class="primary-btn" type="submit">更新系統密碼</button>
+                    <button class="primary-btn" type="submit">更新桌面開發人員密碼</button>
                     <div class="inline-message" data-form-message-for="system-password-form" aria-live="polite"></div>
                 </form>
             </article>
@@ -7024,11 +7029,11 @@ renderDeveloperLogsSection = function renderDeveloperLogsSectionOverride(dataset
             </article>
 
             <article class="sub-panel">
-                <h3>變更系統密碼</h3>
+                <h3>變更桌面開發人員密碼</h3>
                 <form id="system-password-form" class="stack-form">
                     <div class="field-grid">
-                        <label class="field"><span>目前系統密碼</span><input name="currentPassword" type="password" required></label>
-                        <label class="field"><span>新系統密碼</span><input name="newPassword" type="password" required></label>
+                        <label class="field"><span>目前桌面開發人員密碼</span><input name="currentPassword" type="password" required></label>
+                        <label class="field"><span>新桌面開發人員密碼</span><input name="newPassword" type="password" required></label>
                     </div>
                     <button class="primary-btn" type="submit">儲存新密碼</button>
                     <div class="inline-message" data-form-message-for="system-password-form" aria-live="polite"></div>
@@ -8142,11 +8147,11 @@ handleLoginSubmit = async function handleLoginSubmitSecurityOverride(event) {
                 role: state.activeRole,
                 employeeId: ui.employeeIdInput.value.trim(),
                 secret: ui.secretInput.value.trim(),
-                deviceInfo: buildClientDeviceInfo()
+                deviceInfo: buildClientDeviceInfo(ui.employeeIdInput.value.trim())
             }
         });
 
-        storeIssuedDeviceToken(result.deviceBinding?.issuedDeviceToken || "");
+        storeIssuedDeviceToken(result.deviceBinding?.issuedDeviceToken || "", result.dashboard?.user?.id);
         state.token = result.token;
         sessionStorage.setItem("browserPortalToken", state.token);
         ui.loginView.classList.add("hidden");
@@ -8590,11 +8595,11 @@ function renderDeveloperAutomationLogSection(datasets = {}) {
 function renderDeveloperSystemPasswordPanel() {
     return `
         <article class="sub-panel">
-            <h3>變更系統密碼</h3>
+            <h3>變更桌面開發人員密碼</h3>
             <form id="system-password-form" class="stack-form dense-form">
                 <div class="field-grid dense-field-grid">
-                    <label class="field"><span>目前系統密碼</span><input name="currentPassword" type="password" required></label>
-                    <label class="field"><span>新的系統密碼</span><input name="newPassword" type="password" required></label>
+                    <label class="field"><span>目前桌面開發人員密碼</span><input name="currentPassword" type="password" required></label>
+                    <label class="field"><span>新桌面開發人員密碼</span><input name="newPassword" type="password" required></label>
                 </div>
                 <button class="primary-btn" type="submit">儲存新密碼</button>
                 <div class="inline-message" data-form-message-for="system-password-form" aria-live="polite"></div>
@@ -11414,6 +11419,11 @@ handleDashboardSubmit = async function handleDashboardSubmitSystemAdminOverride(
                 confirmPassword: values.confirmPassword || ""
             }
         });
+        if (result.requiresLogin) {
+            await handleLogout(true);
+            setMessage(ui.loginMessage, result.message, "success");
+            return;
+        }
         if (result.dashboard) renderDashboard(result.dashboard);
         setMessage(ui.dashboardMessage, result.message || "系統管理者帳號設定已更新。", "success");
         setFormMessage(formId, result.message || "系統管理者帳號設定已更新。", "success");

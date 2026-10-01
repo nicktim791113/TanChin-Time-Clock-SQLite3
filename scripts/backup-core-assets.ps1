@@ -121,6 +121,8 @@ $projectFiles = @(
     "package.json.txt",
     "preload.js",
     "server.js",
+    "browser-accounts.js",
+    "web-credentials.js",
     "tailwind.config.js"
 )
 
@@ -164,6 +166,7 @@ if (Test-Path -LiteralPath $UserDataPath) {
         "CustomSounds",
         "ThemeImages",
         "AuditArchives",
+        "WebCredentials",
         "logs"
     )
 

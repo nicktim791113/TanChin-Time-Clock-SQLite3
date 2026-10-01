@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TanChin Browser Portal</title>
-    <link rel="stylesheet" href="./style.css?v=20260904-sticky-request-actions">
+    <link rel="stylesheet" href="./style.css?v=20261001-personal-login">
 </head>
 <body>
     <div class="page-shell">
@@ -40,7 +40,7 @@
                 <div class="panel-header">
                     <div>
                         <p class="section-kicker">登入入口</p>
-                        <h2>選擇身份登入</h2>
+                        <h2>帳號登入</h2>
                     </div>
                     <div class="live-pill">
                         <span class="dot"></span>
@@ -49,9 +49,7 @@
                 </div>
 
                 <div class="role-selector" id="role-selector">
-                    <button type="button" class="role-chip active" data-role="employee">員工</button>
-                    <button type="button" class="role-chip" data-role="admin">管理者</button>
-                    <button type="button" class="role-chip" data-role="developer">開發人員</button>
+                    <button type="button" class="role-chip active" data-role="account">一般登入</button>
                     <button type="button" class="role-chip" data-role="system_admin">系統管理者</button>
                 </div>
 
@@ -83,6 +81,8 @@
                         <span id="dashboard-message" class="status-pill hidden" aria-live="polite"></span>
                         <span id="dashboard-identity-pill" class="identity-pill hidden" aria-live="polite"></span>
                         <button id="dashboard-help-btn" class="outline-btn hidden" type="button">說明</button>
+                        <select id="workspace-switch" class="hidden" aria-label="切換工作台"></select>
+                        <button id="personal-account-btn" class="outline-btn hidden" type="button">個人帳號</button>
                         <button id="logout-btn" class="ghost-btn" type="button">登出</button>
                     </div>
                 </div>
@@ -111,6 +111,14 @@
             <div id="dashboard-insight-content" class="modal-body"></div>
         </div>
     </div>
-    <script src="./app.js?v=20260904-sticky-request-actions" defer></script>
+    <dialog id="personal-account-dialog" class="web-account-dialog" aria-labelledby="personal-account-title">
+        <div class="modal-header">
+            <h2 id="personal-account-title">修改個人網頁密碼</h2>
+            <button id="personal-account-close" class="ghost-btn" type="button">關閉</button>
+        </div>
+        <div id="personal-account-content"></div>
+    </dialog>
+    <script src="./app.js?v=20261001-personal-login" defer></script>
+    <script src="./web-account.js?v=20261001-personal-login" defer></script>
 </body>
 </html>

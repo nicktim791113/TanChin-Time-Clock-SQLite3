@@ -3866,6 +3866,38 @@ body::after {
     gap: var(--dense-gap-sm);
 }
 
+.web-account-dialog {
+    width: min(480px, calc(100% - 32px));
+    max-height: calc(100dvh - 32px);
+    padding: 24px;
+    border: 1px solid #d4d4d8;
+    border-radius: 8px;
+    background: #fff;
+    color: #18181b;
+    overflow-y: auto;
+}
+
+.web-account-dialog::backdrop { background: rgb(0 0 0 / 40%); }
+.web-account-dialog h2 { font-size: 20px; }
+.web-password-change { max-width: 460px; margin: 20px 0; }
+.web-workspace-options { display: flex; flex-wrap: wrap; gap: 12px; padding: 20px 0; }
+.web-workspace-options button { min-width: 180px; min-height: 48px; }
+.web-credential-manager { border-bottom: 1px solid #d4d4d8; margin-bottom: 24px; padding: 16px 0 24px; }
+.web-credential-manager h3 { font-size: 18px; margin-bottom: 16px; }
+.web-credential-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.web-credential-form .inline-actions, .web-credential-form .inline-message, .web-secret-result { grid-column: 1 / -1; }
+.web-secret-result { display: flex; align-items: flex-end; gap: 12px; }
+.web-secret-result .field { flex: 1; min-width: 0; }
+.web-secret-result input { font-family: monospace; }
+#workspace-switch { max-width: 220px; min-height: 40px; border: 1px solid #a1a1aa; border-radius: 6px; padding: 8px; background: #fff; }
+.dashboard-actions { flex-wrap: wrap; }
+
+@media (max-width: 600px) {
+    .web-credential-form { grid-template-columns: minmax(0, 1fr); }
+    .web-workspace-options { flex-direction: column; }
+    .web-workspace-options button { width: 100%; min-width: 0; }
+}
+
 @media (max-width: 720px) {
     .employee-workbench-tab {
         flex: 0 0 160px;

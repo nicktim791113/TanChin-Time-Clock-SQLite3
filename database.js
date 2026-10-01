@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
+const webCredentials = require('./web-credentials');
 let db = null;
 let currentDbFilePath = '';
 
@@ -81,6 +82,15 @@ function init(dbFilePath) {
       last_used_at INTEGER,
       last_used_ip TEXT
     );
+    CREATE TABLE IF NOT EXISTS web_credentials (
+      employee_id TEXT PRIMARY KEY,
+      credential_json TEXT NOT NULL,
+      revision TEXT NOT NULL,
+      must_change_password INTEGER NOT NULL DEFAULT 1,
+      updated_at INTEGER NOT NULL,
+      updated_by TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS account_access (
       employee_id TEXT PRIMARY KEY,
       allowed_roles TEXT NOT NULL DEFAULT '["employee"]',
@@ -470,10 +480,13 @@ async function backupDatabase(destinationFilePath) {
     const resolvedDestination = path.resolve(destinationText);
     fs.mkdirSync(path.dirname(resolvedDestination), { recursive: true });
     await db.backup(resolvedDestination);
+    const credentialKeyPath = webCredentials.backupKeys(currentDbFilePath, resolvedDestination,
+        validateBackupDatabaseFile(resolvedDestination).credentialKeyIds);
     const stat = fs.statSync(resolvedDestination);
     return {
         filePath: resolvedDestination,
-        sizeBytes: stat.size
+        sizeBytes: stat.size,
+        credentialKeyPath
     };
 }
 
@@ -491,6 +504,7 @@ function validateBackupDatabaseFile(sourceFilePath) {
     }
 
     const candidate = new Database(resolvedSource, { readonly: true, fileMustExist: true });
+    let credentialKeyIds = [];
     try {
         const quickCheck = candidate.pragma('quick_check');
         const quickCheckValue = Array.isArray(quickCheck)
@@ -508,14 +522,18 @@ function validateBackupDatabaseFile(sourceFilePath) {
         if (!employeesTable || !settingsTable) {
             throw new Error('備份檔缺少必要資料表，已停止還原。');
         }
+        if (candidate.prepare("SELECT name FROM sqlite_master WHERE name = 'web_credentials'").get()) {
+            credentialKeyIds = [...new Set(candidate.prepare('SELECT credential_json FROM web_credentials').all()
+                .map((row) => JSON.parse(row.credential_json).keyId))];
+        }
     } finally {
         candidate.close();
     }
-    return { filePath: resolvedSource };
+    return { filePath: resolvedSource, credentialKeyIds };
 }
 
 async function replaceDatabaseFromBackup(sourceFilePath, options = {}) {
-    const { filePath: resolvedSource } = validateBackupDatabaseFile(sourceFilePath);
+    const { filePath: resolvedSource, credentialKeyIds } = validateBackupDatabaseFile(sourceFilePath);
     const targetPath = currentDbFilePath;
     if (!targetPath) {
         throw new Error('目前資料庫路徑不存在，無法執行還原。');
@@ -524,6 +542,7 @@ async function replaceDatabaseFromBackup(sourceFilePath, options = {}) {
         throw new Error('還原來源不可直接指向目前正在使用的資料庫檔。');
     }
 
+    webCredentials.prepareRestoreKeys(targetPath, resolvedSource, credentialKeyIds);
     const emergencyBackupPath = String(options.emergencyBackupPath || '').trim();
     const emergencyBackup = emergencyBackupPath
         ? await backupDatabase(emergencyBackupPath)
@@ -597,10 +616,33 @@ const saveEmployees = (employees) => {
     db.transaction(() => {
         run('DELETE FROM employees');
         for (const emp of employees) insert.run(normalizeEmployeeForStorage(emp));
+        run('DELETE FROM web_credentials WHERE employee_id NOT IN (SELECT id FROM employees)');
     })();
 };
 const loadEmployees = () => all('SELECT * FROM employees ORDER BY id');
-const deleteAllEmployees = () => run('DELETE FROM employees');
+const deleteAllEmployees = () => db.transaction(() => {
+    run('DELETE FROM web_credentials');
+    return run('DELETE FROM employees');
+})();
+
+function getWebCredential(employeeId) {
+    const row = get('SELECT * FROM web_credentials WHERE employee_id = ?', employeeId);
+    return row ? { ...row, credential: JSON.parse(row.credential_json) } : null;
+}
+
+function getWebCredentialKeyIds() {
+    return [...new Set(all('SELECT credential_json FROM web_credentials').map((row) => JSON.parse(row.credential_json).keyId))];
+}
+
+function saveWebCredential(record, auditEntry) {
+    db.transaction(() => {
+        run(`INSERT OR REPLACE INTO web_credentials
+            (employee_id, credential_json, revision, must_change_password, updated_at, updated_by)
+            VALUES (?, ?, ?, ?, ?, ?)`, record.employee_id, JSON.stringify(record.credential), record.revision,
+            record.must_change_password ? 1 : 0, Date.now(), record.updated_by);
+        addAuditLog(auditEntry);
+    })();
+}
 
 function normalizeDepartmentForStorage(department = {}, index = 0) {
     const now = Date.now();
@@ -2069,6 +2111,7 @@ module.exports = {
   init, close,
   getDatabasePath, backupDatabase, validateBackupDatabaseFile, replaceDatabaseFromBackup,
   saveEmployees, loadEmployees, deleteAllEmployees,
+  getWebCredential, getWebCredentialKeyIds, saveWebCredential,
   loadDepartments, saveDepartments,
   addPunchRecord, loadPunchRecords,
   deletePunchRecordsByDateRange, deletePunchRecordsBySource,

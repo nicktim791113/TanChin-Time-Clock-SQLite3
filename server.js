@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const { app, dialog } = require('electron');
 const dbModule = require('./database');
 const databaseBackup = require('./database-backup');
+const { createBrowserAccounts, RESET_PERMISSION, REVEAL_PERMISSION } = require('./browser-accounts');
 const {
   ATTENDANCE_EXPORT_FIELD_DEFINITIONS,
   DEFAULT_ATTENDANCE_EXPORT_TEMPLATE_ID,
@@ -32,7 +33,6 @@ const DEFAULT_BROWSER_SECURITY_SETTINGS = {
 };
 const BROWSER_CLIENT_DIR = path.join(__dirname, 'browser-client');
 const ACCOUNT_ASSIGNABLE_ROLES = ['employee', 'admin', 'developer'];
-const BROWSER_ROLES = [...ACCOUNT_ASSIGNABLE_ROLES, SYSTEM_ADMIN_ROLE];
 const ADMIN_PERMISSION_DEFINITIONS = [
   { code: 'admin.people.view', category: '人員資料', label: '查看人員資料', section: 'people' },
   { code: 'admin.people.edit', category: '人員資料', label: '新增與編輯人員', section: 'people' },
@@ -40,6 +40,8 @@ const ADMIN_PERMISSION_DEFINITIONS = [
   { code: 'admin.security.view', category: '安全設定', label: '查看安全狀態', section: 'security' },
   { code: 'admin.security.manage', category: '安全設定', label: '調整裝置與 GPS 安全設定', section: 'security', highRisk: true },
   { code: 'admin.security.password', category: '安全設定', label: '變更管理者密碼', section: 'security', highRisk: true },
+  { code: RESET_PERMISSION, category: '網頁帳號', label: '重設一般員工網頁密碼', section: 'security', highRisk: true, delegatedOnly: true },
+  { code: REVEAL_PERMISSION, category: '網頁帳號', label: '查看一般員工目前網頁密碼', section: 'security', highRisk: true, delegatedOnly: true },
   { code: 'admin.shifts.manage', category: '考勤作業', label: '班別設定', section: 'shifts' },
   { code: 'admin.manualPunch.create', category: '考勤作業', label: '手動補登', section: 'manualPunch', highRisk: true },
   { code: 'admin.reports.view', category: '考勤報表', label: '查詢考勤報表', section: 'reports' },
@@ -59,7 +61,7 @@ const AUTOMATION_ATTENDANCE_EXPORT_TEMPLATE_IDS = new Set(
 );
 const ADMIN_SECTION_RULES = [
   { id: 'people', label: '人員資料', permissions: ['admin.people.view', 'admin.people.edit', 'admin.people.delete'] },
-  { id: 'security', label: '安全設定', permissions: ['admin.security.view', 'admin.security.manage', 'admin.security.password'] },
+  { id: 'security', label: '安全設定', permissions: ['admin.security.view', 'admin.security.manage', 'admin.security.password', RESET_PERMISSION, REVEAL_PERMISSION] },
   { id: 'shifts', label: '班別設定', permissions: ['admin.shifts.manage'] },
   { id: 'manualPunch', label: '手動補登', permissions: ['admin.manualPunch.create'] },
   { id: 'reports', label: '考勤報表', permissions: ['admin.reports.view', 'admin.reports.export'] },
@@ -98,8 +100,8 @@ const ADMIN_PERMISSION_PRESETS = [
   {
     id: 'full_admin',
     label: '完整管理者',
-    description: '可使用全部管理者功能。',
-    permissions: ADMIN_PERMISSION_DEFINITIONS.map((permission) => permission.code)
+    description: '可使用管理者功能；查看與重設他人網頁密碼須另行授權。',
+    permissions: ADMIN_PERMISSION_DEFINITIONS.filter((permission) => !permission.delegatedOnly).map((permission) => permission.code)
   },
   {
     id: 'hr_admin',
@@ -163,6 +165,14 @@ let auditArchiveInProgress = false;
 
 const browserSessions = new Map();
 const browserEventClients = new Map();
+const browserAccounts = createBrowserAccounts({
+  db: dbModule, sessions: browserSessions, eventClients: browserEventClients,
+  getEmployee: getEmployeeById, getAccess: getAccountAccessForEmployee, hasPermission: hasAdminPermission,
+  createSession: createBrowserSession, buildDashboard: buildDashboardForSession,
+  getSystemAdminCredentials, normalizeDeviceInfo: normalizeClientDeviceInfo,
+  authorizeDevice: authorizeEmployeeDeviceForLogin, getIp: getRequestIpAddress,
+  auditEntry: buildBrowserAuditLogEntry, displaySettings: getBrowserDisplaySettings
+});
 const DEFAULT_AUDIT_LOG_RETENTION_DAYS = 180;
 const AUDIT_ARCHIVE_BATCH_SIZE = 2000;
 const AUDIT_ARCHIVE_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -298,6 +308,10 @@ const API_ROUTE_CATALOG = [
 
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/health', auth: '公開', description: '查詢 Express 服務健康狀態摘要' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/login', auth: '公開', description: '瀏覽器入口登入，取得 Session Token' },
+  { category: '網頁個人帳號', method: 'POST', path: '/api/browser/workspace', auth: '個人網頁密碼登入', description: '選擇或切換本人已授權的工作台，輪替登入 Token' },
+  { category: '網頁個人帳號', method: 'POST', path: '/api/browser/account/password', auth: '本人登入與目前個人網頁密碼', description: '修改本人個人網頁密碼並使原登入失效' },
+  { category: '網頁個人帳號', method: 'POST', path: '/api/browser/accounts/password/reset', auth: '密碼管理權限與操作者再次驗證', description: '設定或重設臨時網頁密碼，下次登入須修改' },
+  { category: '網頁個人帳號', method: 'POST', path: '/api/browser/accounts/password/reveal', auth: '密碼查看權限與操作者再次驗證', description: '查回目前有效的個人網頁密碼並留下稽核' },
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/dashboard', auth: 'Session', description: '取得目前登入角色的儀表板資料' },
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/events?token=...', auth: 'Session', description: '即時同步事件流（SSE）' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/punch', auth: '員工', description: '瀏覽器版員工自行打卡' },
@@ -3257,7 +3271,7 @@ function appendDashboardMetadata(dashboard) {
 
 function buildDashboardForSession(session) {
   if (isSystemAdminSession(session)) {
-    return appendDashboardMetadata(buildSystemAdminDashboard(session));
+    return appendDashboardMetadata(browserAccounts.decorateDashboard(buildSystemAdminDashboard(session), session));
   }
 
   const employee = getEmployeeById(session.employeeId);
@@ -3267,9 +3281,13 @@ function buildDashboardForSession(session) {
     throw employeeMissingError;
   }
 
-  if (session.role === 'employee') return appendDashboardMetadata(appendImpersonationState(buildEmployeeDashboard(employee, session), session));
-  if (session.role === 'admin') return appendDashboardMetadata(appendImpersonationState(buildManagerDashboard(employee, session), session));
-  return appendDashboardMetadata(appendImpersonationState(buildDeveloperDashboard(employee, session), session));
+  let dashboard;
+  if (['workspace', 'password_change'].includes(session.role)) dashboard = browserAccounts.pendingDashboard(session);
+  else if (session.role === 'employee') dashboard = buildEmployeeDashboard(employee, session);
+  else if (session.role === 'admin') dashboard = buildManagerDashboard(employee, session);
+  else if (session.role === 'developer') dashboard = buildDeveloperDashboard(employee, session);
+  else throw createHttpError('不支援的工作台。', 403);
+  return appendDashboardMetadata(browserAccounts.decorateDashboard(appendImpersonationState(dashboard, session), session));
 }
 
 function createHttpError(message, statusCode = 400) {
@@ -3544,6 +3562,9 @@ function updateEmployeeDeviceLocation(employeeId, deviceRecord, request, locatio
 }
 
 function createBrowserSession(role, employeeId, metadata = {}) {
+  for (const [existingToken, session] of browserSessions) {
+    if (Date.now() - (session.authenticatedAt || session.createdAt) > 12 * 60 * 60 * 1000) browserAccounts.revoke(existingToken);
+  }
   const token = crypto.randomBytes(24).toString('hex');
   const realRole = metadata.realRole || role;
   const realEmployeeId = metadata.realEmployeeId || employeeId;
@@ -3555,7 +3576,12 @@ function createBrowserSession(role, employeeId, metadata = {}) {
     realEmployeeId,
     realEmployeeName: metadata.realEmployeeName || '',
     impersonation: metadata.impersonation || null,
+    authMethod: metadata.authMethod,
+    credentialRevision: metadata.credentialRevision,
+    cardSignature: metadata.cardSignature,
+    systemSignature: metadata.systemSignature,
     createdAt: Date.now(),
+    authenticatedAt: metadata.authenticatedAt || Date.now(),
     deviceId: metadata.deviceId || null,
     deviceName: metadata.deviceName || null,
     devicePlatform: metadata.devicePlatform || null,
@@ -3657,29 +3683,7 @@ function requireExternalApiAccess(request, response, next) {
 }
 
 function requireBrowserSession(request, response, next) {
-  const session = getBrowserSessionFromRequest(request);
-  if (!session) {
-    response.status(401).json({ success: false, error: withSupportCode('P230', '請先登入瀏覽器入口後再操作。') });
-    return;
-  }
-  if (isSystemAdminSession(session)) {
-    request.browserSession = session;
-    next();
-    return;
-  }
-  if (session.impersonation?.active && (session.realRole || session.role) === 'developer') {
-    if (!canEmployeeLoginAsRole(session.realEmployeeId || session.employeeId, 'developer')) {
-      browserSessions.delete(session.token);
-      response.status(403).json({ success: false, error: '這個開發人員帳號的登入權限已變更，請重新登入。' });
-      return;
-    }
-  } else if (!canEmployeeLoginAsRole(session.employeeId, session.role)) {
-    browserSessions.delete(session.token);
-    response.status(403).json({ success: false, error: '這個帳號目前沒有此頁面的使用權，請重新登入。' });
-    return;
-  }
-  request.browserSession = session;
-  next();
+  return browserAccounts.requireSession(request, response, next);
 }
 
 function requireBrowserRole(...roles) {
@@ -4057,7 +4061,7 @@ function buildBrowserAuditLogEntry(request, entry) {
   return {
     timestamp: Date.now(),
     actor_id: entry.actor_id ?? actorId,
-    actor_name: entry.actor_name ?? actor?.name ?? null,
+    actor_name: entry.actor_name ?? actor?.name ?? session?.realEmployeeName ?? null,
     role: entry.role ?? role ?? null,
     channel: entry.channel ?? 'browser',
     action: entry.action || 'update',
@@ -4966,6 +4970,7 @@ function attachExternalApiRoutes(server) {
 }
 
 function attachBrowserRoutes(server) {
+  browserAccounts.attachRoutes(server);
   server.get('/api/browser/health', (request, response) => {
     response.json({
       success: true,
@@ -4986,7 +4991,7 @@ function attachBrowserRoutes(server) {
   server.get('/api/browser/events', (request, response) => {
     const token = String(request.query?.token || '').trim();
     const session = browserSessions.get(token);
-    if (!session) {
+    if (!browserAccounts.validSession(session) || ['workspace', 'password_change'].includes(session?.role)) {
       response.status(401).json({ success: false, error: '無效的同步 Token。' });
       return;
     }
@@ -4998,6 +5003,10 @@ function attachBrowserRoutes(server) {
 
     const clientId = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     const heartbeat = setInterval(() => {
+      if (!browserAccounts.validSession(session)) {
+        browserAccounts.revoke(token);
+        return;
+      }
       try {
         response.write(': heartbeat\n\n');
       } catch (error) {
@@ -5019,146 +5028,6 @@ function attachBrowserRoutes(server) {
     });
   });
 
-  server.post('/api/browser/login', (request, response) => {
-    try {
-      const { role, employeeId, secret, deviceInfo } = request.body || {};
-      const normalizedRole = String(role || '').trim();
-      const normalizedEmployeeId = String(employeeId || '').trim();
-      const normalizedSecret = String(secret || '').trim();
-      const normalizedDeviceInfo = normalizeClientDeviceInfo(deviceInfo || {});
-
-      if (!BROWSER_ROLES.includes(normalizedRole)) {
-        response.status(400).json({ success: false, error: withSupportCode('L100', '不支援的登入角色。') });
-        return;
-      }
-      if (!normalizedEmployeeId || !normalizedSecret) {
-        const missingCredentialMessage = normalizedRole === SYSTEM_ADMIN_ROLE
-          ? '請輸入系統管理者帳號與密碼。'
-          : '請輸入工號與卡號或密碼資訊。';
-        response.status(400).json({ success: false, error: withSupportCode('L101', missingCredentialMessage) });
-        return;
-      }
-
-      if (normalizedRole === SYSTEM_ADMIN_ROLE) {
-        const credentials = getSystemAdminCredentials();
-        if (normalizedEmployeeId !== credentials.username || normalizedSecret !== credentials.password) {
-          response.status(401).json({ success: false, error: withSupportCode('L105', '系統管理者帳號或密碼不正確。') });
-          return;
-        }
-
-        const token = createBrowserSession(SYSTEM_ADMIN_ROLE, SYSTEM_ADMIN_SESSION_ID, {
-          realRole: SYSTEM_ADMIN_ROLE,
-          realEmployeeId: SYSTEM_ADMIN_SESSION_ID,
-          realEmployeeName: '系統管理者',
-          deviceId: normalizedDeviceInfo.deviceId || null,
-          deviceName: normalizedDeviceInfo.deviceName || null,
-          devicePlatform: normalizedDeviceInfo.platform || null,
-          deviceBrowserName: normalizedDeviceInfo.browserName || null,
-          ipAddress: getRequestIpAddress(request),
-          userAgent: request.headers['user-agent'] || null
-        });
-        writeAuditLog({
-          actor_id: SYSTEM_ADMIN_SESSION_ID,
-          actor_name: '系統管理者',
-          role: SYSTEM_ADMIN_ROLE,
-          channel: 'browser',
-          action: 'login',
-          target_type: 'session',
-          target_id: SYSTEM_ADMIN_SESSION_ID,
-          summary: '網頁端系統管理者登入。',
-          after_data: {
-            role: SYSTEM_ADMIN_ROLE,
-            username: credentials.username
-          },
-          success: true,
-          ip_address: getRequestIpAddress(request),
-          session_token_suffix: getSessionTokenSuffix(token)
-        });
-        response.json({
-          success: true,
-          token,
-          dashboard: buildDashboardForSession(browserSessions.get(token)),
-          deviceBinding: {
-            enabled: false,
-            newlyBound: false,
-            deviceName: normalizedDeviceInfo.deviceName || '',
-            issuedDeviceToken: ''
-          }
-        });
-        return;
-      }
-
-      const employee = getEmployeeById(normalizedEmployeeId);
-      let deviceAuthorization = null;
-      if (!employee) {
-        response.status(404).json({ success: false, error: withSupportCode('L102', '找不到這個工號。') });
-        return;
-      }
-
-      if (!canEmployeeLoginAsRole(employee.id, normalizedRole)) {
-        response.status(403).json({ success: false, error: withSupportCode('L104', '這個帳號尚未被授權登入此頁面。') });
-        return;
-      }
-
-      if (normalizedRole === 'employee' && String(employee.card || '').trim() !== normalizedSecret) {
-        response.status(401).json({ success: false, error: withSupportCode('L103', '員工登入失敗，請確認工號與卡號。') });
-        return;
-      }
-      if (normalizedRole === 'employee') {
-        deviceAuthorization = authorizeEmployeeDeviceForLogin(employee, request, normalizedDeviceInfo);
-      }
-      if (normalizedRole === 'admin' && normalizedSecret !== getSettingValue('adminPassword', DEFAULT_ADMIN_PASSWORD)) {
-        response.status(401).json({ success: false, error: '管理者登入失敗，請確認工號與管理者密碼。' });
-        return;
-      }
-      if (normalizedRole === 'developer' && normalizedSecret !== getSettingValue('systemPassword', DEFAULT_SYSTEM_PASSWORD)) {
-        response.status(401).json({ success: false, error: '開發人員登入失敗，請確認工號與系統密碼。' });
-        return;
-      }
-
-      const token = createBrowserSession(normalizedRole, employee.id, {
-        realEmployeeName: employee.name || '',
-        deviceId: deviceAuthorization?.deviceRecord?.device_id || normalizedDeviceInfo.deviceId || null,
-        deviceName: deviceAuthorization?.deviceRecord?.device_name || normalizedDeviceInfo.deviceName || null,
-        devicePlatform: normalizedDeviceInfo.platform || null,
-        deviceBrowserName: normalizedDeviceInfo.browserName || null,
-        ipAddress: getRequestIpAddress(request),
-        userAgent: request.headers['user-agent'] || null
-      });
-      writeAuditLog({
-        actor_id: employee.id,
-        actor_name: employee.name,
-        role: normalizedRole,
-        channel: 'browser',
-        action: 'login',
-        target_type: 'session',
-        target_id: employee.id,
-        summary: `瀏覽器${normalizedRole}登入成功`,
-        after_data: {
-          role: normalizedRole,
-          device_binding_enabled: deviceAuthorization?.securitySettings?.deviceBindingEnabled ?? false,
-          device_name: deviceAuthorization?.deviceRecord?.device_name || normalizedDeviceInfo.deviceName || '',
-          newly_bound_device: deviceAuthorization?.newlyBound === true
-        },
-        success: true,
-        ip_address: getRequestIpAddress(request),
-        session_token_suffix: getSessionTokenSuffix(token)
-      });
-      response.json({
-        success: true,
-        token,
-        dashboard: buildDashboardForSession(browserSessions.get(token)),
-        deviceBinding: {
-          enabled: deviceAuthorization?.securitySettings?.deviceBindingEnabled ?? false,
-          newlyBound: deviceAuthorization?.newlyBound === true,
-          deviceName: deviceAuthorization?.deviceRecord?.device_name || normalizedDeviceInfo.deviceName || '',
-          issuedDeviceToken: deviceAuthorization?.issuedDeviceToken || ''
-        }
-      });
-    } catch (error) {
-      response.status(error.statusCode || 500).json({ success: false, error: error.message });
-    }
-  });
 
   server.get('/api/browser/dashboard', requireBrowserSession, (request, response) => {
     try {
@@ -5532,7 +5401,7 @@ function attachBrowserRoutes(server) {
       target_id: request.browserSession.employeeId,
       summary: `瀏覽器${request.browserSession.role}登出`
     });
-    browserSessions.delete(request.browserSession.token);
+    browserAccounts.revoke(request.browserSession.token);
     response.json({ success: true });
   });
 
@@ -5714,6 +5583,7 @@ function attachBrowserRoutes(server) {
     const deletedEmployee = employees.find((item) => item.id === employeeId) || null;
     const updatedEmployees = employees.filter((item) => item.id !== employeeId);
     dbModule.saveEmployees(updatedEmployees);
+    browserAccounts.revokeEmployee(employeeId);
     dbModule.deleteEmployeeDevicesByEmployee(employeeId);
     dbModule.deleteAccountAccessByEmployee(employeeId);
     writeBrowserAuditLog(request, {
@@ -5866,11 +5736,8 @@ function attachBrowserRoutes(server) {
         session_token_suffix: getSessionTokenSuffix(request.browserSession.token)
       });
 
-      response.json({
-        success: true,
-        message: '系統管理者帳號設定已更新。',
-        dashboard: buildDashboardForSession(request.browserSession)
-      });
+      browserAccounts.revokeSystemAdmins();
+      response.json({ success: true, requiresLogin: true, message: '系統管理者帳號設定已更新，請重新登入。' });
     } catch (error) {
       response.status(error.statusCode || 400).json({ success: false, error: error.message });
     }
@@ -7577,16 +7444,14 @@ function handleServerListenError(error) {
   app.quit();
 }
 
-function startServer(mainWindow) {
-  if (serverInstance) {
-    mainWindowRef = mainWindow;
-    return serverInstance;
-  }
-
-  mainWindowRef = mainWindow;
-
+function createServerApp() {
   const server = express();
   server.use(express.json({ limit: '30mb' }));
+  server.use('/api/browser', (request, response, next) => {
+    response.setHeader('Cache-Control', 'no-store');
+    next();
+  });
+  server.get('/favicon.ico', (request, response) => response.sendFile(path.join(__dirname, 'icon.ico')));
 
   server.use('/browser', express.static(BROWSER_CLIENT_DIR));
   server.use('/user-media/sounds', express.static(getCustomSoundsDirectory()));
@@ -7602,6 +7467,16 @@ function startServer(mainWindow) {
 
   attachExternalApiRoutes(server);
   attachBrowserRoutes(server);
+  return server;
+}
+
+function startServer(mainWindow) {
+  if (serverInstance) {
+    mainWindowRef = mainWindow;
+    return serverInstance;
+  }
+  mainWindowRef = mainWindow;
+  const server = createServerApp();
 
   serverInstance = server.listen(PORT, () => {
     serverStartedAt = Date.now();
@@ -7614,6 +7489,7 @@ function startServer(mainWindow) {
 }
 
 module.exports = {
+  createServerApp,
   startServer,
   broadcastDataUpdate: broadcastBrowserDataUpdate
 };
