@@ -4,8 +4,10 @@ const path = require('path');
 const Database = require('better-sqlite3');
 const webCredentials = require('./web-credentials');
 const { createMealStore } = require('./meal-management');
+const { createSupervisorStore } = require('./supervisor-management');
 let db = null;
 let meals = null;
+let supervisors = null;
 let currentDbFilePath = '';
 
 function init(dbFilePath) {
@@ -138,6 +140,9 @@ function init(dbFilePath) {
     CREATE TABLE IF NOT EXISTS leave_requests (
       id TEXT PRIMARY KEY,
       employee_id TEXT NOT NULL,
+      applicant_id TEXT,
+      applicant_role TEXT,
+      proxy_reason TEXT,
       leave_type_id TEXT NOT NULL,
       start_at INTEGER NOT NULL,
       end_at INTEGER NOT NULL,
@@ -177,6 +182,7 @@ function init(dbFilePath) {
       employee_id TEXT NOT NULL,
       applicant_id TEXT NOT NULL,
       applicant_role TEXT,
+      proxy_reason TEXT,
       start_at INTEGER NOT NULL,
       end_at INTEGER NOT NULL,
       duration_hours REAL NOT NULL DEFAULT 0,
@@ -384,6 +390,9 @@ function init(dbFilePath) {
             console.log('[資料庫] leave_requests approval_mode 升級成功！');
         }
         const leavePaperColumnDefinitions = [
+            ['applicant_id', 'applicant_id TEXT'],
+            ['applicant_role', 'applicant_role TEXT'],
+            ['proxy_reason', 'proxy_reason TEXT'],
             ['paper_no', 'paper_no TEXT'],
             ['paper_approved_by', 'paper_approved_by TEXT'],
             ['paper_comment', 'paper_comment TEXT'],
@@ -406,6 +415,7 @@ function init(dbFilePath) {
             console.log('[資料庫] overtime_requests approval_mode 升級成功！');
         }
         const overtimePaperColumnDefinitions = [
+            ['proxy_reason', 'proxy_reason TEXT'],
             ['paper_no', 'paper_no TEXT'],
             ['paper_approved_by', 'paper_approved_by TEXT'],
             ['paper_comment', 'paper_comment TEXT'],
@@ -451,6 +461,7 @@ function init(dbFilePath) {
   console.log('[資料庫] 所有寶庫隔間 (資料表) 檢查與建立完畢！');
   seedDepartmentsFromExistingData();
   seedDefaultLeaveTypes();
+  supervisors = createSupervisorStore(db, (entry) => addAuditLog(entry));
 }
 
 function close() {
@@ -458,6 +469,7 @@ function close() {
   db.close();
   db = null;
   meals = null;
+  supervisors = null;
   currentDbFilePath = '';
 }
 
@@ -621,11 +633,13 @@ const saveEmployees = (employees) => {
         run('DELETE FROM employees');
         for (const emp of employees) insert.run(normalizeEmployeeForStorage(emp));
         run('DELETE FROM web_credentials WHERE employee_id NOT IN (SELECT id FROM employees)');
+        run('DELETE FROM supervisor_assignments WHERE employee_id NOT IN (SELECT id FROM employees) OR supervisor_id NOT IN (SELECT id FROM employees)');
     })();
 };
 const loadEmployees = () => all('SELECT * FROM employees ORDER BY id');
 const deleteAllEmployees = () => db.transaction(() => {
     run('DELETE FROM web_credentials');
+    run('DELETE FROM supervisor_assignments');
     return run('DELETE FROM employees');
 })();
 
@@ -901,13 +915,13 @@ function mapLeaveRequestRow(row) {
 const createLeaveRequest = (request) => {
     const insertRequest = db.prepare(`
         INSERT INTO leave_requests (
-            id, employee_id, leave_type_id, start_at, end_at, duration_hours,
+            id, employee_id, applicant_id, applicant_role, proxy_reason, leave_type_id, start_at, end_at, duration_hours,
             reason, status, supervisor_id, supervisor_decision, supervisor_comment,
             supervisor_decided_at, admin_decision_by, admin_comment, admin_decided_at,
             approval_mode, paper_no, paper_approved_by, paper_comment,
             corrected_from_request_id, created_at, updated_at
         ) VALUES (
-            @id, @employee_id, @leave_type_id, @start_at, @end_at, @duration_hours,
+            @id, @employee_id, @applicant_id, @applicant_role, @proxy_reason, @leave_type_id, @start_at, @end_at, @duration_hours,
             @reason, @status, @supervisor_id, @supervisor_decision, @supervisor_comment,
             @supervisor_decided_at, @admin_decision_by, @admin_comment, @admin_decided_at,
             @approval_mode, @paper_no, @paper_approved_by, @paper_comment,
@@ -921,8 +935,12 @@ const createLeaveRequest = (request) => {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const isApproved = request.status === 'approved';
+    const supervisorApproved = isApproved || (request.status === 'pending_admin' && request.supervisor_decision === 'approved');
     const requestForDb = {
         ...request,
+        applicant_id: request.applicant_id || request.employee_id,
+        applicant_role: request.applicant_role || 'self',
+        proxy_reason: request.proxy_reason || null,
         supervisor_decision: request.supervisor_decision || null,
         supervisor_comment: request.supervisor_comment || null,
         supervisor_decided_at: request.supervisor_decided_at || null,
@@ -942,9 +960,9 @@ const createLeaveRequest = (request) => {
             1,
             'supervisor',
             request.supervisor_id || null,
-            isApproved ? 'approved' : 'pending',
-            isApproved ? (request.supervisor_comment || '紙本核准補登') : null,
-            isApproved ? (request.supervisor_decided_at || request.created_at) : null,
+            supervisorApproved ? 'approved' : 'pending',
+            supervisorApproved ? (request.supervisor_comment || '紙本核准補登') : null,
+            supervisorApproved ? (request.supervisor_decided_at || request.created_at) : null,
             request.created_at
         );
         insertStep.run(
@@ -952,7 +970,7 @@ const createLeaveRequest = (request) => {
             2,
             'admin',
             request.admin_decision_by || null,
-            isApproved ? 'approved' : 'waiting',
+            isApproved ? 'approved' : supervisorApproved ? 'pending' : 'waiting',
             isApproved ? (request.admin_comment || '管理者紙本核准補登') : null,
             isApproved ? (request.admin_decided_at || request.created_at) : null,
             request.created_at
@@ -1211,13 +1229,13 @@ function mapOvertimeRequestRow(row) {
 const createOvertimeRequest = (request) => {
     const insertRequest = db.prepare(`
         INSERT INTO overtime_requests (
-            id, employee_id, applicant_id, applicant_role, start_at, end_at,
+            id, employee_id, applicant_id, applicant_role, proxy_reason, start_at, end_at,
             duration_hours, reason, status, supervisor_id, supervisor_decision,
             supervisor_comment, supervisor_decided_at, approval_mode, paper_no,
             paper_approved_by, paper_comment, corrected_from_request_id, created_at,
             updated_at
         ) VALUES (
-            @id, @employee_id, @applicant_id, @applicant_role, @start_at, @end_at,
+            @id, @employee_id, @applicant_id, @applicant_role, @proxy_reason, @start_at, @end_at,
             @duration_hours, @reason, @status, @supervisor_id, @supervisor_decision,
             @supervisor_comment, @supervisor_decided_at, @approval_mode, @paper_no,
             @paper_approved_by, @paper_comment, @corrected_from_request_id, @created_at,
@@ -1234,6 +1252,7 @@ const createOvertimeRequest = (request) => {
     db.transaction(() => {
         insertRequest.run({
             ...request,
+            proxy_reason: request.proxy_reason || null,
             supervisor_decision: request.supervisor_decision || null,
             supervisor_comment: request.supervisor_comment || null,
             supervisor_decided_at: request.supervisor_decided_at || null,
@@ -2112,6 +2131,7 @@ const countPunchFailureAuditLogsSince = (startTimestamp, excludedFailureCodes = 
 
 
 module.exports = {
+  getSupervisors: () => supervisors,
   getMeals: () => meals,
   init, close,
   getDatabasePath, backupDatabase, validateBackupDatabaseFile, replaceDatabaseFromBackup,

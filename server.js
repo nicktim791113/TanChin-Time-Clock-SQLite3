@@ -8,6 +8,7 @@ const databaseBackup = require('./database-backup');
 const { createBrowserAccounts, RESET_PERMISSION, REVEAL_PERMISSION } = require('./browser-accounts');
 const { attachMealRoutes } = require('./meal-routes');
 const { attachRequestCalendarRoutes } = require('./request-calendar');
+const { attachSupervisorRoutes } = require('./supervisor-routes');
 const {
   ATTENDANCE_EXPORT_FIELD_DEFINITIONS,
   DEFAULT_ATTENDANCE_EXPORT_TEMPLATE_ID,
@@ -57,6 +58,7 @@ const ADMIN_PERMISSION_DEFINITIONS = [
   { code: 'admin.meals.manage', category: '午餐團膳', label: '參加資格與代登用餐', section: 'meals' },
   { code: 'admin.meals.settings', category: '午餐團膳', label: '供餐日與截止時間設定', section: 'meals' },
   { code: 'admin.meals.close', category: '午餐團膳', label: '結單與更新供應商訂餐', section: 'meals', highRisk: true },
+  { code: 'admin.supervisors.manage', category: '主管代辦', label: '指定員工的代辦主管', section: 'supervisors', highRisk: true },
   { code: 'admin.system.manage', category: '系統外觀與提醒', label: '主畫面與問候語設定', section: 'system' },
   { code: 'admin.bells.manage', category: '系統外觀與提醒', label: '響鈴與聲音設定', section: 'bells' },
   { code: 'admin.themes.manage', category: '系統外觀與提醒', label: '主題與特效設定', section: 'themes' }
@@ -74,6 +76,7 @@ const ADMIN_SECTION_RULES = [
   { id: 'leave', label: '請假管理', permissions: ['admin.leave.review', 'admin.leave.paperCreate', 'admin.leave.settings'] },
   { id: 'overtime', label: '加班管理', permissions: ['admin.overtime.view', 'admin.overtime.paperCreate'] },
   { id: 'meals', label: '午餐團膳', permissions: ['admin.meals.view'] },
+  { id: 'supervisors', label: '主管指定', permissions: ['admin.supervisors.manage'] },
   { id: 'system', label: '系統設定', permissions: ['admin.system.manage'] },
   { id: 'bells', label: '響鈴設定', permissions: ['admin.bells.manage'] },
   { id: 'themes', label: '主題特效', permissions: ['admin.themes.manage'] }
@@ -126,6 +129,7 @@ const ADMIN_PERMISSION_PRESETS = [
       'admin.meals.manage',
       'admin.meals.settings',
       'admin.meals.close',
+      'admin.supervisors.manage',
       'admin.reports.view'
     ]
   },
@@ -428,6 +432,14 @@ API_ROUTE_CATALOG.push(
   { category: '午餐團膳 API', method: 'GET', path: '/api/browser/admin/meals/export', auth: '團膳查看', description: '匯出午餐預訂月報 CSV' },
   ...[['choice', '團膳代登', '代登或修正午餐'], ['membership', '團膳代登', '參加資格'], ['schedule', '團膳設定', '供餐制度'], ['day', '團膳設定', '每日供餐與截止時間'], ['close', '團膳結單', '保存供應商交單快照']]
     .map(([action, auth, description]) => ({ category: '午餐團膳 API', method: 'POST', path: `/api/browser/admin/meals/${action}`, auth: `${auth}與團膳查看`, description }))
+);
+
+API_ROUTE_CATALOG.push(
+  ...['GET', 'POST'].map((method) => ({ category: '主管代辦 API', method, path: '/api/browser/supervisors/assignments',
+    auth: '系統管理者或主管指定管理權限', description: method === 'GET' ? '查看明確指定代辦主管' : '儲存多選代辦主管與稽核' })),
+  { category: '主管代辦 API', method: 'GET', path: '/api/browser/employee/supervisor', auth: '本人網頁密碼與明確主管指定', description: '指定員工的請假／加班日曆及午餐資料' },
+  ...[['leave', '代請假並送管理部終審'], ['overtime', '代申請加班並核准'], ['leave/withdraw', '代撤回尚未終審請假'], ['meals/choice', '截止前代登午餐例外']].map(([route, description]) => ({
+    category: '主管代辦 API', method: 'POST', path: `/api/browser/employee/supervisor/${route}`, auth: '本人網頁密碼與明確主管指定', description }))
 );
 
 function ensureDirectory(directoryPath) {
@@ -1757,6 +1769,7 @@ const LEAVE_STATUS_LABELS = {
 };
 const LEAVE_APPROVAL_MODE_LABELS = {
   employee_request: '員工線上申請',
+  supervisor_proxy: '指定主管代申請',
   admin_paper_approved: '管理者紙本核准補登'
 };
 
@@ -1841,6 +1854,10 @@ function formatLeaveRequestForDashboard(request, lookup = buildLeaveLookup()) {
     employeeId: request.employee_id,
     employeeName: employee.name || '',
     employeeDepartment: employee.department || '',
+    applicantId: request.applicant_id || request.employee_id,
+    applicantName: lookup.employeeMap.get(request.applicant_id || request.employee_id)?.name || '',
+    applicantRole: request.applicant_role || 'self',
+    proxyReason: request.proxy_reason || '',
     leaveTypeId: request.leave_type_id,
     leaveTypeName: type.name || request.leave_type_id,
     supervisorId: request.supervisor_id || '',
@@ -3029,6 +3046,8 @@ function buildEmployeeDashboard(employee, session = null) {
     leave: getEmployeeLeaveState(employee),
     overtime: getEmployeeOvertimeState(employee),
     meals: dbModule.getMeals().calendar({ employeeId: employee.id }),
+    supervisorProxy: { count: dbModule.getSupervisors().assignedEmployees(employee.id).length,
+      canUse: session?.authMethod === 'web_password' && !session?.impersonation?.active },
     recentRecords
   };
 }
@@ -7503,6 +7522,13 @@ function createServerApp() {
     db: dbModule, requireSession: requireBrowserSession, requireRole: requireBrowserRole,
     requirePermission: requireAdminPermission, auditEntry: buildBrowserAuditLogEntry,
     notify: (request) => { notifyDesktop('meals', getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); }
+  });
+  attachSupervisorRoutes(server, {
+    db: dbModule, requireSession: requireBrowserSession, requireRole: requireBrowserRole,
+    requirePermission: requireAdminPermission, auditEntry: buildBrowserAuditLogEntry,
+    buildLookup: (kind) => kind === 'leave' ? buildLeaveLookup() : buildOvertimeLookup(),
+    formatRecord: (kind, row, lookup) => kind === 'leave' ? formatLeaveRequestForDashboard(row, lookup) : formatOvertimeRequestForDashboard(row, lookup),
+    notify: (request, type) => { notifyDesktop(type, getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); }
   });
   return server;
 }
