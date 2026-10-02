@@ -125,6 +125,7 @@ $projectFiles = @(
     "web-credentials.js",
     "meal-management.js",
     "meal-routes.js",
+    "request-calendar.js",
     "tailwind.config.js"
 )
 

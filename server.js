@@ -7,6 +7,7 @@ const dbModule = require('./database');
 const databaseBackup = require('./database-backup');
 const { createBrowserAccounts, RESET_PERMISSION, REVEAL_PERMISSION } = require('./browser-accounts');
 const { attachMealRoutes } = require('./meal-routes');
+const { attachRequestCalendarRoutes } = require('./request-calendar');
 const {
   ATTENDANCE_EXPORT_FIELD_DEFINITIONS,
   DEFAULT_ATTENDANCE_EXPORT_TEMPLATE_ID,
@@ -326,6 +327,8 @@ const API_ROUTE_CATALOG = [
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/events?token=...', auth: 'Session', description: '即時同步事件流（SSE）' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/punch', auth: '員工', description: '瀏覽器版員工自行打卡' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/leave/request', auth: '員工', description: '員工送出請假申請' },
+  { category: '瀏覽器入口', method: 'GET', path: '/api/browser/employee/leave/calendar?month=YYYY-MM', auth: '員工', description: '本人請假月曆／指定主管待審，台北日期、月份重疊與明細分頁' },
+  { category: '瀏覽器入口', method: 'GET', path: '/api/browser/employee/overtime/calendar?month=YYYY-MM', auth: '員工', description: '本人與本人代申請加班月曆／指定主管待審，完整月份查詢' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/leave/withdraw', auth: '員工', description: '員工撤回尚未終審的請假申請' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/leave/supervisor-decision', auth: '員工主管', description: '主管審核部門員工請假申請' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/overtime/request', auth: '員工', description: '員工或主管送出加班申請' },
@@ -345,6 +348,8 @@ const API_ROUTE_CATALOG = [
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/reports/export', auth: '管理者', description: '匯出考勤報表 CSV' },
   // ★ [4] 管理端請假／加班紀錄改由專用查詢端點提供總筆數、篩選與每頁 50 筆資料。
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/requests/query', auth: '管理者', description: '分頁查詢請假申請紀錄' },
+  { category: '管理者 API', method: 'GET', path: '/api/browser/admin/leave/calendar?month=YYYY-MM', auth: '管理者：請假審核', description: '請假月曆摘要、員工／部門／假別篩選與唯讀分頁明細' },
+  { category: '管理者 API', method: 'GET', path: '/api/browser/admin/overtime/calendar?month=YYYY-MM', auth: '管理者：加班查看', description: '加班月曆摘要、員工／部門／狀態篩選與唯讀分頁明細' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/overtime/requests/query', auth: '管理者', description: '分頁查詢加班申請紀錄' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/paper-approved', auth: '管理者', description: '依紙本核准資料直接補登已核准請假' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/paper-approved/correct', auth: '管理者', description: '直接修正同一筆紙本請假補登' },
@@ -7488,6 +7493,12 @@ function createServerApp() {
 
   attachExternalApiRoutes(server);
   attachBrowserRoutes(server);
+  attachRequestCalendarRoutes(server, {
+    db: dbModule, requireSession: requireBrowserSession, requireRole: requireBrowserRole,
+    requirePermission: requireAdminPermission,
+    buildLookup: (kind) => kind === 'leave' ? buildLeaveLookup() : buildOvertimeLookup(),
+    formatRecord: (kind, row, lookup) => kind === 'leave' ? formatLeaveRequestForDashboard(row, lookup) : formatOvertimeRequestForDashboard(row, lookup)
+  });
   attachMealRoutes(server, {
     db: dbModule, requireSession: requireBrowserSession, requireRole: requireBrowserRole,
     requirePermission: requireAdminPermission, auditEntry: buildBrowserAuditLogEntry,
