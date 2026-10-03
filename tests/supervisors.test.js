@@ -208,7 +208,8 @@ test('supervisor UI escapes staff text, uses inline withdrawal and discards stal
         escapeHtml: (text) => String(text).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
         document: { addEventListener() {}, getElementById() { return null; } }, renderDashboard() {}, renderEmployeeWorkspaceItems() { return []; },
         renderAdminPermissionAwareContent() {}, renderSystemAdminDashboard() {}, postRenderSetup() {}, handleDashboardClick() {},
-        handleDashboardChange() {}, handleDashboardSubmit() {}, handleRealtimeSyncMessage() {}, handleLogout() {}, setMessage() {} });
+        handleDashboardChange() {}, handleDashboardSubmit() {}, handleRealtimeSyncMessage() {}, handleLogout() {}, setMessage() {},
+        hasCurrentAdminPermission(code) { return (state.dashboard.permissions?.admin || []).includes(code); }, renderAdminLeaveRouteRows() { return ''; } });
     const source = fs.readFileSync(path.join(__dirname, '../browser-client/supervisor.js'), 'utf8');
     vm.runInContext(source, context);
     assert.equal(source.includes('window.prompt('), false);
@@ -236,6 +237,15 @@ test('supervisor UI escapes staff text, uses inline withdrawal and discards stal
     vm.runInContext('supervisorState.data = { retained: true }; supervisorState.busy = true', context);
     await vm.runInContext("handleRealtimeSyncMessage({ type: 'supervisorAssignments', sessionToken: 'another-account' })", context);
     assert.equal(vm.runInContext('supervisorState.data.retained', context), true, 'own save notifications must not erase the success refresh');
+    state.dashboard = { role: 'admin', permissions: { admin: ['admin.leave.settings'] } };
+    state.activeSections.admin = 'supervisors';
+    vm.runInContext('supervisorState.busy = false', context);
+    const requested = [];
+    context.requestJson = async (url) => { requested.push(url); return { routes: { approvalRoutes: [], employees: [], departments: [] } }; };
+    await vm.runInContext('spLoad()', context);
+    assert.deepEqual(requested, ['/api/browser/supervisors/routes']);
+    const html = vm.runInContext('renderSupervisorAssignments()', context);
+    assert.ok(html.includes('請假／加班共用主管審核路徑')); assert.ok(!html.includes('指定代辦主管'));
 });
 
 test('legacy schema upgrade and cross-directory restore preserve original records and new supervisor assignments', async (t) => {

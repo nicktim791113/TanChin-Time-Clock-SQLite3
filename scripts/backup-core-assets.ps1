@@ -128,6 +128,7 @@ $projectFiles = @(
     "request-calendar.js",
     "supervisor-management.js",
     "supervisor-routes.js",
+    "browser-punch-permissions.js",
     "tailwind.config.js"
 )
 

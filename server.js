@@ -51,7 +51,7 @@ const ADMIN_PERMISSION_DEFINITIONS = [
   { code: 'admin.reports.export', category: '考勤報表', label: '匯出考勤報表', section: 'reports', highRisk: true },
   { code: 'admin.leave.review', category: '請假管理', label: '請假終審', section: 'leave' },
   { code: 'admin.leave.paperCreate', category: '請假管理', label: '紙本請假補登', section: 'leave', highRisk: true },
-  { code: 'admin.leave.settings', category: '請假管理', label: '假別與審核路徑設定', section: 'leave' },
+  { code: 'admin.leave.settings', category: '主管與請假設定', label: '假別與請假／加班共用審核路徑設定', section: 'supervisors' },
   { code: 'admin.overtime.view', category: '加班管理', label: '查看加班申請、警示與匯出', section: 'overtime' },
   { code: 'admin.overtime.paperCreate', category: '加班管理', label: '紙本加班補登', section: 'overtime', highRisk: true },
   { code: 'admin.meals.view', category: '午餐團膳', label: '查看團膳名單、餐數與匯出', section: 'meals' },
@@ -76,7 +76,7 @@ const ADMIN_SECTION_RULES = [
   { id: 'leave', label: '請假管理', permissions: ['admin.leave.review', 'admin.leave.paperCreate', 'admin.leave.settings'] },
   { id: 'overtime', label: '加班管理', permissions: ['admin.overtime.view', 'admin.overtime.paperCreate'] },
   { id: 'meals', label: '午餐團膳', permissions: ['admin.meals.view'] },
-  { id: 'supervisors', label: '主管指定', permissions: ['admin.supervisors.manage'] },
+  { id: 'supervisors', label: '主管指定', permissions: ['admin.supervisors.manage', 'admin.leave.settings'] },
   { id: 'system', label: '系統設定', permissions: ['admin.system.manage'] },
   { id: 'bells', label: '響鈴設定', permissions: ['admin.bells.manage'] },
   { id: 'themes', label: '主題特效', permissions: ['admin.themes.manage'] }
@@ -330,6 +330,9 @@ const API_ROUTE_CATALOG = [
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/dashboard', auth: 'Session', description: '取得目前登入角色的儀表板資料' },
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/events?token=...', auth: 'Session', description: '即時同步事件流（SSE）' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/punch', auth: '員工', description: '瀏覽器版員工自行打卡' },
+  { category: '管理者 API', method: 'POST', path: '/api/browser/admin/browser-punch-permissions', auth: '安全管理者或系統管理者', description: '設定個別員工網頁打卡權限，不影響實體卡' },
+  { category: '主管設定 API', method: 'GET', path: '/api/browser/supervisors/routes', auth: '審核路徑設定權限或系統管理者', description: '讀取請假／加班共用部門主管審核路徑' },
+  { category: '主管設定 API', method: 'POST', path: '/api/browser/supervisors/routes', auth: '審核路徑設定權限或系統管理者', description: '儲存請假／加班共用部門主管審核路徑' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/leave/request', auth: '員工', description: '員工送出請假申請' },
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/employee/leave/calendar?month=YYYY-MM', auth: '員工', description: '本人請假月曆／指定主管待審，台北日期、月份重疊與明細分頁' },
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/employee/overtime/calendar?month=YYYY-MM', auth: '員工', description: '本人與本人代申請加班月曆／指定主管待審，完整月份查詢' },
@@ -360,7 +363,7 @@ const API_ROUTE_CATALOG = [
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/paper-approved/cancel', auth: '管理者', description: '作廢紙本請假補登' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/final-decision', auth: '管理者', description: '管理部終審請假申請' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-types/save', auth: '管理者', description: '儲存請假假別設定' },
-  { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-routes/save', auth: '管理者', description: '儲存請假主管審核路徑' },
+  { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-routes/save', auth: '管理者', description: '儲存請假／加班共用主管審核路徑（相容舊入口）' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-audit/export', auth: '管理者', description: '匯出請假與實際打卡查核 CSV' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/overtime/paper-approved', auth: '管理者', description: '依紙本核准資料直接補登已核准加班' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/overtime/paper-approved/correct', auth: '管理者', description: '直接修正同一筆紙本加班補登' },
@@ -2771,6 +2774,7 @@ function buildEmployeeSecurityState(employee, session = null) {
     : null;
   return {
     settings,
+    browserPunchAllowed: dbModule.getBrowserPunchPermissions().allowed(employee.id),
     deviceBindingEnabled: settings.deviceBindingEnabled,
     gpsRequiredOnPunch: settings.gpsRequiredOnPunch,
     maxGpsAccuracyMeters: settings.maxGpsAccuracyMeters,
@@ -2964,7 +2968,7 @@ function getAdminDatasets(session = {}) {
       canView: canOvertimeView,
       canPaperCreate: canOvertimePaperCreate
     }) : null,
-    security: canSecurity ? getAdminSecurityDatasets() : null,
+    security: canSecurity ? { ...getAdminSecurityDatasets(), browserPunchPermissions: dbModule.getBrowserPunchPermissions().state() } : null,
     accountAccess: null,
     meals: hasAdminPermission(session, 'admin.meals.view') ? dbModule.getMeals().calendar() : null,
     settings: {
@@ -3041,7 +3045,8 @@ function buildEmployeeDashboard(employee, session = null) {
     },
     security: buildEmployeeSecurityState(employee, session),
     punchAction: {
-      label: `現在打卡（預計${nextPunchType}）`
+      label: `現在打卡（預計${nextPunchType}）`,
+      enabled: dbModule.getBrowserPunchPermissions().allowed(employee.id)
     },
     leave: getEmployeeLeaveState(employee),
     overtime: getEmployeeOvertimeState(employee),
@@ -3285,7 +3290,8 @@ function buildSystemAdminDashboard() {
       systemAdminAccount: {
         username: credentials.username
       },
-      accountAccess
+      accountAccess,
+      browserPunchPermissions: dbModule.getBrowserPunchPermissions().state()
     }
   };
 }
@@ -5097,6 +5103,9 @@ function attachBrowserRoutes(server) {
         response.status(401).json({ success: false, error: errorMessage });
         return;
       }
+      if (!dbModule.getBrowserPunchPermissions().allowed(employee.id)) {
+        throw createHttpError(withSupportCode('P241', '此員工未開放網頁線上打卡，請使用實體打卡鐘。'), 403);
+      }
       const { securitySettings, deviceRecord } = validateEmployeeSessionDevice(request.browserSession, request);
       const locationValidation = validatePunchLocationPayload(request.body?.location, securitySettings);
       const updatedDevice = updateEmployeeDeviceLocation(
@@ -5640,6 +5649,20 @@ function attachBrowserRoutes(server) {
     });
     notifyDesktop('employees', getBrowserSyncMeta(request));
     response.json({ success: true, message: '員工資料已刪除。' });
+  });
+
+  server.post('/api/browser/admin/browser-punch-permissions', requireBrowserSession, (request, response, next) => {
+    if (request.browserSession.impersonation?.active) return response.status(403).json({ success: false, error: '身份模擬不能修改打卡權限。' });
+    if (request.browserSession.role === 'system_admin') return next();
+    return requireAdminPermission('admin.security.manage')(request, response, next);
+  }, (request, response) => {
+    try {
+      dbModule.getBrowserPunchPermissions().save(request.body || {}, (entry) => buildBrowserAuditLogEntry(request, entry));
+      notifyDesktop('securitySettings', getBrowserSyncMeta(request));
+      response.json({ success: true, message: '員工網頁打卡權限已更新。' });
+    } catch (error) {
+      response.status(error.status || 500).json({ success: false, error: error.status ? error.message : '打卡權限儲存失敗，未儲存異動。' });
+    }
   });
 
   server.post('/api/browser/admin/security-settings/save', requireBrowserSession, requireAdminPermission('admin.security.manage'), (request, response) => {
@@ -6487,8 +6510,24 @@ function attachBrowserRoutes(server) {
     }
   });
 
-  server.post('/api/browser/admin/leave-routes/save', requireBrowserSession, requireAdminPermission('admin.leave.settings'), (request, response) => {
+  const requireSupervisorRoutes = (request, response, next) => {
+    if (request.browserSession.impersonation?.active) return response.status(403).json({ success: false, error: '身份模擬不能修改主管設定。' });
+    if (request.browserSession.role === 'system_admin') return next();
+    return requireAdminPermission('admin.leave.settings')(request, response, next);
+  };
+  const supervisorRoutesState = () => {
+    const data = { approvalRoutes: dbModule.loadLeaveApprovalRoutes(),
+      employees: dbModule.loadEmployees().map(({ id, name, department }) => ({ id, name, department })), departments: dbModule.loadDepartments() };
+    return { ...data, revision: crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex') };
+  };
+  server.get('/api/browser/supervisors/routes', requireBrowserSession, requireSupervisorRoutes, (request, response) => {
+    response.json({ success: true, routes: supervisorRoutesState() });
+  });
+  server.post(['/api/browser/admin/leave-routes/save', '/api/browser/supervisors/routes'], requireBrowserSession, requireSupervisorRoutes, (request, response) => {
     try {
+      if (request.path === '/api/browser/supervisors/routes' && request.body?.revision !== supervisorRoutesState().revision) {
+        throw createHttpError('共用審核路徑或員工名單已變更，請重新整理後再儲存。', 409);
+      }
       const employees = dbModule.loadEmployees();
       const employeeIds = new Set(employees.map((employee) => employee.id));
       const routes = Array.isArray(request.body?.approvalRoutes)
@@ -6503,16 +6542,20 @@ function attachBrowserRoutes(server) {
       if (invalidDepartmentRoute) {
         throw createHttpError(`請先在人員資料的「部門設定」建立並啟用部門：${invalidDepartmentRoute.department}`, 400);
       }
-      dbModule.saveLeaveApprovalRoutes(routes);
-      writeBrowserAuditLog(request, {
-        action: 'save',
-        target_type: 'leave_approval_route',
-        target_id: 'all',
-        summary: `儲存請假審核路徑，共 ${routes.length} 組`,
-        after_data: { count: routes.length }
+      dbModule.getSupervisors().transaction(() => {
+        const before = dbModule.loadLeaveApprovalRoutes();
+        dbModule.saveLeaveApprovalRoutes(routes);
+        dbModule.addAuditLog(buildBrowserAuditLogEntry(request, {
+          action: 'save',
+          target_type: 'leave_approval_route',
+          target_id: 'all',
+          summary: `儲存請假／加班共用審核路徑，共 ${routes.length} 組`,
+          before_data: before,
+          after_data: dbModule.loadLeaveApprovalRoutes()
+        }));
       });
       notifyDesktop('leaveSettings', getBrowserSyncMeta(request));
-      response.json({ success: true, message: '請假審核路徑已更新。' });
+      response.json({ success: true, message: '請假／加班共用審核路徑已更新。' });
     } catch (error) {
       response.status(error.statusCode || 500).json({ success: false, error: error.message });
     }

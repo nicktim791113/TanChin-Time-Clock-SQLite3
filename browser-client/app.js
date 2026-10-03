@@ -1824,7 +1824,7 @@ function renderEmployeeNameWithSupervisorHint(employee) {
     return `
         <div class="employee-name-stack">
             <span>${nameText}</span>
-            <span class="supervisor-hint">請假主管：${escapeHtml(departmentText)}${escapeHtml(overflowText)}</span>
+            <span class="supervisor-hint">請假／加班主管：${escapeHtml(departmentText)}${escapeHtml(overflowText)}</span>
         </div>
     `;
 }
@@ -3689,14 +3689,14 @@ async function handleDashboardClick(event) {
             return;
         }
         if (action === "jump-leave-routes") {
-            state.activeSections.admin = "leave";
+            state.activeSections.admin = "supervisors";
             renderDashboard(state.dashboard);
             const employee = datasets.employees.find((item) => item.id === actionTarget.dataset.id);
             const supervisorDepartments = getSupervisorDepartmentsForEmployee(actionTarget.dataset.id, datasets);
             const suffix = supervisorDepartments.length
                 ? `目前負責：${supervisorDepartments.join("、")}`
                 : "可在主管審核路徑中設定這位員工負責的部門。";
-            setMessage(ui.dashboardMessage, `${employee?.name || actionTarget.dataset.id} 的請假主管設定已開啟。${suffix}`, "info");
+            setMessage(ui.dashboardMessage, `${employee?.name || actionTarget.dataset.id} 的共用主管設定已開啟。${suffix}`, "info");
             return;
         }
         if (action === "export-admin-report") {
@@ -7946,6 +7946,21 @@ function renderEmployeeSecurityCard(security = {}) {
     `;
 }
 
+function renderBrowserPunchPermissions(data) {
+    if (!data) return '';
+    const canManage = state.dashboard?.role === 'system_admin' || hasCurrentAdminPermission('admin.security.manage');
+    return `<section class="browser-punch-permission-panel" aria-label="員工網頁打卡權限"><h3>員工網頁打卡權限</h3>
+        <form data-browser-punch-permissions class="stack-form">
+            <input type="hidden" name="revision" value="${escapeHtml(data.revision)}">
+            <fieldset class="sp-supervisor-list"><legend>允許線上打卡的員工</legend>
+            ${data.employees.map((e) => `<label><input type="checkbox" name="enabledIds" value="${escapeHtml(e.id)}" ${e.enabled ? 'checked' : ''} ${!canManage ? 'disabled' : ''}><span>${escapeHtml(e.id)} ${escapeHtml(e.name)}<small>${escapeHtml(e.department)}</small></span></label>`).join('')}</fieldset>
+            ${canManage ? `<label class="field"><span>設定原因</span><input name="reason" type="text" maxlength="500" required></label>
+            <label class="sp-confirm"><input name="confirmPermissions" type="checkbox" required>確認更新員工網頁打卡權限</label>
+            <div class="inline-actions"><button type="submit" class="primary-btn">儲存網頁打卡權限</button></div>` : ''}
+            <div class="inline-message" data-punch-permission-message aria-live="polite"></div>
+        </form></section>`;
+}
+
 function renderAdminSecuritySection(datasets) {
     const security = datasets.security || {
         settings: {
@@ -8073,6 +8088,7 @@ function renderAdminSecuritySection(datasets) {
                 </div>
                 ${recentPunchItems}
             </article>
+            <article class="sub-panel">${renderBrowserPunchPermissions(security.browserPunchPermissions)}</article>
         </div>
     `;
 }
@@ -8173,6 +8189,9 @@ handleLoginSubmit = async function handleLoginSubmitSecurityOverride(event) {
 let employeePunchRequestInFlight = false;
 
 handleEmployeePunch = async function handleEmployeePunchSecurityOverride() {
+    if (state.dashboard?.punchAction?.enabled === false) {
+        setMessage(ui.dashboardMessage, '未開放網頁線上打卡，請使用實體打卡鐘。', 'error'); return;
+    }
     if (employeePunchRequestInFlight) return;
     employeePunchRequestInFlight = true;
     document.querySelectorAll('[data-action="employee-punch"]').forEach((button) => {
@@ -8196,7 +8215,7 @@ handleEmployeePunch = async function handleEmployeePunchSecurityOverride() {
     } finally {
         employeePunchRequestInFlight = false;
         document.querySelectorAll('[data-action="employee-punch"]').forEach((button) => {
-            button.disabled = false;
+            button.disabled = state.dashboard?.punchAction?.enabled === false;
             button.removeAttribute("aria-busy");
         });
     }
@@ -9719,21 +9738,6 @@ function renderAdminLeaveSection(datasets) {
                 </form>
             </article>
 
-            <article class="sub-panel">
-                <div class="list-toolbar">
-                    <div>
-                        <h3>主管審核路徑</h3>
-                        <p class="helper-text">每個部門可指定一位主管；可用 * 當預設路徑。主管仍以員工身份登入，不會變成管理者。</p>
-                    </div>
-                </div>
-                <form id="admin-leave-routes-form" class="stack-form">
-                    ${renderAdminLeaveRouteRows(leave.approvalRoutes || [], datasets.employees || [], datasets.departments || [])}
-                    <div class="form-toolbar dense-toolbar">
-                        <button class="primary-btn" type="submit">儲存審核路徑</button>
-                    </div>
-                    <div class="inline-message" data-form-message-for="admin-leave-routes-form" aria-live="polite"></div>
-                </form>
-            </article>
         </div>
     `;
 }
@@ -9762,11 +9766,7 @@ function renderEmployeeLeaveApplicationPanel(dashboard) {
                 ${renderBadge(`可用假別 ${leaveTypes.length} 種`, "success")}
             </div>
             <form id="employee-leave-form" class="stack-form">
-                <div class="field-grid dense-form">
-                    <label class="field">
-                        <span>假別</span>
-                        <select name="leaveTypeId" required>${renderLeaveTypeOptions(leaveTypes)}</select>
-                    </label>
+                <div class="request-period-grid dense-form">
                     <label class="field">
                         <span>開始日期</span>
                         <input name="startDate" type="date" value="${today}" required>
@@ -9783,13 +9783,19 @@ function renderEmployeeLeaveApplicationPanel(dashboard) {
                         <span>結束時間</span>
                         <input name="endTime" type="time" value="18:00" required>
                     </label>
+                </div>
+                <div class="request-meta-grid dense-form">
+                    <label class="field">
+                        <span>假別</span>
+                        <select name="leaveTypeId" required>${renderLeaveTypeOptions(leaveTypes)}</select>
+                    </label>
                     <label class="field">
                         <span>請假時數</span>
                         <input name="durationHours" type="number" min="0.5" step="0.5" placeholder="可留空由時間推算">
                     </label>
-                    <label class="field span-2">
+                    <label class="field request-reason">
                         <span>請假原因</span>
-                        <textarea name="reason" rows="3" placeholder="請簡述請假原因"></textarea>
+                        <textarea name="reason" rows="2" placeholder="請簡述請假原因"></textarea>
                     </label>
                 </div>
                 <div class="form-toolbar dense-toolbar">
@@ -9945,7 +9951,7 @@ renderEmployeeDashboard = function renderEmployeeDashboardWorkbenchOverride(dash
                 <p id="employee-live-clock" class="clock-time">--:--:--</p>
                 <p id="employee-clock-subtext" class="clock-subtext"></p>
                 <div class="quick-actions">
-                    <button data-action="employee-punch" class="primary-btn" type="button">${escapeHtml(dashboard.punchAction.label)}</button>
+                    <button data-action="employee-punch" class="primary-btn" type="button" ${dashboard.punchAction.enabled === false ? 'disabled' : ''}>${dashboard.punchAction.enabled === false ? '未開放網頁打卡' : escapeHtml(dashboard.punchAction.label)}</button>
                     <button data-action="refresh-dashboard" class="secondary-btn" type="button">重新整理</button>
                 </div>
                 <p class="punch-note">最後一次打卡：${escapeHtml(lastPunchText)}</p>
@@ -10256,6 +10262,26 @@ function collectAdminLeaveRoutes(form) {
     })).filter((route) => route.department && route.supervisor_id);
 }
 
+const originalHandleDashboardSubmitWithPunchPermissions = handleDashboardSubmit;
+handleDashboardSubmit = async function handlePunchPermissionSubmit(event) {
+    const form = event.target.closest('[data-browser-punch-permissions]');
+    if (!form) return originalHandleDashboardSubmitWithPunchPermissions(event);
+    event.preventDefault();
+    const message = form.querySelector('[data-punch-permission-message]');
+    const fields = new FormData(form), enabled = new Set(fields.getAll('enabledIds'));
+    const data = state.dashboard?.datasets?.security?.browserPunchPermissions || state.dashboard?.datasets?.browserPunchPermissions;
+    const button = form.querySelector('[type="submit"]');
+    if (!data || button?.disabled) return;
+    button.disabled = true;
+    try {
+        if (!fields.has('confirmPermissions')) throw new Error('請確認更新網頁打卡權限。');
+        const result = await requestJson('/api/browser/admin/browser-punch-permissions', { auth: true, method: 'POST', body: {
+            revision: fields.get('revision'), reason: fields.get('reason'), employees: data.employees.map((e) => ({ id: e.id, enabled: enabled.has(e.id) })) } });
+        await reloadDashboard(result.message, 'success');
+    } catch (error) { setMessage(message, error.message, 'error'); }
+    finally { if (button.isConnected) button.disabled = false; }
+};
+
 const originalHandleDashboardSubmitWithLeave = handleDashboardSubmit;
 handleDashboardSubmit = async function handleDashboardSubmitLeaveOverride(event) {
     const form = event.target instanceof HTMLFormElement
@@ -10536,11 +10562,7 @@ function renderEmployeeOvertimeApplicationPanel(dashboard) {
                 ${renderBadge(`可申請 ${employees.length} 人`, "success")}
             </div>
             <form id="employee-overtime-form" class="stack-form">
-                <div class="field-grid dense-form">
-                    <label class="field span-2">
-                        <span>加班員工</span>
-                        <select name="employeeId" required>${renderOvertimeEmployeeOptions(employees, dashboard.user?.id || "")}</select>
-                    </label>
+                <div class="request-period-grid dense-form">
                     <label class="field">
                         <span>開始日期</span>
                         <input name="startDate" type="date" value="${today}" required>
@@ -10557,13 +10579,19 @@ function renderEmployeeOvertimeApplicationPanel(dashboard) {
                         <span>結束時間</span>
                         <input name="endTime" type="time" value="20:00" required>
                     </label>
+                </div>
+                <div class="request-meta-grid dense-form">
+                    <label class="field">
+                        <span>加班員工</span>
+                        <select name="employeeId" required>${renderOvertimeEmployeeOptions(employees, dashboard.user?.id || "")}</select>
+                    </label>
                     <label class="field">
                         <span>加班時數</span>
                         <input name="durationHours" type="number" min="0.5" step="0.5" placeholder="可留空由時間推算">
                     </label>
-                    <label class="field span-2">
+                    <label class="field request-reason">
                         <span>加班原因</span>
-                        <textarea name="reason" rows="3" placeholder="請簡述加班原因"></textarea>
+                        <textarea name="reason" rows="2" placeholder="請簡述加班原因"></textarea>
                     </label>
                 </div>
                 <div class="form-toolbar dense-toolbar">
@@ -12111,7 +12139,8 @@ const workspaceSubnavConfigs = {
                     items: [
                         { id: "settings", label: "遠端打卡規則", panelIndex: 1 },
                         { id: "devices", label: "裝置綁定清單", panelIndex: 2 },
-                        { id: "recent", label: "最近安全紀錄", panelIndex: 3 }
+                        { id: "recent", label: "最近安全紀錄", panelIndex: 3 },
+                        { id: "punchPermissions", label: "員工網頁打卡權限", panelIndex: 4 }
                     ]
                 }
             ]
@@ -12190,8 +12219,7 @@ const workspaceSubnavConfigs = {
                 {
                     label: "制度設定",
                     items: [
-                        { id: "types", label: "假別設定", panelIndex: 5, visible: () => hasCurrentAdminPermission("admin.leave.settings") },
-                        { id: "routes", label: "主管審核路徑", panelIndex: 6, visible: () => hasCurrentAdminPermission("admin.leave.settings") }
+                        { id: "types", label: "假別設定", panelIndex: 5, visible: () => hasCurrentAdminPermission("admin.leave.settings") }
                     ]
                 }
             ]
@@ -12613,7 +12641,7 @@ handleDashboardClick = async function handleDashboardClickWorkspaceSubnavOverrid
     }
 
     if (action === "jump-leave-routes") {
-        activateWorkspaceSubsection("admin", "leave", "routes");
+        state.activeSections.admin = "supervisors";
         return originalHandleDashboardClickWithWorkspaceSubnav(event);
     }
 

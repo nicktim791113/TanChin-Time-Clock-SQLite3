@@ -21,6 +21,17 @@
 .sp-calendar .meal-date { min-width: 0; }
 .sp-calendar .meal-date-deadline { white-space: normal; overflow-wrap: anywhere; }
 .sp-workspace input, .sp-workspace select, .sp-workspace button { max-width: 100%; }
+.sp-route-section { border-bottom: 1px solid var(--line); margin-bottom: 24px; padding-bottom: 16px; }
+.sp-batch-targets { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.browser-punch-permission-panel { min-width: 0; margin-top: 18px; }
+.request-period-grid, .request-meta-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.request-meta-grid .request-reason { grid-column: span 2; }
+.request-period-grid .field, .request-meta-grid .field { min-width: 0; }
+.request-period-grid input, .request-meta-grid input, .request-meta-grid select, .request-meta-grid textarea { width: 100%; min-width: 0; box-sizing: border-box; }
+@media (max-width: 1000px) {
+    .request-period-grid, .request-meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .sp-batch-targets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 600px) {
     .sp-form-grid, .sp-supervisor-list { grid-template-columns: minmax(0, 1fr); }
     .sp-employee-picker { width: 100%; }

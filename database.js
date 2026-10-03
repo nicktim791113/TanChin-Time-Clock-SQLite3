@@ -5,9 +5,11 @@ const Database = require('better-sqlite3');
 const webCredentials = require('./web-credentials');
 const { createMealStore } = require('./meal-management');
 const { createSupervisorStore } = require('./supervisor-management');
+const { createBrowserPunchPermissionStore } = require('./browser-punch-permissions');
 let db = null;
 let meals = null;
 let supervisors = null;
+let browserPunchPermissions = null;
 let currentDbFilePath = '';
 
 function init(dbFilePath) {
@@ -462,6 +464,7 @@ function init(dbFilePath) {
   seedDepartmentsFromExistingData();
   seedDefaultLeaveTypes();
   supervisors = createSupervisorStore(db, (entry) => addAuditLog(entry));
+  browserPunchPermissions = createBrowserPunchPermissionStore(db, (entry) => addAuditLog(entry));
 }
 
 function close() {
@@ -470,6 +473,7 @@ function close() {
   db = null;
   meals = null;
   supervisors = null;
+  browserPunchPermissions = null;
   currentDbFilePath = '';
 }
 
@@ -634,12 +638,14 @@ const saveEmployees = (employees) => {
         for (const emp of employees) insert.run(normalizeEmployeeForStorage(emp));
         run('DELETE FROM web_credentials WHERE employee_id NOT IN (SELECT id FROM employees)');
         run('DELETE FROM supervisor_assignments WHERE employee_id NOT IN (SELECT id FROM employees) OR supervisor_id NOT IN (SELECT id FROM employees)');
+        run('DELETE FROM browser_punch_permissions WHERE employee_id NOT IN (SELECT id FROM employees)');
     })();
 };
 const loadEmployees = () => all('SELECT * FROM employees ORDER BY id');
 const deleteAllEmployees = () => db.transaction(() => {
     run('DELETE FROM web_credentials');
     run('DELETE FROM supervisor_assignments');
+    run('DELETE FROM browser_punch_permissions');
     return run('DELETE FROM employees');
 })();
 
@@ -2132,6 +2138,7 @@ const countPunchFailureAuditLogsSince = (startTimestamp, excludedFailureCodes = 
 
 module.exports = {
   getSupervisors: () => supervisors,
+  getBrowserPunchPermissions: () => browserPunchPermissions,
   getMeals: () => meals,
   init, close,
   getDatabasePath, backupDatabase, validateBackupDatabaseFile, replaceDatabaseFromBackup,

@@ -46,6 +46,12 @@ function attachSupervisorRoutes(server, context) {
         if (!target) fail('只能代辦目前明確指定給自己的員工，主管授權可能已變更。', 403);
         return target;
     }
+    function targetsFor(request, body) {
+        const ids = body.employeeIds === undefined ? [body.employeeId] : body.employeeIds;
+        if (!Array.isArray(ids) || !ids.length || ids.length > 100 || ids.some((id) => typeof id !== 'string' || !id)) fail('請選擇 1 至 100 位代辦員工。');
+        if (new Set(ids).size !== ids.length) fail('代辦員工不可重複。');
+        return ids.map((id) => targetFor(request, id));
+    }
     server.get('/api/browser/employee/supervisor', requireSession, requireRole('employee'), handle((request, response) => {
         requirePersonalSupervisor(request.browserSession);
         const range = monthRange(request.query.month);
@@ -69,14 +75,20 @@ function attachSupervisorRoutes(server, context) {
         calendar.detail = { page: current, totalPages, totalCount: details.length, records: details.slice((current - 1) * 50, current * 50).map((row) => ({
             ...formatRecord(kind, row, lookup), canProxyWithdraw: kind === 'leave' && ['pending_supervisor', 'pending_admin'].includes(row.status)
         })) };
+        const mealDate = request.query.date || range.dates[0];
+        const mealDay = db.getMeals().dayState(mealDate);
         response.json({ success: true, proxy: { employees, employeeId, kind, calendar,
+            batchMeal: { date: mealDate, version: mealDay.version, employees: employees.map((employee) => {
+                const row = mealDay.rows.find((item) => item.employee_id === employee.id);
+                return { id: employee.id, eligible: Boolean(row?.eligible), canChange: Boolean(row?.canChange), eating: Boolean(row?.eating) };
+            }) },
             leaveTypes: db.loadLeaveTypes().filter((type) => type.enabled).map(({ id, name }) => ({ id, name })),
             meals: db.getMeals().calendar({ month: range.month, employeeId }) } });
     }));
     for (const kind of ['leave', 'overtime']) {
         server.post(`/api/browser/employee/supervisor/${kind}`, requireSession, requireRole('employee'), handle((request, response) => {
             const body = request.body || {};
-            const target = targetFor(request, body.employeeId);
+            const targets = targetsFor(request, body);
             const reason = proxyReason(body.proxyReason);
             if (body.confirmApproval !== true) fail('請確認主管代申請並核准。');
             const period = requestPeriod(body, kind);
@@ -84,23 +96,30 @@ function attachSupervisorRoutes(server, context) {
             if (kind === 'leave' && !type) fail('請選擇有效假別。');
             const now = Date.now();
             const actorId = request.browserSession.employeeId;
-            const record = { id: `${kind}_${now}_${crypto.randomBytes(4).toString('hex')}`, employee_id: target.id,
+            const batchId = crypto.randomUUID();
+            const records = targets.map((target) => ({ id: `${kind}_${now}_${crypto.randomBytes(8).toString('hex')}`, employee_id: target.id,
                 applicant_id: actorId, applicant_role: 'supervisor_proxy', proxy_reason: reason, ...period,
                 reason: typeof body.reason === 'string' ? body.reason.trim().slice(0, 2000) : '',
                 status: kind === 'leave' ? 'pending_admin' : 'approved', supervisor_id: actorId,
                 supervisor_decision: 'approved', supervisor_comment: `指定主管代申請並核准：${reason}`, supervisor_decided_at: now,
                 approval_mode: kind === 'leave' ? 'supervisor_proxy' : 'supervisor_proxy_auto_approved', created_at: now, updated_at: now,
-                ...(type ? { leave_type_id: type.id } : {}) };
+                ...(type ? { leave_type_id: type.id } : {}) }));
             store().transaction(() => {
-                targetFor(request, target.id);
                 const overlap = kind === 'leave' ? db.hasOverlappingLeaveRequest : db.hasOverlappingOvertimeRequest;
-                if (overlap(target.id, period.start_at, period.end_at)) fail('這段時間已有待審或已核准的申請。', 409);
-                (kind === 'leave' ? db.createLeaveRequest : db.createOvertimeRequest)(record);
-                db.addAuditLog(auditEntry(request, { action: 'supervisor_proxy_create', target_type: `${kind}_request`, target_id: record.id,
-                    summary: `指定主管代 ${target.id} ${target.name} 申請${kind === 'leave' ? '請假，送管理部終審' : '加班並核准'}：${reason}`, after_data: record }));
+                targets.forEach((target) => targetFor(request, target.id));
+                const conflicts = targets.filter((target) => overlap(target.id, period.start_at, period.end_at));
+                if (conflicts.length) fail(`${conflicts.map((e) => `${e.id} ${e.name}`).join('、')} 這段時間已有待審或已核准的申請；整批未建立。`, 409);
+                records.forEach((record, index) => {
+                    (kind === 'leave' ? db.createLeaveRequest : db.createOvertimeRequest)(record);
+                    const target = targets[index];
+                    db.addAuditLog(auditEntry(request, { action: 'supervisor_proxy_create', target_type: `${kind}_request`, target_id: record.id,
+                        summary: `指定主管代 ${target.id} ${target.name} 申請${kind === 'leave' ? '請假，送管理部終審' : '加班並核准'}：${reason}`,
+                        after_data: { ...record, batchId, batchSize: targets.length } }));
+                });
             });
             notify(request, kind === 'leave' ? 'leaveRequests' : 'overtimeRequests');
-            response.json({ success: true, requestId: record.id, message: kind === 'leave' ? '代辦請假已送管理部終審。' : '代辦加班已建立並核准。' });
+            response.json({ success: true, requestId: records[0].id, requestIds: records.map((row) => row.id), createdCount: records.length,
+                message: `${records.length} 位員工的${kind === 'leave' ? '代辦請假已送管理部終審' : '代辦加班已建立並核准'}。` });
         }));
     }
     server.post('/api/browser/employee/supervisor/leave/withdraw', requireSession, requireRole('employee'), handle((request, response) => {
@@ -122,12 +141,21 @@ function attachSupervisorRoutes(server, context) {
     }));
     server.post('/api/browser/employee/supervisor/meals/choice', requireSession, requireRole('employee'), handle((request, response) => {
         const body = request.body || {};
-        targetFor(request, body.employeeId);
+        const targets = targetsFor(request, body);
         const reason = proxyReason(body.reason);
-        db.getMeals().saveChoice({ ...body, reason }, { manager: false, actorId: request.browserSession.employeeId,
-            label: '指定主管代登午餐', audit: (entry) => auditEntry(request, entry) });
+        const meals = db.getMeals(), now = Date.now();
+        store().transaction(() => {
+            targets.forEach((target) => targetFor(request, target.id));
+            const day = meals.dayState(body.date, now);
+            if (body.version !== day.version) fail('資料已變更，請重新整理後再確認。', 409);
+            if (day.locked) fail('已達變更截止時間或已結單，請聯絡團膳管理者。', 403);
+            const unavailable = targets.filter((target) => !day.serving || !day.rows.find((row) => row.employee_id === target.id)?.eligible);
+            if (unavailable.length) fail(`${unavailable.map((e) => `${e.id} ${e.name}`).join('、')} 本日未供餐或未參加團膳；整批未儲存。`);
+            targets.forEach((target) => meals.saveChoice({ ...body, employeeId: target.id, reason, version: meals.dayState(body.date, now).version },
+                { manager: false, actorId: request.browserSession.employeeId, label: '指定主管代登午餐', audit: (entry) => auditEntry(request, entry) }, now));
+        });
         notify(request, 'meals');
-        response.json({ success: true, message: '午餐代登已儲存。' });
+        response.json({ success: true, message: `${targets.length} 位員工的午餐代登已儲存。` });
     }));
 }
 module.exports = { attachSupervisorRoutes, requestPeriod };
