@@ -40,11 +40,11 @@ function spRenderRoutes() {
 }
 function spTargets(meal = false) {
     const employees = supervisorState.data.employees;
-    return `<fieldset class="sp-supervisor-list sp-batch-targets"><legend>代辦員工（<span data-sp-target-count>${employees.some((e) => e.id === supervisorState.employeeId && (!meal || supervisorState.data.batchMeal.employees.find((m) => m.id === e.id)?.canChange)) ? 1 : 0}</span> 位）</legend>
-        ${employees.map((e) => {
-            const eligible = !meal || supervisorState.data.batchMeal.employees.find((m) => m.id === e.id)?.canChange;
-            return `<label><input type="checkbox" name="employeeIds" value="${spEscape(e.id)}" ${e.id === supervisorState.employeeId && eligible ? 'checked' : ''} ${!eligible ? 'disabled' : ''}><span>${spEscape(e.id)} ${spEscape(e.name)}<small>${spEscape(e.department)}${!eligible ? ' · 本日無法代登午餐' : ''}</small></span></label>`;
-        }).join('')}</fieldset><div class="inline-actions">${spButton('select-all', '全選可代辦員工')}${spButton('select-none', '清除勾選')}</div>`;
+    const disabledIds = meal ? employees.filter((e) => !supervisorState.data.batchMeal.employees.find((m) => m.id === e.id)?.canChange).map((e) => e.id) : [];
+    return renderAdminPaperEmployeePicker(employees, '代辦員工', [], {
+        selectedIds: disabledIds.includes(supervisorState.employeeId) ? [] : [supervisorState.employeeId], disabledIds, maxSelection: 100,
+        notes: Object.fromEntries(disabledIds.map((id) => [id, '本日無法代登午餐']))
+    });
 }
 function renderSupervisorAssignments() {
     const data = supervisorState.assignments;
@@ -54,12 +54,14 @@ function renderSupervisorAssignments() {
         ${spRenderRoutes()}
         <div class="sp-toolbar"><h3>指定代辦主管</h3>${spButton('refresh', '重新整理')}</div>
         <div class="inline-message sp-message" aria-live="polite">${spEscape(supervisorState.error)}</div>
-        ${!data ? '<p role="status">讀取主管指定資料中…</p>' : `<label class="field sp-employee-picker"><span>員工</span><select data-sp-assignment-employee aria-label="設定主管的員工">${spOptions(data.employees, selected?.id)}</select></label>
+        ${!data ? '<p role="status">讀取主管指定資料中…</p>' : `${renderAdminPaperEmployeePicker(data.employees, '設定主管的員工', [], {
+            name: 'assignmentEmployeeId', single: true, selectedIds: [selected?.id], inputAttributes: 'data-sp-assignment-employee'
+        })}
         ${selected ? `<form data-sp-form="assignments" class="sp-form">
             <input type="hidden" name="employeeId" value="${spEscape(selected.id)}">
-            <fieldset class="sp-supervisor-list"><legend>${spEscape(selected.name)} 的代辦主管</legend>
-            ${data.employees.filter((e) => e.id !== selected.id).map((e) => `<label><input type="checkbox" name="supervisorIds" value="${spEscape(e.id)}" ${selected.supervisorIds.includes(e.id) ? 'checked' : ''}><span>${spEscape(e.id)} ${spEscape(e.name)}<small>${spEscape(e.department)}</small></span></label>`).join('')}
-            </fieldset>${spField('設定原因', 'reason', 'text', '', 'maxlength="500"')}
+            ${renderAdminPaperEmployeePicker(data.employees.filter((e) => e.id !== selected.id), `${selected.name} 的代辦主管`, [], {
+                name: 'supervisorIds', selectedIds: selected.supervisorIds
+            })}${spField('設定原因', 'reason', 'text', '', 'maxlength="500"')}
             <label class="sp-confirm"><input type="checkbox" name="confirmAssignment" required>確認更新 ${spEscape(selected.id)} 的代辦主管授權</label>
             <button type="submit" class="primary-btn" ${supervisorState.busy ? 'disabled' : ''}>儲存主管指定</button>
         </form>` : '<p>尚無可設定的員工。</p>'}
@@ -94,7 +96,7 @@ function spRequestForm() {
         ${spField('每人整筆時數', 'durationHours', 'number', leave ? '8' : '2', 'min="0.01" step="0.01"')}</div>
         ${spField('申請事由', 'reason', 'text', '', 'maxlength="2000"')}${spField('代辦原因', 'proxyReason', 'text', '', 'maxlength="500"')}
         <label class="sp-confirm"><input type="checkbox" name="confirmApproval" required>確認替所有勾選員工代申請相同內容並由本人核准${leave ? '，送管理部終審' : ''}</label>
-        <div class="inline-actions"><button class="primary-btn" type="submit" ${supervisorState.busy ? 'disabled' : ''}>${leave ? '送管理部終審' : '代申請並核准'}</button>${spButton('cancel-form', '取消')}</div>
+        <div class="inline-actions"><button class="primary-btn" type="submit" ${supervisorState.busy ? 'disabled' : ''}>${leave ? '送管理部終審' : '代申請並核准'}</button>${spButton('reset-form', '重設表單')}</div>
     </form>`;
 }
 function spMealDetail() {
@@ -108,8 +110,8 @@ function spMealDetail() {
 }
 function spRequestDetail() {
     const detail = supervisorState.data.calendar.detail;
-    return `<section class="sp-day-detail"><div class="sp-toolbar"><h4>${supervisorState.date} ${supervisorState.kind === 'leave' ? '請假' : '加班'}</h4>${spButton('create', '代申請')}</div>
-        ${supervisorState.form === supervisorState.kind ? spRequestForm() : ''}
+    return `<section class="sp-day-detail"><div class="sp-toolbar"><h4>${supervisorState.date} ${supervisorState.kind === 'leave' ? '請假' : '加班'}</h4></div>
+        ${spRequestForm()}
         <div class="sp-records">${detail.records.map((row) => `<article class="sp-record"><div class="sp-toolbar"><strong>${spEscape(row.leaveTypeName || '加班')} · ${spEscape(row.statusText)}</strong>
             ${row.canProxyWithdraw ? spButton('withdraw', '代撤回', `data-id="${spEscape(row.id)}"`) : ''}</div>
             <p>${spEscape(row.startText)} 至 ${spEscape(row.endText)} · ${spEscape(row.duration_hours)} 小時</p><p>${spEscape(row.reason)}</p>
@@ -129,8 +131,10 @@ function renderSupervisorWorkspace() {
         <div class="sp-toolbar"><h3>主管代辦</h3>${spButton('refresh', '重新整理', '', !canUse)}</div>
         <div class="inline-message sp-message" aria-live="polite">${spEscape(supervisorState.error)}</div>
         ${!canUse ? '<p>請以主管本人的個人網頁密碼重新登入。</p>' : !data ? '<p role="status">讀取代辦資料中…</p>' : !data.employees.length ? '<p>目前沒有獲指定的代辦員工。</p>' : `
-        <div class="sp-toolbar"><label class="field sp-employee-picker"><span>查看紀錄員工</span><select data-sp-employee aria-label="代辦員工">${spOptions(data.employees, supervisorState.employeeId)}</select></label>
-        <div class="meal-month-controls">${spButton('month', '←', 'data-offset="-1" aria-label="上個月"')}<input type="month" data-sp-month aria-label="代辦月份" value="${supervisorState.month}" min="2000-01" max="2100-12">${spButton('month', '→', 'data-offset="1" aria-label="下個月"')}</div></div>
+        ${renderAdminPaperEmployeePicker(data.employees, '查看紀錄員工', [], {
+            name: 'viewEmployeeId', single: true, selectedIds: [supervisorState.employeeId], inputAttributes: 'data-sp-employee'
+        })}
+        <div class="sp-toolbar"><div class="meal-month-controls">${spButton('month', '←', 'data-offset="-1" aria-label="上個月"')}<input type="month" data-sp-month aria-label="代辦月份" value="${supervisorState.month}" min="2000-01" max="2100-12">${spButton('month', '→', 'data-offset="1" aria-label="下個月"')}</div></div>
         <div class="meal-tabs" role="tablist" aria-label="代辦項目">${[['leave', '請假'], ['overtime', '加班'], ['meals', '午餐團膳']].map(([kind, label]) => `<button type="button" role="tab" data-action="sp-kind" data-kind="${kind}" aria-selected="${supervisorState.kind === kind}" class="${supervisorState.kind === kind ? 'is-active' : ''}">${label}</button>`).join('')}</div>
         ${spCalendar(data)}${supervisorState.kind === 'meals' ? spMealDetail() : spRequestDetail()}`}
     </section>`;
@@ -181,6 +185,15 @@ postRenderSetup = function postRenderWithSupervisor() {
 const spPreviousClick = handleDashboardClick;
 handleDashboardClick = async function handleSupervisorClick(event) {
     const button = event.target.closest('[data-action]'), action = button?.dataset.action;
+    if (['paper-select-visible-employees', 'paper-clear-employees'].includes(action) && button.closest('[data-sp-form]')) {
+        event.preventDefault(); if (supervisorState.busy) return;
+        const field = button.closest('[data-paper-employee-field]');
+        const before = [...field.querySelectorAll('[data-paper-employee-checkbox]:checked')].map((input) => input.value).join('\n');
+        await spPreviousClick(event);
+        const after = [...field.querySelectorAll('[data-paper-employee-checkbox]:checked')].map((input) => input.value).join('\n');
+        if (before !== after) supervisorState.dirty = true;
+        return;
+    }
     if (!action?.startsWith('sp-')) {
         if (supervisorState.dirty && button && (button.dataset.action.includes('workspace') || button.dataset.action.includes('section'))) {
             if (!await spDiscard()) { event.preventDefault(); return; }
@@ -189,17 +202,11 @@ handleDashboardClick = async function handleSupervisorClick(event) {
         return spPreviousClick(event);
     }
     event.preventDefault(); if (supervisorState.busy) return;
-    if (['sp-select-all', 'sp-select-none'].includes(action)) {
-        const form = button.closest('[data-sp-form]'); let count = 0;
-        form?.querySelectorAll('[name="employeeIds"]').forEach((input) => { input.checked = action === 'sp-select-all' && !input.disabled && count < 100; if (input.checked) count += 1; });
-        if (form?.querySelector('[data-sp-target-count]')) form.querySelector('[data-sp-target-count]').textContent = String(count);
-        supervisorState.dirty = true; return;
-    }
     if (action === 'sp-cancel-meal') {
         const form = spRoot()?.querySelector('[data-sp-form="meals"]');
         if (form) {
             form.querySelectorAll('[name="employeeIds"]').forEach((input) => { input.checked = input.value === supervisorState.employeeId && !input.disabled; });
-            form.querySelector('[data-sp-target-count]').textContent = String(form.querySelectorAll('[name="employeeIds"]:checked').length);
+            syncAdminPaperEmployeePicker(form.querySelector('[data-paper-employee-field]'));
             form.elements.eating.value = 'false'; form.elements.reason.value = '全日請假提醒：主管代確認取消餐點'; supervisorState.dirty = true; form.elements.reason.focus();
         }
         return;
@@ -210,8 +217,7 @@ handleDashboardClick = async function handleSupervisorClick(event) {
     }
     if (!await spDiscard()) return;
     supervisorState.dirty = false; supervisorState.form = ''; supervisorState.page = 1;
-    if (action === 'sp-create') { supervisorState.form = supervisorState.kind; spPaint(); return; }
-    if (action === 'sp-cancel-form') { spPaint(); return; }
+    if (action === 'sp-reset-form' || action === 'sp-cancel-form') { spPaint(); return; }
     if (action === 'sp-date') supervisorState.date = button.dataset.date;
     if (action === 'sp-kind') supervisorState.kind = button.dataset.kind;
     if (action === 'sp-page') supervisorState.page = Number(button.dataset.page);
@@ -229,10 +235,15 @@ handleDashboardChange = async function handleSupervisorChange(event) {
         supervisorState.dirty = false;
     }
     if (target.matches('[data-sp-employee], [data-sp-month], [data-sp-assignment-employee]')) {
+        if (supervisorState.busy) return;
         if (!await spDiscard()) {
-            if (target.hasAttribute('data-sp-assignment-employee')) target.value = supervisorState.assignmentId;
-            else if (target.hasAttribute('data-sp-employee')) target.value = supervisorState.employeeId;
-            else target.value = supervisorState.month;
+            if (target.hasAttribute('data-sp-month')) target.value = supervisorState.month;
+            else {
+                const selectedId = target.hasAttribute('data-sp-assignment-employee') ? supervisorState.assignmentId : supervisorState.employeeId;
+                const field = target.closest('[data-paper-employee-field]');
+                field.querySelectorAll('[data-paper-employee-checkbox]').forEach((input) => { input.checked = input.value === selectedId; });
+                syncAdminPaperEmployeePicker(field);
+            }
             return;
         }
         supervisorState.dirty = false; supervisorState.form = ''; supervisorState.page = 1;
@@ -241,9 +252,10 @@ handleDashboardChange = async function handleSupervisorChange(event) {
         else { supervisorState.month = target.value; supervisorState.date = `${target.value}-01`; }
         await spLoad(); return;
     }
+    if (target.matches('[data-paper-employee-department]')) return spPreviousChange(event);
     if (target.closest('[data-sp-form]')) {
-        const form = target.closest('[data-sp-form]'), count = form.querySelector('[data-sp-target-count]');
-        if (count) count.textContent = String(form.querySelectorAll('[name="employeeIds"]:checked').length);
+        if (supervisorState.busy) return;
+        if (target.matches('[data-paper-employee-checkbox]')) await spPreviousChange(event);
         supervisorState.dirty = true; return;
     }
     return spPreviousChange(event);
@@ -298,7 +310,9 @@ handleRealtimeSyncMessage = async function handleSupervisorSync(payload) {
     }
     return spPreviousSync(payload);
 };
-document.addEventListener('input', (event) => { if (event.target.closest('[data-sp-form]')) supervisorState.dirty = true; });
+document.addEventListener('input', (event) => {
+    if (!supervisorState.busy && !event.target.matches('[data-paper-employee-search]') && event.target.closest('[data-sp-form]')) supervisorState.dirty = true;
+});
 const spPreviousLogout = handleLogout;
 handleLogout = function logoutWithSupervisorCleanup(...args) {
     Object.assign(supervisorState, { identity: '', data: null, assignments: null, routes: null, dirty: false, loading: false, busy: false, error: '', sequence: supervisorState.sequence + 1 });

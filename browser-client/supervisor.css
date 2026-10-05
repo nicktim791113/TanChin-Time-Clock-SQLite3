@@ -1,7 +1,7 @@
 .sp-workspace { margin-top: 20px; min-width: 0; }
 .sp-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
 .sp-toolbar h3, .sp-toolbar h4 { margin: 0; font-size: 18px; }
-.sp-employee-picker { width: 360px; max-width: 100%; }
+.sp-workspace > .paper-employee-field { max-width: 850px; margin-bottom: 14px; }
 .sp-form { display: grid; gap: 14px; max-width: 850px; padding: 16px 0; }
 .sp-form h4 { margin: 0; font-size: 16px; }
 .sp-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
@@ -9,9 +9,6 @@
 .sp-confirm input { flex: 0 0 auto; margin-top: 4px; }
 .sp-discard-dialog { max-width: min(460px, calc(100% - 32px)); padding: 20px; border: 1px solid var(--line); border-radius: 8px; }
 .sp-discard-dialog::backdrop { background: rgb(0 0 0 / 35%); }
-.sp-supervisor-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; max-height: 300px; overflow: auto; border: 1px solid var(--line); padding: 12px; }
-.sp-supervisor-list label { display: flex; align-items: flex-start; gap: 8px; overflow-wrap: anywhere; }
-.sp-supervisor-list small { display: block; color: var(--muted); }
 .sp-table-scroll { overflow-x: auto; max-width: 100%; }
 .sp-table { width: 100%; border-collapse: collapse; text-align: left; min-width: 550px; }
 .sp-table th, .sp-table td { padding: 10px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
@@ -22,7 +19,6 @@
 .sp-calendar .meal-date-deadline { white-space: normal; overflow-wrap: anywhere; }
 .sp-workspace input, .sp-workspace select, .sp-workspace button { max-width: 100%; }
 .sp-route-section { border-bottom: 1px solid var(--line); margin-bottom: 24px; padding-bottom: 16px; }
-.sp-batch-targets { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .browser-punch-permission-panel { min-width: 0; margin-top: 18px; }
 .request-period-grid, .request-meta-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: start; }
 .request-meta-grid .request-reason { grid-column: span 2; }
@@ -30,11 +26,9 @@
 .request-period-grid input, .request-meta-grid input, .request-meta-grid select, .request-meta-grid textarea { width: 100%; min-width: 0; box-sizing: border-box; }
 @media (max-width: 1000px) {
     .request-period-grid, .request-meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .sp-batch-targets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 600px) {
-    .sp-form-grid, .sp-supervisor-list { grid-template-columns: minmax(0, 1fr); }
-    .sp-employee-picker { width: 100%; }
+    .sp-form-grid { grid-template-columns: minmax(0, 1fr); }
     .sp-calendar .meal-date-status { font-size: 12px; }
     .sp-calendar .meal-date-deadline { font-size: 10px; }
 }

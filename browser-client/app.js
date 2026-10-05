@@ -7952,8 +7952,9 @@ function renderBrowserPunchPermissions(data) {
     return `<section class="browser-punch-permission-panel" aria-label="員工網頁打卡權限"><h3>員工網頁打卡權限</h3>
         <form data-browser-punch-permissions class="stack-form">
             <input type="hidden" name="revision" value="${escapeHtml(data.revision)}">
-            <fieldset class="sp-supervisor-list"><legend>允許線上打卡的員工</legend>
-            ${data.employees.map((e) => `<label><input type="checkbox" name="enabledIds" value="${escapeHtml(e.id)}" ${e.enabled ? 'checked' : ''} ${!canManage ? 'disabled' : ''}><span>${escapeHtml(e.id)} ${escapeHtml(e.name)}<small>${escapeHtml(e.department)}</small></span></label>`).join('')}</fieldset>
+            ${renderAdminPaperEmployeePicker(data.employees, '允許線上打卡的員工', [], {
+                name: 'enabledIds', selectedIds: data.employees.filter((e) => e.enabled).map((e) => e.id), disabled: !canManage
+            })}
             ${canManage ? `<label class="field"><span>設定原因</span><input name="reason" type="text" maxlength="500" required></label>
             <label class="sp-confirm"><input name="confirmPermissions" type="checkbox" required>確認更新員工網頁打卡權限</label>
             <div class="inline-actions"><button type="submit" class="primary-btn">儲存網頁打卡權限</button></div>` : ''}
@@ -9222,35 +9223,42 @@ function renderLeaveAuditAlertRows(alerts = []) {
     `;
 }
 
-function renderAdminPaperEmployeePicker(employees = [], labelText = "員工", departments = []) {
+function renderAdminPaperEmployeePicker(employees = [], labelText = "員工", departments = [], options = {}) {
+    const { name = 'employeeIds', selectedIds = [], disabledIds = [], disabled = false,
+        single = false, maxSelection = 0, inputAttributes = '', notes = {} } = options;
+    const selected = new Set(selectedIds), unavailable = new Set(disabledIds);
+    const departmentOptions = [...departments, ...employees.map((employee) => ({ name: employee.department }))];
     const employeeItems = employees.map((employee) => {
         const searchText = `${employee.id || ""} ${employee.name || ""} ${employee.department || ""}`.trim();
+        const locked = disabled || unavailable.has(employee.id);
         return `
-            <label class="paper-employee-option" data-paper-employee-item data-department="${escapeHtml(employee.department || "")}" data-search-text="${escapeHtml(searchText.toLowerCase())}">
-                <input type="checkbox" name="employeeIds" value="${escapeHtml(employee.id)}" data-paper-employee-checkbox>
+            <label class="paper-employee-option ${locked ? 'is-unavailable' : ''}" data-paper-employee-item data-department="${escapeHtml(employee.department || "")}" data-search-text="${escapeHtml(searchText.toLowerCase())}">
+                <input type="${single ? 'radio' : 'checkbox'}" name="${escapeHtml(name)}" value="${escapeHtml(employee.id)}" data-paper-employee-checkbox ${selected.has(employee.id) ? 'checked' : ''} ${locked ? 'disabled' : ''} ${inputAttributes}>
                 <span>
                     <strong>${escapeHtml(employee.id)}</strong>
                     <small>${escapeHtml(employee.name || "-")} / ${escapeHtml(employee.department || "-")}</small>
+                    ${notes[employee.id] ? `<small>${escapeHtml(notes[employee.id])}</small>` : ''}
                 </span>
             </label>
         `;
     }).join("");
     return `
-        <div class="field span-full paper-employee-field" data-paper-employee-field>
+        <div class="field span-full paper-employee-field" data-paper-employee-field data-paper-selection-limit="${maxSelection}" role="group" aria-label="${escapeHtml(labelText)}">
             <div class="paper-employee-header">
                 <span>${escapeHtml(labelText)}</span>
-                <span class="paper-employee-count" data-paper-employee-count>已選 0 位</span>
+                <span class="paper-employee-count" data-paper-employee-count aria-live="polite">已選 ${employees.filter((e) => selected.has(e.id)).length} 位 / 顯示 ${employees.length} 位</span>
             </div>
             <div class="paper-employee-tools">
-                <input type="search" data-paper-employee-search placeholder="輸入工號、姓名或部門篩選">
-                <select data-paper-employee-department>
-                    ${buildDepartmentOptions(departments, "", { enabledOnly: false, blankLabel: "全部部門" })}
+                <input type="search" data-paper-employee-search aria-label="${escapeHtml(labelText)}搜尋" placeholder="輸入工號、姓名或部門篩選">
+                <select data-paper-employee-department aria-label="${escapeHtml(labelText)}部門">
+                    ${buildDepartmentOptions(departmentOptions, "", { enabledOnly: false, blankLabel: "全部部門" })}
                 </select>
-                <button class="outline-btn" type="button" data-action="paper-select-visible-employees">選取顯示</button>
-                <button class="outline-btn" type="button" data-action="paper-clear-employees">清除</button>
+                ${single ? '' : `<button class="outline-btn" type="button" data-action="paper-select-visible-employees" ${disabled ? 'disabled' : ''}>選取顯示</button>
+                <button class="outline-btn" type="button" data-action="paper-clear-employees" ${disabled ? 'disabled' : ''}>清除</button>`}
             </div>
             <div class="paper-employee-picker" data-paper-employee-picker>
-                ${employeeItems || `<p class="helper-text">目前沒有可選員工。</p>`}
+                ${employeeItems}
+                <p class="helper-text paper-employee-empty" data-paper-employee-empty ${employees.length ? 'hidden' : ''}>${employees.length ? '沒有符合篩選的員工。' : '目前沒有可選員工。'}</p>
             </div>
         </div>
     `;
@@ -9263,11 +9271,13 @@ function collectAdminPaperEmployeeIds(form) {
 }
 
 function syncAdminPaperEmployeePicker(field) {
-    const checkedCount = field.querySelectorAll('input[name="employeeIds"]:checked').length;
+    const checkedCount = field.querySelectorAll('[data-paper-employee-checkbox]:checked').length;
     const visibleCount = Array.from(field.querySelectorAll("[data-paper-employee-item]"))
         .filter((item) => !item.classList.contains("is-hidden")).length;
     const count = field.querySelector("[data-paper-employee-count]");
     if (count) count.textContent = `已選 ${checkedCount} 位 / 顯示 ${visibleCount} 位`;
+    const empty = field.querySelector('[data-paper-employee-empty]');
+    if (empty) empty.hidden = visibleCount > 0;
 }
 
 function filterAdminPaperEmployeePicker(control) {
@@ -9404,11 +9414,13 @@ handleDashboardClick = async function handleDashboardClickPaperEmployeePickerOve
     if (action === "paper-select-visible-employees" || action === "paper-clear-employees") {
         const field = actionTarget.closest("[data-paper-employee-field]");
         if (!field) return;
+        const limit = Number(field.dataset.paperSelectionLimit) || Infinity;
+        let count = field.querySelectorAll('[data-paper-employee-checkbox]:checked').length;
         field.querySelectorAll("[data-paper-employee-item]").forEach((item) => {
-            const checkbox = item.querySelector('input[name="employeeIds"]');
-            if (!checkbox) return;
+            const checkbox = item.querySelector('[data-paper-employee-checkbox]');
+            if (!checkbox || checkbox.disabled || checkbox.type !== 'checkbox') return;
             if (action === "paper-clear-employees") checkbox.checked = false;
-            else if (!item.classList.contains("is-hidden")) checkbox.checked = true;
+            else if (!item.classList.contains("is-hidden") && !checkbox.checked && count < limit) { checkbox.checked = true; count += 1; }
         });
         syncAdminPaperEmployeePicker(field);
         return;
@@ -9421,6 +9433,11 @@ handleDashboardChange = async function handleDashboardChangePaperEmployeePickerO
     if (event.target.matches("[data-paper-employee-checkbox]")) {
         const field = event.target.closest("[data-paper-employee-field]");
         const form = event.target.closest("form");
+        const limit = Number(field?.dataset.paperSelectionLimit) || Infinity;
+        if (event.target.checked && field.querySelectorAll('[data-paper-employee-checkbox]:checked').length > limit) {
+            event.target.checked = false;
+            setMessage(ui.dashboardMessage, `每次最多可選 ${limit} 位員工。`, 'error');
+        }
         if (form?.dataset.correctionRequestId && event.target.checked) {
             field?.querySelectorAll("[data-paper-employee-checkbox]").forEach((checkbox) => {
                 if (checkbox !== event.target) checkbox.checked = false;
