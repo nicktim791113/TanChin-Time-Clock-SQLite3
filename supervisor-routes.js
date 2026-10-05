@@ -40,6 +40,11 @@ function attachSupervisorRoutes(server, context) {
         notify(request, 'supervisorAssignments');
         response.json({ success: true, message: '指定代辦主管已儲存。', assignments: store().assignmentsState() });
     }));
+    server.post('/api/browser/supervisors/assignments/batch', requireSession, requireManage, handle((request, response) => {
+        const result = store().saveAssignmentsBatch(request.body || {}, (entry) => auditEntry(request, entry));
+        notify(request, 'supervisorAssignments');
+        response.json({ success: true, ...result, message: `${result.updatedCount} 位員工的指定代辦主管已批量儲存。`, assignments: store().assignmentsState() });
+    }));
     function targetFor(request, employeeId) {
         requirePersonalSupervisor(request.browserSession);
         const target = store().assignedEmployees(request.browserSession.employeeId).find((e) => e.id === employeeId);

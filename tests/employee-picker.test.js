@@ -65,7 +65,7 @@ test('list height is independent per picker, retained on rerender and not a perm
         const field = { dataset: { paperPickerSizeKey: key }, querySelector: (selector) => selector.includes('height-value') ? output : selector.includes('employee-height') ? control : list };
         return { field, control, list, output };
     }
-    const fields = ['enabledIds', 'assignmentEmployeeId', 'supervisorIds'].map(sizeField);
+    const fields = ['enabledIds', 'assignmentEmployeeIds', 'supervisorIds'].map(sizeField);
     for (const [i, dom] of fields.entries()) {
         dom.control.value = String([400, 250, 600][i]); context.control = dom.control;
         vm.runInContext('resizePaperEmployeePicker(control)', context);
@@ -162,14 +162,58 @@ test('proxy leave and overtime forms appear immediately; meal and assignment pic
     const meal = vm.runInContext('spTargets(true)', context);
     assert.ok(meal.includes('value="E2" data-paper-employee-checkbox  disabled'));
     assert.ok(meal.includes('本日無法代登午餐'));
-    vm.runInContext(`supervisorState.assignmentId = 'E1'; supervisorState.assignments = { employees: [
+    vm.runInContext(`supervisorState.assignments = { employees: [
         { id: 'E1', name: 'One', department: 'A', supervisorIds: ['E2'] }, { id: 'E2', name: 'Two', department: 'B', supervisorIds: [] }] };`, context);
     const assignment = vm.runInContext('renderSupervisorAssignments()', context);
-    const targets = assignment.slice(assignment.indexOf('<form data-sp-form="assignments"'));
-    assert.equal((targets.match(/name="supervisorIds"/g) || []).length, 1);
-    assert.ok(targets.includes('value="E2" data-paper-employee-checkbox checked')); assert.ok(!targets.includes('value="E1" data-paper-employee-checkbox'));
+    const targets = assignment.slice(assignment.indexOf('<form data-sp-form="assignments/batch"'));
+    assert.equal((targets.match(/name="assignmentEmployeeIds"/g) || []).length, 2);
+    assert.equal((targets.match(/name="supervisorIds"/g) || []).length, 2);
+    assert.ok(!targets.includes('type="radio"')); assert.ok(!targets.includes('data-paper-employee-checkbox checked'));
+    assert.ok(targets.includes('value="add"')); assert.ok(targets.includes('value="replace"'));
     const punch = vm.runInContext("renderBrowserPunchPermissions({ revision: 'test', employees: [{ id: 'E1', name: 'One', enabled: true }, { id: 'E2', name: 'Two', enabled: false }] })", context);
     assert.equal((punch.match(/name="enabledIds"/g) || []).length, 2); assert.ok(punch.includes('paper-select-visible-employees'));
+});
+
+test('assignment submit sends both selections with per-employee revisions and keeps height out of the payload', async () => {
+    const context = setup(), fields = [['assignmentEmployeeIds', 'E1'], ['assignmentEmployeeIds', 'E2'], ['supervisorIds', 'S1'],
+        ['supervisorIds', 'S2'], ['mode', 'add'], ['reason', 'Batch test'], ['confirmAssignment', 'on']];
+    context.FormData = class {
+        [Symbol.iterator]() { return fields[Symbol.iterator](); }
+        getAll(name) { return fields.filter(([key]) => key === name).map(([, value]) => value); }
+        has(name) { return fields.some(([key]) => key === name); }
+    };
+    context.event = { target: { closest: () => ({ dataset: { spForm: 'assignments/batch' } }) }, preventDefault() {} };
+    context.sent = [];
+    vm.runInContext("supervisorState.assignments = { employees: [{id:'E1', revision:'r1'}, {id:'E2', revision:'r2'}] }; spSave = async (operation, body) => sent.push({operation, body});", context);
+    await vm.runInContext('handleDashboardSubmit(event)', context);
+    assert.deepEqual(JSON.parse(JSON.stringify(context.sent)), [{ operation: 'assignments/batch', body: {
+        supervisorIds: ['S1', 'S2'], mode: 'add', reason: 'Batch test', confirmAssignment: true, confirmClear: false,
+        employeeIds: ['E1', 'E2'], revisions: { E1: 'r1', E2: 'r2' }
+    } }]);
+    fields.push(['supervisorIds', 'E1']); await vm.runInContext('handleDashboardSubmit(event)', context);
+    assert.equal(context.sent.length, 1);
+});
+
+test('empty replacement requires a separate clear confirmation and changed selection resets it', () => {
+    const context = setup(), control = { checked: true }, label = { querySelector: () => control }, mode = { value: 'add' };
+    let selected = false;
+    context.form = { dataset: { spForm: 'assignments/batch' }, querySelector: (selector) => selector.includes('mode') ? mode : selector.includes('supervisorIds') ? selected ? {} : null : label };
+    vm.runInContext('spSyncAssignmentClear(form)', context); assert.equal(label.hidden, true); assert.equal(control.disabled, true);
+    mode.value = 'replace'; vm.runInContext('spSyncAssignmentClear(form)', context);
+    assert.equal(label.hidden, false); assert.equal(control.required, true); assert.equal(control.disabled, false);
+    control.checked = true; vm.runInContext('spSyncAssignmentClear(form, true)', context); assert.equal(control.checked, false);
+    selected = true; vm.runInContext('spSyncAssignmentClear(form)', context); assert.equal(label.hidden, true); assert.equal(control.required, false);
+});
+
+test('cross-session roster and assignment notifications retain unsaved batch selections and stale revisions', async () => {
+    const context = setup();
+    vm.runInContext("spRoot = () => ({}); spMessage = () => {}; supervisorState.dirty = true; supervisorState.assignments = { marker: 'original' };", context);
+    for (const type of ['supervisorAssignments', 'employees', 'leaveSettings']) {
+        context.payload = { type, sessionToken: 'another' };
+        await vm.runInContext('handleRealtimeSyncMessage(payload)', context);
+        assert.equal(vm.runInContext('supervisorState.assignments.marker', context), 'original');
+        assert.equal(vm.runInContext('supervisorState.dirty', context), true);
+    }
 });
 
 test('canceling a single employee switch restores radio identity without erasing the unsaved form', async () => {

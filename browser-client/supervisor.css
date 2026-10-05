@@ -6,6 +6,7 @@
 .sp-form h4 { margin: 0; font-size: 16px; }
 .sp-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .sp-confirm { display: flex; gap: 8px; align-items: flex-start; }
+.sp-confirm[hidden] { display: none; }
 .sp-confirm input { flex: 0 0 auto; margin-top: 4px; }
 .sp-discard-dialog { max-width: min(460px, calc(100% - 32px)); padding: 20px; border: 1px solid var(--line); border-radius: 8px; }
 .sp-discard-dialog::backdrop { background: rgb(0 0 0 / 35%); }
