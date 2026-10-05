@@ -139,7 +139,13 @@ function renderSupervisorWorkspace() {
         ${spCalendar(data)}${supervisorState.kind === 'meals' ? spMealDetail() : spRequestDetail()}`}
     </section>`;
 }
-function spPaint() { const root = spRoot(); if (root) root.outerHTML = spManagement() ? renderSupervisorAssignments() : renderSupervisorWorkspace(); }
+function spPaint() {
+    const root = spRoot();
+    if (root) {
+        root.outerHTML = spManagement() ? renderSupervisorAssignments() : renderSupervisorWorkspace();
+        setupPaperEmployeePickerSizes();
+    }
+}
 async function spLoad() {
     const identity = supervisorState.identity, sequence = ++supervisorState.sequence, managing = spManagement();
     supervisorState.loading = true;
@@ -252,6 +258,7 @@ handleDashboardChange = async function handleSupervisorChange(event) {
         else { supervisorState.month = target.value; supervisorState.date = `${target.value}-01`; }
         await spLoad(); return;
     }
+    if (target.matches('[data-paper-employee-height]')) return;
     if (target.matches('[data-paper-employee-department]')) return spPreviousChange(event);
     if (target.closest('[data-sp-form]')) {
         if (supervisorState.busy) return;
@@ -311,7 +318,7 @@ handleRealtimeSyncMessage = async function handleSupervisorSync(payload) {
     return spPreviousSync(payload);
 };
 document.addEventListener('input', (event) => {
-    if (!supervisorState.busy && !event.target.matches('[data-paper-employee-search]') && event.target.closest('[data-sp-form]')) supervisorState.dirty = true;
+    if (!supervisorState.busy && !event.target.matches('[data-paper-employee-search], [data-paper-employee-height]') && event.target.closest('[data-sp-form]')) supervisorState.dirty = true;
 });
 const spPreviousLogout = handleLogout;
 handleLogout = function logoutWithSupervisorCleanup(...args) {

@@ -9,14 +9,15 @@ const supervisor = fs.readFileSync(path.join(__dirname, '../browser-client/super
 function section(start, end) { return app.slice(app.indexOf(start), app.indexOf(end, app.indexOf(start))); }
 function setup() {
     const state = { token: 'test', dashboard: { role: 'employee', supervisorProxy: { canUse: true } }, activeSections: {} };
-    const context = vm.createContext({ state, Date, URLSearchParams, auditActionLabels: {}, auditTargetTypeLabels: {}, ui: {},
+    const listeners = {};
+    const context = vm.createContext({ state, Date, URLSearchParams, listeners, auditActionLabels: {}, auditTargetTypeLabels: {}, ui: {},
         escapeHtml: (text) => String(text).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
-        document: { addEventListener() {}, getElementById() { return null; } }, renderDashboard() {}, renderEmployeeWorkspaceItems() { return []; },
+        document: { addEventListener(type, handler) { listeners[type] = handler; }, getElementById() { return null; } }, renderDashboard() {}, renderEmployeeWorkspaceItems() { return []; },
         renderAdminPermissionAwareContent() {}, renderSystemAdminDashboard() {}, postRenderSetup() {}, handleDashboardClick() {},
         handleDashboardChange() {}, handleDashboardSubmit() {}, handleRealtimeSyncMessage() {}, handleLogout() {}, setMessage() {},
         hasCurrentAdminPermission() { return true; }, renderAdminLeaveRouteRows() { return ''; } });
     vm.runInContext(section('function buildDepartmentOptions(', 'function buildEmployeeDirectoryDepartmentOptions('), context);
-    vm.runInContext(section('function renderAdminPaperEmployeePicker(', 'function getAdminPaperRequest('), context);
+    vm.runInContext(section('const paperEmployeePickerHeights', 'function getAdminPaperRequest('), context);
     vm.runInContext(section('const originalHandleDashboardClickWithPaperEmployeePicker', 'function renderAdminPaperLeaveForm('), context);
     vm.runInContext(section('function renderBrowserPunchPermissions(', 'function renderAdminSecuritySection('), context);
     vm.runInContext(supervisor, context);
@@ -54,6 +55,65 @@ test('paper-style picker supports single, multiple, checked and unavailable staf
     assert.ok(!single.includes('paper-select-visible-employees')); assert.ok(!single.includes('paper-clear-employees'));
     const readonly = vm.runInContext("renderAdminPaperEmployeePicker(staff, 'Staff', [], { disabled: true, selectedIds: ['E1'] })", context);
     assert.equal((readonly.match(/ disabled/g) || []).length, 4);
+});
+
+test('list height is independent per picker, retained on rerender and not a permission or form edit', async () => {
+    const context = setup();
+    function sizeField(key) {
+        const control = { value: '186', matches: (selector) => selector.includes('data-paper-employee-height'), closest: () => field };
+        const list = { style: {} }, output = {};
+        const field = { dataset: { paperPickerSizeKey: key }, querySelector: (selector) => selector.includes('height-value') ? output : selector.includes('employee-height') ? control : list };
+        return { field, control, list, output };
+    }
+    const fields = ['enabledIds', 'assignmentEmployeeId', 'supervisorIds'].map(sizeField);
+    for (const [i, dom] of fields.entries()) {
+        dom.control.value = String([400, 250, 600][i]); context.control = dom.control;
+        vm.runInContext('resizePaperEmployeePicker(control)', context);
+        assert.equal(dom.list.style.height, `${dom.control.value}px`);
+        assert.equal(dom.output.textContent, dom.list.style.height);
+        assert.equal(dom.control.defaultValue, dom.control.value);
+        const html = vm.runInContext(`renderAdminPaperEmployeePicker([], 'Staff', [], { name: '${dom.field.dataset.paperPickerSizeKey}', disabled: true })`, context);
+        assert.ok(html.includes(`style="height: ${dom.control.value}px"`));
+        const slider = html.match(/<input type="range"[^>]+>/)[0];
+        assert.ok(!slider.includes('name=') && !slider.includes('disabled'));
+        await context.listeners.input({ target: dom.control });
+        context.event = { target: dom.control }; await vm.runInContext('handleDashboardChange(event)', context);
+        assert.equal(vm.runInContext('supervisorState.dirty', context), false);
+    }
+    for (const [input, expected] of [['9000', '1200'], ['-2', '100'], ['NaN', '186']]) {
+        fields[0].control.value = input; context.control = fields[0].control;
+        vm.runInContext('resizePaperEmployeePicker(control)', context);
+        assert.equal(fields[0].control.value, expected);
+    }
+});
+
+test('native resize synchronizes the slider, ignores collapsed/detached lists and releases old observers', () => {
+    const context = setup(), observers = [], control = {}, output = {};
+    const field = { dataset: { paperPickerSizeKey: 'supervisorIds' }, querySelector: (selector) => selector.includes('height-value') ? output : control };
+    const list = { isConnected: true, height: 360, closest: () => field, getBoundingClientRect() { return { height: this.height }; } };
+    context.document.querySelectorAll = () => [list];
+    context.ResizeObserver = class {
+        constructor(callback) { this.callback = callback; observers.push(this); }
+        observe(target) { this.target = target; }
+        disconnect() { this.disconnected = true; }
+    };
+    vm.runInContext('setupPaperEmployeePickerSizes()', context);
+    assert.equal(observers[0].target, list);
+    observers[0].callback([{ target: list }]); assert.equal(control.value, '360');
+    list.height = 0; observers[0].callback([{ target: list }]); assert.equal(control.value, '360');
+    list.isConnected = false; list.height = 186; observers[0].callback([{ target: list }]); assert.equal(control.value, '360');
+    vm.runInContext('setupPaperEmployeePickerSizes()', context); assert.equal(observers[0].disconnected, true);
+    assert.equal(observers.length, 2);
+});
+
+test('picker CSS permits vertical resizing with natural rows and supervisor forms use the available width', () => {
+    const style = fs.readFileSync(path.join(__dirname, '../browser-client/style.css'), 'utf8');
+    const pickerRule = style.match(/\.paper-employee-picker\s*\{([^}]+)\}/)[1];
+    assert.match(pickerRule, /resize:\s*vertical/); assert.match(pickerRule, /align-content:\s*start/);
+    assert.match(pickerRule, /min-height:\s*100px/); assert.match(pickerRule, /max-height:\s*1200px/);
+    const supervisorStyle = fs.readFileSync(path.join(__dirname, '../browser-client/supervisor.css'), 'utf8');
+    assert.ok(!supervisorStyle.includes('850px'));
+    assert.match(supervisorStyle, /\.sp-form\s*\{[^}]+width:\s*100%/);
 });
 
 test('filtering retains hidden selections, combines department and text, and exposes no-match state', () => {

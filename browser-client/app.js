@@ -3086,6 +3086,7 @@ function postRenderSetup() {
     syncAutomationFormVisibility();
     updateThemePreviewFromForm();
     setupCollapsibleSections();
+    setupPaperEmployeePickerSizes();
     scheduleDataTableColumnFit(ui.dashboardContent);
 }
 
@@ -9223,10 +9224,14 @@ function renderLeaveAuditAlertRows(alerts = []) {
     `;
 }
 
+const paperEmployeePickerHeights = new Map();
+let paperEmployeePickerResizeObserver;
+
 function renderAdminPaperEmployeePicker(employees = [], labelText = "員工", departments = [], options = {}) {
     const { name = 'employeeIds', selectedIds = [], disabledIds = [], disabled = false,
         single = false, maxSelection = 0, inputAttributes = '', notes = {} } = options;
     const selected = new Set(selectedIds), unavailable = new Set(disabledIds);
+    const height = paperEmployeePickerHeights.get(name) || 186;
     const departmentOptions = [...departments, ...employees.map((employee) => ({ name: employee.department }))];
     const employeeItems = employees.map((employee) => {
         const searchText = `${employee.id || ""} ${employee.name || ""} ${employee.department || ""}`.trim();
@@ -9243,7 +9248,7 @@ function renderAdminPaperEmployeePicker(employees = [], labelText = "員工", de
         `;
     }).join("");
     return `
-        <div class="field span-full paper-employee-field" data-paper-employee-field data-paper-selection-limit="${maxSelection}" role="group" aria-label="${escapeHtml(labelText)}">
+        <div class="field span-full paper-employee-field" data-paper-employee-field data-paper-picker-size-key="${escapeHtml(name)}" data-paper-selection-limit="${maxSelection}" role="group" aria-label="${escapeHtml(labelText)}">
             <div class="paper-employee-header">
                 <span>${escapeHtml(labelText)}</span>
                 <span class="paper-employee-count" data-paper-employee-count aria-live="polite">已選 ${employees.filter((e) => selected.has(e.id)).length} 位 / 顯示 ${employees.length} 位</span>
@@ -9256,12 +9261,47 @@ function renderAdminPaperEmployeePicker(employees = [], labelText = "員工", de
                 ${single ? '' : `<button class="outline-btn" type="button" data-action="paper-select-visible-employees" ${disabled ? 'disabled' : ''}>選取顯示</button>
                 <button class="outline-btn" type="button" data-action="paper-clear-employees" ${disabled ? 'disabled' : ''}>清除</button>`}
             </div>
-            <div class="paper-employee-picker" data-paper-employee-picker>
+            <div class="paper-employee-picker" data-paper-employee-picker style="height: ${height}px">
                 ${employeeItems}
                 <p class="helper-text paper-employee-empty" data-paper-employee-empty ${employees.length ? 'hidden' : ''}>${employees.length ? '沒有符合篩選的員工。' : '目前沒有可選員工。'}</p>
             </div>
+            <label class="paper-employee-size">
+                <span>名單高度</span>
+                <input type="range" min="100" max="1200" step="1" value="${height}" data-paper-employee-height aria-label="${escapeHtml(labelText)}名單高度">
+                <output data-paper-employee-height-value>${height}px</output>
+            </label>
         </div>
     `;
+}
+
+function syncPaperEmployeePickerHeight(field, height) {
+    const value = Math.round(Math.min(1200, Math.max(100, Number(height) || 186)));
+    paperEmployeePickerHeights.set(field.dataset.paperPickerSizeKey, value);
+    const control = field.querySelector('[data-paper-employee-height]');
+    control.value = String(value);
+    control.defaultValue = String(value);
+    field.querySelector('[data-paper-employee-height-value]').textContent = `${value}px`;
+    return value;
+}
+
+function resizePaperEmployeePicker(control) {
+    const field = control.closest('[data-paper-employee-field]');
+    if (!field) return;
+    const height = syncPaperEmployeePickerHeight(field, control.value);
+    field.querySelector('[data-paper-employee-picker]').style.height = `${height}px`;
+}
+
+function setupPaperEmployeePickerSizes() {
+    paperEmployeePickerResizeObserver?.disconnect();
+    if (typeof ResizeObserver === 'undefined') return;
+    // Native resize handles and the accessible slider share the same session-only preference.
+    paperEmployeePickerResizeObserver = new ResizeObserver((entries) => {
+        entries.forEach(({ target }) => {
+            const height = target.getBoundingClientRect().height;
+            if (target.isConnected && height > 0) syncPaperEmployeePickerHeight(target.closest('[data-paper-employee-field]'), height);
+        });
+    });
+    document.querySelectorAll('[data-paper-employee-picker]').forEach((picker) => paperEmployeePickerResizeObserver.observe(picker));
 }
 
 function collectAdminPaperEmployeeIds(form) {
@@ -12838,6 +12878,10 @@ function initialize() {
         }
         if (event.target.matches("[data-paper-employee-search]")) {
             filterAdminPaperEmployeePicker(event.target);
+            return;
+        }
+        if (event.target.matches('[data-paper-employee-height]')) {
+            resizePaperEmployeePicker(event.target);
             return;
         }
         const dataTable = event.target.closest(".data-table");

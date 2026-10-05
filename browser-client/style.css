@@ -1179,12 +1179,44 @@ textarea:disabled {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 8px;
-    max-height: 186px;
+    align-content: start;
+    height: 186px;
+    min-height: 100px;
+    max-height: 1200px;
+    resize: vertical;
+    box-sizing: border-box;
     overflow: auto;
     padding: 8px;
     border: 1px solid rgba(113, 177, 207, 0.28);
     border-radius: 12px;
     background: rgba(255, 255, 255, 0.72);
+}
+
+.paper-employee-size {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 0.84rem;
+    font-weight: 700;
+}
+
+.paper-employee-size input[type="range"] {
+    width: min(220px, 50%);
+    min-width: 100px;
+    height: 32px;
+    padding: 0;
+    border: 0;
+    box-shadow: none;
+    background: transparent;
+    accent-color: var(--brand);
+}
+
+.paper-employee-size output {
+    flex: 0 0 56px;
+    text-align: right;
 }
 
 .paper-employee-option {
