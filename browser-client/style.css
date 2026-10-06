@@ -4013,3 +4013,5 @@ body::after {
     .meal-section-heading { align-items: flex-start; }
     .meal-section-heading span { font-size: 13px; }
 }
+
+[data-request-history-settings] fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }

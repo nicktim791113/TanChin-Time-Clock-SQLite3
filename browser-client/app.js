@@ -7963,6 +7963,24 @@ function renderBrowserPunchPermissions(data) {
         </form></section>`;
 }
 
+function renderRequestHistorySettings(data) {
+    if (!data) return '';
+    const canManage = state.dashboard?.role === 'system_admin' || hasCurrentAdminPermission('admin.security.manage');
+    return `<section aria-label="員工紀錄可見範圍"><h3>員工紀錄可見範圍</h3>
+        <form data-request-history-settings class="stack-form">
+            <input type="hidden" name="revision" value="${escapeHtml(data.revision)}">
+            <fieldset class="field-grid" ${canManage ? '' : 'disabled'}>${['leave', 'overtime'].map((kind) => {
+                const label = kind === 'leave' ? '請假' : '加班', months = data.settings[kind];
+                return `<div class="stack-form"><label class="sp-confirm"><input type="checkbox" name="${kind}Limited" ${months == null ? '' : 'checked'}>限制${label}紀錄回看範圍</label>
+                    <label class="field"><span>${label}回看月數（本月另計）</span><input type="number" name="${kind}Months" min="0" max="120" step="1" value="${months ?? 3}" required ${months == null ? 'disabled' : ''}></label></div>`;
+            }).join('')}</fieldset>
+            ${canManage ? `<label class="field"><span>設定原因</span><input name="reason" maxlength="500" required></label>
+                <label class="sp-confirm"><input type="checkbox" name="confirmHistory" required>確認更新全體員工的紀錄可見範圍</label>
+                <button class="primary-btn" type="submit">儲存紀錄可見範圍</button>` : ''}
+            <div class="inline-message" data-history-message aria-live="polite"></div>
+        </form></section>`;
+}
+
 function renderAdminSecuritySection(datasets) {
     const security = datasets.security || {
         settings: {
@@ -8091,6 +8109,7 @@ function renderAdminSecuritySection(datasets) {
                 ${recentPunchItems}
             </article>
             <article class="sub-panel">${renderBrowserPunchPermissions(security.browserPunchPermissions)}</article>
+            <article class="sub-panel">${renderRequestHistorySettings(security.requestHistorySettings)}</article>
         </div>
     `;
 }
@@ -10319,6 +10338,41 @@ function collectAdminLeaveRoutes(form) {
     })).filter((route) => route.department && route.supervisor_id);
 }
 
+const previousHistoryChange = handleDashboardChange;
+handleDashboardChange = async function handleHistorySettingsChange(event) {
+    const form = event.target.closest('[data-request-history-settings]');
+    if (!form) return previousHistoryChange(event);
+    form.dataset.historyDirty = 'true';
+    for (const kind of ['leave', 'overtime']) {
+        if (event.target.name === `${kind}Limited`) form.querySelector(`[name="${kind}Months"]`).disabled = !event.target.checked;
+    }
+};
+document.addEventListener('input', (event) => {
+    const form = event.target.closest('[data-request-history-settings]');
+    if (form) form.dataset.historyDirty = 'true';
+});
+const previousHistorySubmit = handleDashboardSubmit;
+handleDashboardSubmit = async function handleHistorySettingsSubmit(event) {
+    const form = event.target.closest('[data-request-history-settings]');
+    if (!form) return previousHistorySubmit(event);
+    event.preventDefault();
+    const button = form.querySelector('[type="submit"]'), token = state.token;
+    if (!button || button.disabled) return;
+    const fields = new FormData(form), message = form.querySelector('[data-history-message]');
+    form.dataset.historyBusy = 'true';
+    const controls = [...form.querySelectorAll('input, button')].map((control) => [control, control.disabled]);
+    controls.forEach(([control]) => { control.disabled = true; });
+    try {
+        const settings = Object.fromEntries(['leave', 'overtime'].map((kind) => [kind, fields.has(`${kind}Limited`) ? Number(fields.get(`${kind}Months`)) : null]));
+        if (!fields.has('confirmHistory')) throw new Error('請確認更新全體員工的紀錄可見範圍。');
+        const result = await requestJson('/api/browser/request-history/settings', { auth: true, method: 'POST', body: {
+            settings, revision: fields.get('revision'), reason: fields.get('reason'), confirmHistory: true
+        } });
+        if (state.token === token) await reloadDashboard(result.message, 'success');
+    } catch (error) { if (state.token === token) setMessage(message, error.message, 'error'); }
+    finally { delete form.dataset.historyBusy; controls.forEach(([control, disabled]) => { if (control.isConnected) control.disabled = disabled; }); }
+};
+
 const originalHandleDashboardSubmitWithPunchPermissions = handleDashboardSubmit;
 handleDashboardSubmit = async function handlePunchPermissionSubmit(event) {
     const form = event.target.closest('[data-browser-punch-permissions]');
@@ -11289,6 +11343,7 @@ function renderSystemAdminDashboard(dashboard) {
             })}
             ${renderSystemAdminCredentialsPanel(dashboard)}
             ${renderAccountAccessManager(dashboard?.datasets?.accountAccess)}
+            ${renderRequestHistorySettings(dashboard?.datasets?.requestHistorySettings)}
         </div>
     `;
 }
@@ -12197,7 +12252,8 @@ const workspaceSubnavConfigs = {
                         { id: "settings", label: "遠端打卡規則", panelIndex: 1 },
                         { id: "devices", label: "裝置綁定清單", panelIndex: 2 },
                         { id: "recent", label: "最近安全紀錄", panelIndex: 3 },
-                        { id: "punchPermissions", label: "員工網頁打卡權限", panelIndex: 4 }
+                        { id: "punchPermissions", label: "員工網頁打卡權限", panelIndex: 4 },
+                        { id: "requestHistory", label: "員工紀錄可見範圍", panelIndex: 5 }
                     ]
                 }
             ]

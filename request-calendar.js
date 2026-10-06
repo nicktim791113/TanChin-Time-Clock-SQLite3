@@ -59,6 +59,8 @@ function attachRequestCalendarRoutes(server, context) {
                         const range = monthRange(input.month);
                         const scope = input.scope || 'mine';
                         if (!['mine', 'review'].includes(scope)) throw invalid('無效的紀錄範圍。');
+                        const historyWindow = role === 'employee' && scope === 'mine' ? db.getRequestHistory().window(kind) : null;
+                        if (historyWindow?.earliestMonth && range.month < historyWindow.earliestMonth) throw Object.assign(new Error(`本人${kind === 'leave' ? '請假' : '加班'}紀錄最早可查看 ${historyWindow.earliestMonth}；更早紀錄請洽有查詢權限的管理者。`), { status: 403 });
                         if (input.status && !REQUEST_STATUSES.includes(input.status)) throw invalid('無效的申請狀態。');
                         if (kind === 'overtime' && input.status === 'pending_admin') throw invalid('無效的加班狀態。');
                         if (input.date && !range.dates.includes(input.date)) throw invalid('日期必須在選取月份內。');
@@ -84,6 +86,7 @@ function attachRequestCalendarRoutes(server, context) {
                             (!input.leaveTypeId || (kind === 'leave' && row.leave_type_id === input.leaveTypeId))
                         ));
                         const calendar = buildCalendar(range.month, rows);
+                        calendar.historyWindow = historyWindow;
                         // Filter options are derived only from authorized records, never the whole roster.
                         const employeeIds = [...new Set(scopedRows.map((row) => row.employee_id))];
                         calendar.employees = employeeIds.map((id) => ({ id, name: lookup.employeeMap.get(id)?.name || id, department: lookup.employeeMap.get(id)?.department || '' }));

@@ -126,6 +126,7 @@ $projectFiles = @(
     "meal-management.js",
     "meal-routes.js",
     "request-calendar.js",
+    "request-history.js",
     "supervisor-management.js",
     "supervisor-routes.js",
     "browser-punch-permissions.js",

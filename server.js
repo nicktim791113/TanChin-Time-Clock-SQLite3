@@ -9,6 +9,7 @@ const { createBrowserAccounts, RESET_PERMISSION, REVEAL_PERMISSION } = require('
 const { attachMealRoutes } = require('./meal-routes');
 const { attachRequestCalendarRoutes } = require('./request-calendar');
 const { attachSupervisorRoutes } = require('./supervisor-routes');
+const { attachRequestHistoryRoutes } = require('./request-history');
 const {
   ATTENDANCE_EXPORT_FIELD_DEFINITIONS,
   DEFAULT_ATTENDANCE_EXPORT_TEMPLATE_ID,
@@ -1884,12 +1885,14 @@ function formatLeaveRequestForDashboard(request, lookup = buildLeaveLookup()) {
 }
 
 function getEmployeeLeaveState(employee) {
+  const historyNow = Date.now();
   const employees = dbModule.loadEmployees();
   const leaveTypes = dbModule.loadLeaveTypes();
   const lookup = buildLeaveLookup(employees, leaveTypes);
   return {
     leaveTypes: leaveTypes.filter((type) => type.enabled),
-    myRequests: dbModule.queryLeaveRequests({ employeeId: employee.id, limit: 50 })
+    historyWindow: dbModule.getRequestHistory().window('leave', historyNow),
+    myRequests: dbModule.queryLeaveRequests({ employeeId: employee.id, ...dbModule.getRequestHistory().filters('leave', historyNow), limit: 50 })
       .map((request) => formatLeaveRequestForDashboard(request, lookup)),
     supervisorQueue: dbModule.queryLeaveRequests({
       supervisorId: employee.id,
@@ -2447,6 +2450,7 @@ function getSupervisedEmployees(supervisorId, employees = dbModule.loadEmployees
 }
 
 function getEmployeeOvertimeState(employee) {
+  const historyNow = Date.now();
   const employees = dbModule.loadEmployees();
   const routes = dbModule.loadLeaveApprovalRoutes();
   const lookup = buildOvertimeLookup(employees);
@@ -2460,7 +2464,8 @@ function getEmployeeOvertimeState(employee) {
       job_title: item.job_title,
       isSelf: item.id === employee.id
     })),
-    myRequests: dbModule.queryOvertimeRequests({ employeeOrApplicantId: employee.id, limit: 80 })
+    historyWindow: dbModule.getRequestHistory().window('overtime', historyNow),
+    myRequests: dbModule.queryOvertimeRequests({ employeeOrApplicantId: employee.id, ...dbModule.getRequestHistory().filters('overtime', historyNow), limit: 80 })
       .map((request) => formatOvertimeRequestForDashboard(request, lookup)),
     supervisorQueue: dbModule.queryOvertimeRequests({
       supervisorId: employee.id,
@@ -2968,7 +2973,7 @@ function getAdminDatasets(session = {}) {
       canView: canOvertimeView,
       canPaperCreate: canOvertimePaperCreate
     }) : null,
-    security: canSecurity ? { ...getAdminSecurityDatasets(), browserPunchPermissions: dbModule.getBrowserPunchPermissions().state() } : null,
+    security: canSecurity ? { ...getAdminSecurityDatasets(), browserPunchPermissions: dbModule.getBrowserPunchPermissions().state(), requestHistorySettings: dbModule.getRequestHistory().state() } : null,
     accountAccess: null,
     meals: hasAdminPermission(session, 'admin.meals.view') ? dbModule.getMeals().calendar() : null,
     settings: {
@@ -3291,7 +3296,8 @@ function buildSystemAdminDashboard() {
         username: credentials.username
       },
       accountAccess,
-      browserPunchPermissions: dbModule.getBrowserPunchPermissions().state()
+      browserPunchPermissions: dbModule.getBrowserPunchPermissions().state(),
+      requestHistorySettings: dbModule.getRequestHistory().state()
     }
   };
 }
@@ -7555,6 +7561,11 @@ function createServerApp() {
 
   attachExternalApiRoutes(server);
   attachBrowserRoutes(server);
+  attachRequestHistoryRoutes(server, {
+    db: dbModule, requireSession: requireBrowserSession, requirePermission: requireAdminPermission,
+    auditEntry: buildBrowserAuditLogEntry,
+    notify: (request) => { notifyDesktop('requestHistorySettings', getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); }
+  });
   attachRequestCalendarRoutes(server, {
     db: dbModule, requireSession: requireBrowserSession, requireRole: requireBrowserRole,
     requirePermission: requireAdminPermission,

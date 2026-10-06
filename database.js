@@ -6,10 +6,12 @@ const webCredentials = require('./web-credentials');
 const { createMealStore } = require('./meal-management');
 const { createSupervisorStore } = require('./supervisor-management');
 const { createBrowserPunchPermissionStore } = require('./browser-punch-permissions');
+const { createRequestHistoryStore } = require('./request-history');
 let db = null;
 let meals = null;
 let supervisors = null;
 let browserPunchPermissions = null;
+let requestHistory = null;
 let currentDbFilePath = '';
 
 function init(dbFilePath) {
@@ -465,6 +467,7 @@ function init(dbFilePath) {
   seedDefaultLeaveTypes();
   supervisors = createSupervisorStore(db, (entry) => addAuditLog(entry));
   browserPunchPermissions = createBrowserPunchPermissionStore(db, (entry) => addAuditLog(entry));
+  requestHistory = createRequestHistoryStore(db, (entry) => addAuditLog(entry));
 }
 
 function close() {
@@ -474,6 +477,7 @@ function close() {
   meals = null;
   supervisors = null;
   browserPunchPermissions = null;
+  requestHistory = null;
   currentDbFilePath = '';
 }
 
@@ -1030,6 +1034,10 @@ const buildLeaveRequestWhere = (filters = {}) => {
         clauses.push('start_at <= ? AND end_at > ?');
         params.push(Number(filters.overlapEndAt) || 0, Number(filters.overlapStartAt) || 0);
     }
+    if (filters.endAfterAt !== undefined) {
+        clauses.push('end_at > ?');
+        params.push(Number(filters.endAfterAt));
+    }
     if (Number.isFinite(Number(filters.snapshotCreatedAt)) && filters.snapshotId) {
         // ★ [3] 固定在首次查詢的最新資料上界，讓 OFFSET 翻頁不受後續新申請插入影響。
         clauses.push('(created_at < ? OR (created_at = ? AND id <= ?))');
@@ -1330,6 +1338,10 @@ const buildOvertimeRequestWhere = (filters = {}) => {
     if (filters.overlapStartAt !== undefined && filters.overlapEndAt !== undefined) {
         clauses.push('start_at <= ? AND end_at > ?');
         params.push(Number(filters.overlapEndAt) || 0, Number(filters.overlapStartAt) || 0);
+    }
+    if (filters.endAfterAt !== undefined) {
+        clauses.push('end_at > ?');
+        params.push(Number(filters.endAfterAt));
     }
     if (Number.isFinite(Number(filters.snapshotCreatedAt)) && filters.snapshotId) {
         // ★ [3] 請假與加班分頁共用同一種快照上界語意。
@@ -2139,6 +2151,7 @@ const countPunchFailureAuditLogsSince = (startTimestamp, excludedFailureCodes = 
 module.exports = {
   getSupervisors: () => supervisors,
   getBrowserPunchPermissions: () => browserPunchPermissions,
+  getRequestHistory: () => requestHistory,
   getMeals: () => meals,
   init, close,
   getDatabasePath, backupDatabase, validateBackupDatabaseFile, replaceDatabaseFromBackup,
