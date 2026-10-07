@@ -243,7 +243,7 @@ test('supervisor UI escapes staff text, uses inline withdrawal and discards stal
     const requested = [];
     context.requestJson = async (url) => { requested.push(url); return { routes: { approvalRoutes: [], employees: [], departments: [] } }; };
     await vm.runInContext('spLoad()', context);
-    assert.deepEqual(requested, ['/api/browser/supervisors/routes']);
+    assert.deepEqual(requested, ['/api/browser/supervisors/reviewers']);
     const html = vm.runInContext('renderSupervisorAssignments()', context);
     assert.ok(html.includes('請假／加班共用主管審核路徑')); assert.ok(!html.includes('指定代辦主管'));
 });

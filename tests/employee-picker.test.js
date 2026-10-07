@@ -21,6 +21,7 @@ function setup() {
     vm.runInContext(section('const originalHandleDashboardClickWithPaperEmployeePicker', 'function renderAdminPaperLeaveForm('), context);
     vm.runInContext(section('function renderBrowserPunchPermissions(', 'function renderAdminSecuritySection('), context);
     vm.runInContext(supervisor, context);
+    vm.runInContext("supervisorState.managementView = 'assignments'", context);
     return context;
 }
 
@@ -172,6 +173,17 @@ test('proxy leave and overtime forms appear immediately; meal and assignment pic
     assert.ok(targets.includes('value="add"')); assert.ok(targets.includes('value="replace"'));
     const punch = vm.runInContext("renderBrowserPunchPermissions({ revision: 'test', employees: [{ id: 'E1', name: 'One', enabled: true }, { id: 'E2', name: 'Two', enabled: false }] })", context);
     assert.equal((punch.match(/name="enabledIds"/g) || []).length, 2); assert.ok(punch.includes('paper-select-visible-employees'));
+});
+
+test('optional single-reviewer clear clears radios without enabling select-all or touching locked choices', async () => {
+    const context = setup(), dom = picker(['S1', 'S2'], { selected: ['S1'], disabled: ['S2'] });
+    dom.items.forEach((item) => { item.input.type = 'radio'; });
+    context.event = dom.event('paper-select-visible-employees'); await vm.runInContext('handleDashboardClick(event)', context);
+    assert.deepEqual(dom.items.map((item) => item.input.checked), [true, false]);
+    context.event = dom.event('paper-clear-employees'); await vm.runInContext('handleDashboardClick(event)', context);
+    assert.deepEqual(dom.items.map((item) => item.input.checked), [false, false]);
+    const html = vm.runInContext("renderAdminPaperEmployeePicker([{id:'S1',name:'One'}], 'Reviewer', [], { single:true, allowClear:true })", context);
+    assert.ok(html.includes('paper-clear-employees')); assert.ok(!html.includes('paper-select-visible-employees'));
 });
 
 test('assignment submit sends both selections with per-employee revisions and keeps height out of the payload', async () => {

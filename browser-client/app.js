@@ -1811,7 +1811,10 @@ function getSupervisorDepartmentsForEmployee(employeeId, datasets = getDatasets(
     const routes = datasets?.leave?.approvalRoutes || [];
     return routes
         .filter((route) => route.enabled !== false && String(route.supervisor_id || route.supervisorId || "").trim() === String(employeeId || "").trim())
-        .map((route) => String(route.department || "").trim())
+        .map((route) => {
+            const employee = datasets.employees?.find((e) => e.id === route.employee_id);
+            return employee ? `${employee.id} ${employee.name}` : '';
+        })
         .filter(Boolean);
 }
 
@@ -1820,7 +1823,7 @@ function renderEmployeeNameWithSupervisorHint(employee) {
     const nameText = escapeHtml(employee.name || "-");
     if (!departments.length) return nameText;
     const departmentText = departments.slice(0, 3).join("、");
-    const overflowText = departments.length > 3 ? ` 等 ${departments.length} 個部門` : "";
+    const overflowText = departments.length > 3 ? ` 等 ${departments.length} 位員工` : "";
     return `
         <div class="employee-name-stack">
             <span>${nameText}</span>
@@ -3696,7 +3699,7 @@ async function handleDashboardClick(event) {
             const supervisorDepartments = getSupervisorDepartmentsForEmployee(actionTarget.dataset.id, datasets);
             const suffix = supervisorDepartments.length
                 ? `目前負責：${supervisorDepartments.join("、")}`
-                : "可在主管審核路徑中設定這位員工負責的部門。";
+                : "可在主管審核頁面個別指定這位主管負責的員工。";
             setMessage(ui.dashboardMessage, `${employee?.name || actionTarget.dataset.id} 的共用主管設定已開啟。${suffix}`, "info");
             return;
         }
@@ -9038,7 +9041,7 @@ function renderEmployeeLeaveModule(dashboard) {
             <div class="list-toolbar">
                 <div>
                     <h3>請假申請</h3>
-                    <p class="helper-text">送出後會先交由部門主管審核，主管核准後再由管理部終審，終審核准才會生效。</p>
+                    <p class="helper-text">送出後會先交由指定主管審核，主管核准後再由管理部終審，終審核准才會生效。</p>
                 </div>
                 ${renderBadge(`可用假別 ${leaveTypes.length} 種`, "success")}
             </div>
@@ -9248,7 +9251,7 @@ let paperEmployeePickerResizeObserver;
 
 function renderAdminPaperEmployeePicker(employees = [], labelText = "員工", departments = [], options = {}) {
     const { name = 'employeeIds', selectedIds = [], disabledIds = [], disabled = false,
-        single = false, maxSelection = 0, inputAttributes = '', notes = {} } = options;
+        single = false, allowClear = false, maxSelection = 0, inputAttributes = '', notes = {} } = options;
     const selected = new Set(selectedIds), unavailable = new Set(disabledIds);
     const height = paperEmployeePickerHeights.get(name) || 186;
     const departmentOptions = [...departments, ...employees.map((employee) => ({ name: employee.department }))];
@@ -9277,8 +9280,8 @@ function renderAdminPaperEmployeePicker(employees = [], labelText = "員工", de
                 <select data-paper-employee-department aria-label="${escapeHtml(labelText)}部門">
                     ${buildDepartmentOptions(departmentOptions, "", { enabledOnly: false, blankLabel: "全部部門" })}
                 </select>
-                ${single ? '' : `<button class="outline-btn" type="button" data-action="paper-select-visible-employees" ${disabled ? 'disabled' : ''}>選取顯示</button>
-                <button class="outline-btn" type="button" data-action="paper-clear-employees" ${disabled ? 'disabled' : ''}>清除</button>`}
+                ${single ? '' : `<button class="outline-btn" type="button" data-action="paper-select-visible-employees" ${disabled ? 'disabled' : ''}>選取顯示</button>`}
+                ${!single || allowClear ? `<button class="outline-btn" type="button" data-action="paper-clear-employees" ${disabled ? 'disabled' : ''}>清除</button>` : ''}
             </div>
             <div class="paper-employee-picker" data-paper-employee-picker style="height: ${height}px">
                 ${employeeItems}
@@ -9477,7 +9480,7 @@ handleDashboardClick = async function handleDashboardClickPaperEmployeePickerOve
         let count = field.querySelectorAll('[data-paper-employee-checkbox]:checked').length;
         field.querySelectorAll("[data-paper-employee-item]").forEach((item) => {
             const checkbox = item.querySelector('[data-paper-employee-checkbox]');
-            if (!checkbox || checkbox.disabled || checkbox.type !== 'checkbox') return;
+            if (!checkbox || checkbox.disabled || (checkbox.type !== 'checkbox' && action !== 'paper-clear-employees')) return;
             if (action === "paper-clear-employees") checkbox.checked = false;
             else if (!item.classList.contains("is-hidden") && !checkbox.checked && count < limit) { checkbox.checked = true; count += 1; }
         });
@@ -9757,7 +9760,7 @@ function renderAdminLeaveSection(datasets) {
                         ${canReview ? renderBadge(`全部請假 ${pageState.totalCount} 筆`) : ""}
                     </div>
                 </div>
-                <p class="helper-text">請假流程採「員工送出 → 部門主管審核 → 管理部終審」；只有終審核准後才視為生效。</p>
+                <p class="helper-text">請假流程採「員工送出 → 指定主管審核 → 管理部終審」；只有終審核准後才視為生效。</p>
             </article>
 
             ${renderAdminPaperLeaveForm(datasets)}

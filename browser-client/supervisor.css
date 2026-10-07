@@ -10,7 +10,7 @@
 .sp-confirm input { flex: 0 0 auto; margin-top: 4px; }
 .sp-discard-dialog { max-width: min(460px, calc(100% - 32px)); padding: 20px; border: 1px solid var(--line); border-radius: 8px; }
 .sp-discard-dialog::backdrop { background: rgb(0 0 0 / 35%); }
-.sp-table-scroll { overflow-x: auto; max-width: 100%; }
+.sp-table-scroll { overflow-x: auto; max-width: 100%; min-width: 0; }
 .sp-table { width: 100%; border-collapse: collapse; text-align: left; min-width: 550px; }
 .sp-table th, .sp-table td { padding: 10px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .sp-day-detail { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 16px; }
@@ -19,7 +19,17 @@
 .sp-calendar .meal-date { min-width: 0; }
 .sp-calendar .meal-date-deadline { white-space: normal; overflow-wrap: anywhere; }
 .sp-workspace input, .sp-workspace select, .sp-workspace button { max-width: 100%; }
-.sp-route-section { border-bottom: 1px solid var(--line); margin-bottom: 24px; padding-bottom: 16px; }
+.sp-route-section { border-bottom: 1px solid var(--line); margin-bottom: 24px; padding-bottom: 16px; min-width: 0; }
+.sp-workspace .workspace-subnav-content { grid-template-columns: minmax(0, 1fr); }
+.sp-assignment-submit-row, .sp-review-submit-row { display: grid; gap: 12px; align-items: end; min-width: 0; }
+.sp-assignment-submit-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.7fr) max-content; }
+.sp-review-submit-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) max-content; }
+.sp-assignment-submit-row .field, .sp-review-submit-row .field { min-width: 0; }
+.sp-assignment-submit-row .sp-confirm, .sp-review-submit-row .sp-confirm { align-self: center; overflow-wrap: anywhere; }
+.sp-assignment-submit-row input:not([type="checkbox"]), .sp-assignment-submit-row select, .sp-review-submit-row input:not([type="checkbox"]) { width: 100%; min-width: 0; box-sizing: border-box; }
+@media (max-width: 1050px) {
+    .sp-assignment-submit-row, .sp-review-submit-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .browser-punch-permission-panel { min-width: 0; margin-top: 18px; }
 .request-period-grid, .request-meta-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: start; }
 .request-meta-grid .request-reason { grid-column: span 2; }
@@ -30,6 +40,7 @@
 }
 @media (max-width: 600px) {
     .sp-form-grid { grid-template-columns: minmax(0, 1fr); }
+    .sp-assignment-submit-row, .sp-review-submit-row { grid-template-columns: minmax(0, 1fr); }
     .sp-calendar .meal-date-status { font-size: 12px; }
     .sp-calendar .meal-date-deadline { font-size: 10px; }
 }

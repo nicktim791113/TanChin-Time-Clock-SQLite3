@@ -334,11 +334,13 @@ const API_ROUTE_CATALOG = [
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/browser-punch-permissions', auth: '安全管理者或系統管理者', description: '設定個別員工網頁打卡權限，不影響實體卡' },
   { category: '主管設定 API', method: 'GET', path: '/api/browser/supervisors/routes', auth: '審核路徑設定權限或系統管理者', description: '讀取請假／加班共用部門主管審核路徑' },
   { category: '主管設定 API', method: 'POST', path: '/api/browser/supervisors/routes', auth: '審核路徑設定權限或系統管理者', description: '儲存請假／加班共用部門主管審核路徑' },
+  { category: '主管設定 API', method: 'GET', path: '/api/browser/supervisors/reviewers', auth: '審核路徑設定權限或系統管理者', description: '讀取個別員工請假／加班審核主管' },
+  { category: '主管設定 API', method: 'POST', path: '/api/browser/supervisors/reviewers/batch', auth: '審核路徑設定權限或系統管理者', description: '批量指定個別員工的單一審核主管；完整版本、原因、確認與稽核' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/leave/request', auth: '員工', description: '員工送出請假申請' },
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/employee/leave/calendar?month=YYYY-MM', auth: '員工', description: '本人請假月曆／指定主管待審，台北日期、月份重疊與明細分頁' },
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/employee/overtime/calendar?month=YYYY-MM', auth: '員工', description: '本人與本人代申請加班月曆／指定主管待審，完整月份查詢' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/leave/withdraw', auth: '員工', description: '員工撤回尚未終審的請假申請' },
-  { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/leave/supervisor-decision', auth: '員工主管', description: '主管審核部門員工請假申請' },
+  { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/leave/supervisor-decision', auth: '員工主管', description: '原案件指定主管審核員工請假申請' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/overtime/request', auth: '員工', description: '員工或主管送出加班申請' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/overtime/withdraw', auth: '員工', description: '員工撤回尚未核准的加班申請' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/overtime/supervisor-decision', auth: '員工主管', description: '主管審核加班申請' },
@@ -1831,10 +1833,8 @@ function calculateLeaveDurationHours(startAt, endAt, submittedHours) {
   return Math.max(0, Math.round(((Number(endAt) - Number(startAt)) / 36_000) / 100));
 }
 
-function getLeaveSupervisorForEmployee(employee, routes = dbModule.loadLeaveApprovalRoutes()) {
-  const department = String(employee?.department || '').trim();
-  const route = routes.find((item) => item.enabled && String(item.department || '').trim() === department)
-    || routes.find((item) => item.enabled && ['*', '全部', '預設'].includes(String(item.department || '').trim()));
+function getLeaveSupervisorForEmployee(employee, routes = dbModule.getReviewSupervisors().rows()) {
+  const route = routes.find((item) => item.employee_id === employee?.id && item.supervisor_id !== employee.id);
   return route?.supervisor_id || '';
 }
 
@@ -2043,7 +2043,7 @@ function getAdminLeaveState(employees = dbModule.loadEmployees(), options = {}) 
     : [];
   return {
     leaveTypes,
-    approvalRoutes: canSettings ? dbModule.loadLeaveApprovalRoutes() : [],
+    approvalRoutes: canSettings ? dbModule.getReviewSupervisors().rows() : [],
     requests: requestsPage.records,
     requestsPage,
     pendingAdmin,
@@ -2440,7 +2440,7 @@ function formatOvertimeRequestForExternal(request, lookup = buildOvertimeLookup(
   };
 }
 
-function getSupervisedEmployees(supervisorId, employees = dbModule.loadEmployees(), routes = dbModule.loadLeaveApprovalRoutes()) {
+function getSupervisedEmployees(supervisorId, employees = dbModule.loadEmployees(), routes = dbModule.getReviewSupervisors().rows()) {
   const normalizedSupervisorId = String(supervisorId || '').trim();
   if (!normalizedSupervisorId) return [];
   return employees.filter((employee) =>
@@ -2452,7 +2452,7 @@ function getSupervisedEmployees(supervisorId, employees = dbModule.loadEmployees
 function getEmployeeOvertimeState(employee) {
   const historyNow = Date.now();
   const employees = dbModule.loadEmployees();
-  const routes = dbModule.loadLeaveApprovalRoutes();
+  const routes = dbModule.getReviewSupervisors().rows();
   const lookup = buildOvertimeLookup(employees);
   const supervisedEmployees = getSupervisedEmployees(employee.id, employees, routes);
   const eligibleEmployeeMap = new Map([employee, ...supervisedEmployees].map((item) => [item.id, item]));
@@ -5200,10 +5200,11 @@ function attachBrowserRoutes(server) {
 
       const supervisorId = getLeaveSupervisorForEmployee(employee);
       if (!supervisorId) {
-        throw createHttpError(`尚未設定「${employee.department || '未指定部門'}」的請假主管審核路徑，請先聯絡管理者。`, 400);
+        throw createHttpError(`尚未指定 ${employee.id} ${employee.name} 的請假／加班審核主管，請先聯絡管理者。`, 400);
       }
+      if (supervisorId === employee.id) throw createHttpError('不能由本人審核自己的請假，請聯絡管理者指定其他主管。', 400);
       if (!getEmployeeById(supervisorId)) {
-        throw createHttpError('此部門設定的請假主管不存在，請先聯絡管理者修正。', 400);
+        throw createHttpError('指定的審核主管不存在，請先聯絡管理者修正。', 400);
       }
 
       const now = Date.now();
@@ -5313,7 +5314,7 @@ function attachBrowserRoutes(server) {
       if (!applicant) throw createHttpError('登入帳號對應的員工資料已不存在，請重新登入。', 401);
 
       const employees = dbModule.loadEmployees();
-      const routes = dbModule.loadLeaveApprovalRoutes();
+      const routes = dbModule.getReviewSupervisors().rows();
       const targetEmployeeId = String(request.body?.employeeId || request.body?.employee_id || applicant.id).trim();
       const targetEmployee = employees.find((employee) => employee.id === targetEmployeeId) || null;
       if (!targetEmployee) throw createHttpError('找不到指定的加班員工。', 404);
@@ -5327,13 +5328,13 @@ function attachBrowserRoutes(server) {
 
       const supervisorId = getLeaveSupervisorForEmployee(targetEmployee, routes);
       if (!supervisorId) {
-        throw createHttpError(`尚未設定「${targetEmployee.department || '未指定部門'}」的主管審核路徑，請先聯絡管理者。`, 400);
+        throw createHttpError(`尚未指定 ${targetEmployee.id} ${targetEmployee.name} 的請假／加班審核主管，請先聯絡管理者。`, 400);
       }
       if (isSelfRequest && supervisorId === applicant.id) {
         throw createHttpError('主管本人提出加班申請時仍需上層主管審核，請先在主管審核路徑中指定上層主管。', 400);
       }
       if (!employees.some((employee) => employee.id === supervisorId)) {
-        throw createHttpError('此部門設定的主管不存在，請先聯絡管理者修正。', 400);
+        throw createHttpError('指定的審核主管不存在，請先聯絡管理者修正。', 400);
       }
 
       const startAt = parseLeaveDateTime(request.body?.startDate, request.body?.startTime, '18:00');
@@ -6523,14 +6524,28 @@ function attachBrowserRoutes(server) {
   };
   const supervisorRoutesState = () => {
     const data = { approvalRoutes: dbModule.loadLeaveApprovalRoutes(),
-      employees: dbModule.loadEmployees().map(({ id, name, department }) => ({ id, name, department })), departments: dbModule.loadDepartments() };
+      employees: dbModule.loadEmployees().map(({ id, name, department }) => ({ id, name, department })), departments: dbModule.loadDepartments(),
+      employeeReviews: dbModule.getReviewSupervisors().state(), customized: dbModule.getReviewSupervisors().customized() };
     return { ...data, revision: crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex') };
   };
   server.get('/api/browser/supervisors/routes', requireBrowserSession, requireSupervisorRoutes, (request, response) => {
     response.json({ success: true, routes: supervisorRoutesState() });
   });
+  server.get('/api/browser/supervisors/reviewers', requireBrowserSession, requireSupervisorRoutes, (_request, response) => {
+    response.json({ success: true, routes: dbModule.getReviewSupervisors().state() });
+  });
+  server.post('/api/browser/supervisors/reviewers/batch', requireBrowserSession, requireSupervisorRoutes, (request, response) => {
+    try {
+      const result = dbModule.getReviewSupervisors().saveBatch(request.body || {}, (entry) => buildBrowserAuditLogEntry(request, entry));
+      notifyDesktop('leaveSettings', getBrowserSyncMeta(request));
+      response.json({ success: true, ...result, message: `${result.updatedCount} 位員工的請假／加班審核主管已儲存。`, routes: dbModule.getReviewSupervisors().state() });
+    } catch (error) {
+      response.status(error.status || 500).json({ success: false, error: error.status ? error.message : '審核主管設定失敗，整批未儲存。' });
+    }
+  });
   server.post(['/api/browser/admin/leave-routes/save', '/api/browser/supervisors/routes'], requireBrowserSession, requireSupervisorRoutes, (request, response) => {
     try {
+      if (dbModule.getReviewSupervisors().customized()) throw createHttpError('已改用個別員工指定審核主管，舊部門設定不能覆蓋；請重新載入主管審核頁面。', 409);
       if (request.path === '/api/browser/supervisors/routes' && request.body?.revision !== supervisorRoutesState().revision) {
         throw createHttpError('共用審核路徑或員工名單已變更，請重新整理後再儲存。', 409);
       }
@@ -6557,7 +6572,7 @@ function attachBrowserRoutes(server) {
           target_id: 'all',
           summary: `儲存請假／加班共用審核路徑，共 ${routes.length} 組`,
           before_data: before,
-          after_data: dbModule.loadLeaveApprovalRoutes()
+          after_data: { legacyRoutes: dbModule.loadLeaveApprovalRoutes(), employeeReviews: dbModule.getReviewSupervisors().rows() }
         }));
       });
       notifyDesktop('leaveSettings', getBrowserSyncMeta(request));

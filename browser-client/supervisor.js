@@ -1,9 +1,11 @@
 const supervisorState = { identity: '', data: null, assignments: null, routes: null, month: '', employeeId: '',
-    date: '', kind: 'leave', page: 1, form: '', loading: false, busy: false, dirty: false, sequence: 0, error: '' };
+    date: '', kind: 'leave', managementView: 'review', page: 1, form: '', loading: false, busy: false, dirty: false, sequence: 0, error: '' };
 Object.assign(auditActionLabels, { supervisor_assignment: '指定代辦主管', supervisor_proxy_create: '主管代申請', supervisor_proxy_withdraw: '主管代撤回' });
 auditActionLabels.browser_punch_permission = '網頁打卡權限設定';
 auditTargetTypeLabels.browser_punch_permission = '網頁打卡權限';
 auditTargetTypeLabels.supervisor_assignment = '主管指定';
+auditActionLabels.employee_review_supervisor = '指定審核主管';
+auditTargetTypeLabels.employee_review_supervisor = '員工審核主管';
 const spEscape = (value) => escapeHtml(String(value ?? ''));
 function spToday() { return new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); }
 function spManagement() { return state.dashboard?.role === 'system_admin' || (state.dashboard?.role === 'admin' && state.activeSections.admin === 'supervisors'); }
@@ -31,12 +33,28 @@ function spField(label, name, type, value = '', extra = '') {
 }
 function spCanAssignments() { return state.dashboard?.role === 'system_admin' || hasCurrentAdminPermission('admin.supervisors.manage'); }
 function spCanRoutes() { return state.dashboard?.role === 'system_admin' || hasCurrentAdminPermission('admin.leave.settings'); }
+function spManagementView() {
+    if (supervisorState.managementView === 'review' && !spCanRoutes()) supervisorState.managementView = 'assignments';
+    if (supervisorState.managementView === 'assignments' && !spCanAssignments()) supervisorState.managementView = 'review';
+    return supervisorState.managementView;
+}
+function spAssignmentTable(data, review = false) {
+    return `<div class="sp-table-scroll"><table class="sp-table"><thead><tr><th>員工</th><th>部門</th><th>${review ? '審核主管' : '指定代辦主管'}</th></tr></thead><tbody>
+        ${data.employees.map((e) => `<tr><td>${spEscape(e.id)} ${spEscape(e.name)}</td><td>${spEscape(e.department)}</td><td>${(review ? [e.supervisorId].filter(Boolean) : e.supervisorIds).map((id) => spEscape(`${id} ${data.employees.find((s) => s.id === id)?.name || '（已不存在）'}`)).join('、') || '未指定'}</td></tr>`).join('')}
+        </tbody></table></div>`;
+}
 function spRenderRoutes() {
     if (!spCanRoutes()) return '';
     const data = supervisorState.routes;
     return `<section class="sp-route-section"><h3>請假／加班共用主管審核路徑</h3>${!data ? '<p role="status">讀取共用審核路徑中…</p>' : `
-        <form data-sp-form="routes" class="sp-form">${renderAdminLeaveRouteRows(data.approvalRoutes, data.employees, data.departments)}
-        <button class="primary-btn" type="submit">儲存共用審核路徑</button></form>`}</section>`;
+        ${data.employees.length ? `<form data-sp-form="reviewers/batch" class="sp-form">
+            ${renderAdminPaperEmployeePicker(data.employees, '設定審核主管的員工', [], { name: 'reviewEmployeeIds', maxSelection: 100 })}
+            ${renderAdminPaperEmployeePicker(data.employees, '指定的審核主管', [], { name: 'reviewSupervisorId', single: true, allowClear: true })}
+            <div class="sp-review-submit-row">${spField('設定原因', 'reason', 'text', '', 'maxlength="500"')}
+                <label class="sp-confirm"><input type="checkbox" name="confirmReview" required>確認更新所有勾選員工的請假／加班審核主管</label>
+                <button class="primary-btn" type="submit">批量儲存審核主管</button></div>
+            <label class="sp-confirm" data-sp-review-clear-confirm><input type="checkbox" name="confirmClear" required>確認清除所選員工的審核主管（未選主管）</label>
+        </form>` : '<p>尚無可設定的員工。</p>'}${spAssignmentTable(data, true)}`}</section>`;
 }
 function spTargets(meal = false) {
     const employees = supervisorState.data.employees;
@@ -48,25 +66,28 @@ function spTargets(meal = false) {
 }
 function renderSupervisorAssignments() {
     const data = supervisorState.assignments;
-    if (!spCanAssignments()) return `<section id="supervisor-assignment-workspace" class="sp-workspace" aria-label="主管指定"><div class="inline-message sp-message" aria-live="polite">${spEscape(supervisorState.error)}</div>${spRenderRoutes()}</section>`;
+    const view = spManagementView();
     return `<section id="supervisor-assignment-workspace" class="sp-workspace" aria-label="主管指定">
-        ${spRenderRoutes()}
-        <div class="sp-toolbar"><h3>指定代辦主管</h3>${spButton('refresh', '重新整理')}</div>
         <div class="inline-message sp-message" aria-live="polite">${spEscape(supervisorState.error)}</div>
+        <div class="workspace-subnav-layout">
+            <aside class="workspace-subnav-sidebar" aria-label="主管指定子導覽"><nav class="workspace-subnav-card"><div class="workspace-subnav-items">
+                ${[['review', '主管審核', spCanRoutes()], ['assignments', '代辦主管', spCanAssignments()]].filter(([, , visible]) => visible).map(([id, label]) => `<button type="button" class="workspace-subnav-item ${view === id ? 'is-active' : ''}" data-action="sp-management-view" data-view="${id}" aria-current="${view === id ? 'page' : 'false'}">${label}</button>`).join('')}
+            </div></nav></aside><div class="workspace-subnav-content">
+        ${view === 'review' ? `<div class="sp-toolbar">${spButton('refresh', '重新整理')}</div>${spRenderRoutes()}` : `
+        <div class="sp-toolbar"><h3>指定代辦主管</h3>${spButton('refresh', '重新整理')}</div>
         ${!data ? '<p role="status">讀取主管指定資料中…</p>' : `${data.employees.length ? `<form data-sp-form="assignments/batch" class="sp-form">
             ${renderAdminPaperEmployeePicker(data.employees, '設定主管的員工', [], { name: 'assignmentEmployeeIds', maxSelection: 100 })}
             ${renderAdminPaperEmployeePicker(data.employees, '指定的代辦主管', [], { name: 'supervisorIds', maxSelection: 100 })}
-            <label class="field"><span>設定模式</span><select name="mode">
+            <div class="sp-assignment-submit-row"><label class="field"><span>設定模式</span><select name="mode">
                 <option value="add">新增主管（保留原指定）</option><option value="replace">取代主管（改為本次勾選）</option>
             </select></label>
             ${spField('設定原因', 'reason', 'text', '', 'maxlength="500"')}
-            <label class="sp-confirm" data-sp-clear-confirm hidden><input type="checkbox" name="confirmClear" disabled>確認清除所有勾選員工的全部代辦主管授權（未選主管）</label>
             <label class="sp-confirm"><input type="checkbox" name="confirmAssignment" required>確認依所選模式更新所有勾選員工的代辦主管授權</label>
             <button type="submit" class="primary-btn" ${supervisorState.busy ? 'disabled' : ''}>批量儲存主管指定</button>
+            </div><label class="sp-confirm" data-sp-clear-confirm hidden><input type="checkbox" name="confirmClear" disabled>確認清除所有勾選員工的全部代辦主管授權（未選主管）</label>
         </form>` : '<p>尚無可設定的員工。</p>'}
-        <div class="sp-table-scroll"><table class="sp-table"><thead><tr><th>員工</th><th>部門</th><th>指定代辦主管</th></tr></thead><tbody>
-        ${data.employees.map((e) => `<tr><td>${spEscape(e.id)} ${spEscape(e.name)}</td><td>${spEscape(e.department)}</td><td>${e.supervisorIds.map((id) => spEscape(`${id} ${data.employees.find((s) => s.id === id)?.name || '（已不存在）'}`)).join('、') || '未指定'}</td></tr>`).join('')}
-        </tbody></table></div>`}
+        ${spAssignmentTable(data)}`}`}
+        </div></div>
     </section>`;
 }
 function spCalendar(data) {
@@ -146,9 +167,10 @@ function spPaint() {
     }
 }
 function spSyncAssignmentClear(form, reset = false) {
-    if (form?.dataset.spForm !== 'assignments/batch') return;
-    const clearing = form.querySelector('[name="mode"]').value === 'replace' && !form.querySelector('[name="supervisorIds"]:checked');
-    const label = form.querySelector('[data-sp-clear-confirm]'), control = label.querySelector('input');
+    const review = form?.dataset.spForm === 'reviewers/batch';
+    if (!review && form?.dataset.spForm !== 'assignments/batch') return;
+    const clearing = review ? !form.querySelector('[name="reviewSupervisorId"]:checked') : form.querySelector('[name="mode"]').value === 'replace' && !form.querySelector('[name="supervisorIds"]:checked');
+    const label = form.querySelector(review ? '[data-sp-review-clear-confirm]' : '[data-sp-clear-confirm]'), control = label.querySelector('input');
     label.hidden = !clearing; control.disabled = !clearing; control.required = clearing;
     if (reset || !clearing) control.checked = false;
 }
@@ -156,11 +178,11 @@ async function spLoad() {
     const identity = supervisorState.identity, sequence = ++supervisorState.sequence, managing = spManagement();
     supervisorState.loading = true;
     try {
-        const url = managing ? spCanAssignments() ? '/api/browser/supervisors/assignments' : '/api/browser/supervisors/routes' : `/api/browser/employee/supervisor?${new URLSearchParams({
+        const url = managing ? spCanAssignments() ? '/api/browser/supervisors/assignments' : '/api/browser/supervisors/reviewers' : `/api/browser/employee/supervisor?${new URLSearchParams({
             month: supervisorState.month, kind: supervisorState.kind === 'meals' ? 'leave' : supervisorState.kind, page: supervisorState.page,
             ...(supervisorState.employeeId ? { employeeId: supervisorState.employeeId } : {}), ...(supervisorState.date ? { date: supervisorState.date } : {}) })}`;
         const result = await requestJson(url, { auth: true });
-        const routes = managing && spCanRoutes() ? spCanAssignments() ? (await requestJson('/api/browser/supervisors/routes', { auth: true })).routes : result.routes : null;
+        const routes = managing && spCanRoutes() ? spCanAssignments() ? (await requestJson('/api/browser/supervisors/reviewers', { auth: true })).routes : result.routes : null;
         if (identity !== supervisorState.identity || sequence !== supervisorState.sequence) return;
         if (managing) {
             supervisorState.routes = routes; supervisorState.assignments = result.assignments || null;
@@ -176,7 +198,7 @@ const spPreviousRender = renderDashboard;
 renderDashboard = function renderDashboardWithSupervisor(dashboard) {
     const identity = `${state.token}/${dashboard.role}/${dashboard.user?.id || ''}`;
     if (identity !== supervisorState.identity) Object.assign(supervisorState, { identity, data: null, assignments: null, routes: null, month: spToday().slice(0, 7),
-        date: spToday(), employeeId: '', assignmentId: '', kind: 'leave', page: 1, form: '', loading: false, busy: false, dirty: false, error: '', sequence: supervisorState.sequence + 1 });
+        date: spToday(), employeeId: '', assignmentId: '', kind: 'leave', managementView: 'review', page: 1, form: '', loading: false, busy: false, dirty: false, error: '', sequence: supervisorState.sequence + 1 });
     return spPreviousRender(dashboard);
 };
 const spPreviousItems = renderEmployeeWorkspaceItems;
@@ -213,9 +235,16 @@ handleDashboardClick = async function handleSupervisorClick(event) {
             if (!await spDiscard()) { event.preventDefault(); return; }
             supervisorState.dirty = false; supervisorState.form = '';
         }
+        if (action === 'jump-leave-routes') supervisorState.managementView = 'review';
         return spPreviousClick(event);
     }
     event.preventDefault(); if (supervisorState.busy) return;
+    if (action === 'sp-management-view') {
+        const view = button.dataset.view;
+        if (!['review', 'assignments'].includes(view) || (view === 'review' ? !spCanRoutes() : !spCanAssignments()) || view === spManagementView()) return;
+        if (!await spDiscard()) return;
+        supervisorState.dirty = false; supervisorState.managementView = view; spPaint(); return;
+    }
     if (action === 'sp-cancel-meal') {
         const form = spRoot()?.querySelector('[data-sp-form="meals"]');
         if (form) {
@@ -276,13 +305,16 @@ handleDashboardChange = async function handleSupervisorChange(event) {
     return spPreviousChange(event);
 };
 async function spSave(operation, body) {
-    const identity = supervisorState.identity, managing = ['assignments/batch', 'routes'].includes(operation);
+    const identity = supervisorState.identity, managing = ['assignments/batch', 'reviewers/batch'].includes(operation);
     const controls = [...(spRoot()?.querySelectorAll('input, select, button') || [])].map((input) => [input, input.disabled]);
     supervisorState.busy = true; controls.forEach(([input]) => { input.disabled = true; });
     try {
         const result = await requestJson(managing ? `/api/browser/supervisors/${operation}` : `/api/browser/employee/supervisor/${operation}`, { auth: true, method: 'POST', body });
         if (identity !== supervisorState.identity) return;
         supervisorState.busy = false; supervisorState.dirty = false; supervisorState.form = '';
+        if (operation === 'reviewers/batch' && state.dashboard?.datasets?.leave) {
+            state.dashboard.datasets.leave.approvalRoutes = result.routes.employees.map((e) => ({ employee_id: e.id, supervisor_id: e.supervisorId }));
+        }
         if (await spLoad()) spMessage(result.message, 'success');
     } finally {
         if (identity === supervisorState.identity) { supervisorState.busy = false; controls.forEach(([input, disabled]) => { if (input.isConnected) input.disabled = disabled; }); }
@@ -302,9 +334,13 @@ handleDashboardSubmit = async function handleSupervisorSubmit(event) {
         if (body.mode === 'add' && !body.supervisorIds.length) { spMessage('新增模式請至少選擇一位主管。'); return; }
         body.revisions = Object.fromEntries(supervisorState.assignments.employees.filter((e) => body.employeeIds.includes(e.id)).map((e) => [e.id, e.revision]));
         delete body.assignmentEmployeeIds;
-    } else if (operation === 'routes') {
-        body.approvalRoutes = collectAdminLeaveRoutes(form);
-        body.revision = supervisorState.routes.revision;
+    } else if (operation === 'reviewers/batch') {
+        body.employeeIds = fields.getAll('reviewEmployeeIds'); body.supervisorId = fields.get('reviewSupervisorId') || '';
+        body.confirmReview = fields.has('confirmReview'); body.confirmClear = fields.has('confirmClear');
+        if (!body.employeeIds.length || body.employeeIds.length > 100) { spMessage('請選擇 1 至 100 位設定員工。'); return; }
+        if (body.employeeIds.includes(body.supervisorId)) { spMessage('不可指定員工本人為自己的審核主管。'); return; }
+        body.revisions = Object.fromEntries(supervisorState.routes.employees.filter((e) => body.employeeIds.includes(e.id)).map((e) => [e.id, e.revision]));
+        delete body.reviewEmployeeIds; delete body.reviewSupervisorId;
     } else {
         body.employeeId = supervisorState.employeeId;
         if (operation !== 'leave/withdraw') {

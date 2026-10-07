@@ -7,11 +7,13 @@ const { createMealStore } = require('./meal-management');
 const { createSupervisorStore } = require('./supervisor-management');
 const { createBrowserPunchPermissionStore } = require('./browser-punch-permissions');
 const { createRequestHistoryStore } = require('./request-history');
+const { createReviewSupervisorStore } = require('./review-supervisors');
 let db = null;
 let meals = null;
 let supervisors = null;
 let browserPunchPermissions = null;
 let requestHistory = null;
+let reviewSupervisors = null;
 let currentDbFilePath = '';
 
 function init(dbFilePath) {
@@ -468,6 +470,7 @@ function init(dbFilePath) {
   supervisors = createSupervisorStore(db, (entry) => addAuditLog(entry));
   browserPunchPermissions = createBrowserPunchPermissionStore(db, (entry) => addAuditLog(entry));
   requestHistory = createRequestHistoryStore(db, (entry) => addAuditLog(entry));
+  reviewSupervisors = createReviewSupervisorStore(db, (entry) => addAuditLog(entry));
 }
 
 function close() {
@@ -478,6 +481,7 @@ function close() {
   supervisors = null;
   browserPunchPermissions = null;
   requestHistory = null;
+  reviewSupervisors = null;
   currentDbFilePath = '';
 }
 
@@ -642,6 +646,7 @@ const saveEmployees = (employees) => {
         for (const emp of employees) insert.run(normalizeEmployeeForStorage(emp));
         run('DELETE FROM web_credentials WHERE employee_id NOT IN (SELECT id FROM employees)');
         run('DELETE FROM supervisor_assignments WHERE employee_id NOT IN (SELECT id FROM employees) OR supervisor_id NOT IN (SELECT id FROM employees)');
+        run('DELETE FROM employee_review_supervisors WHERE employee_id NOT IN (SELECT id FROM employees) OR supervisor_id <> \'\' AND supervisor_id NOT IN (SELECT id FROM employees)');
         run('DELETE FROM browser_punch_permissions WHERE employee_id NOT IN (SELECT id FROM employees)');
     })();
 };
@@ -649,6 +654,7 @@ const loadEmployees = () => all('SELECT * FROM employees ORDER BY id');
 const deleteAllEmployees = () => db.transaction(() => {
     run('DELETE FROM web_credentials');
     run('DELETE FROM supervisor_assignments');
+    run('DELETE FROM employee_review_supervisors');
     run('DELETE FROM browser_punch_permissions');
     return run('DELETE FROM employees');
 })();
@@ -912,6 +918,7 @@ const saveLeaveApprovalRoutes = (routes = []) => {
             const normalized = normalizeLeaveApprovalRouteForStorage(route);
             if (normalized.department && normalized.supervisor_id) insert.run(normalized);
         }
+        reviewSupervisors?.importLegacy(loadLeaveApprovalRoutes());
     })();
 };
 
@@ -2152,6 +2159,7 @@ module.exports = {
   getSupervisors: () => supervisors,
   getBrowserPunchPermissions: () => browserPunchPermissions,
   getRequestHistory: () => requestHistory,
+  getReviewSupervisors: () => reviewSupervisors,
   getMeals: () => meals,
   init, close,
   getDatabasePath, backupDatabase, validateBackupDatabaseFile, replaceDatabaseFromBackup,
