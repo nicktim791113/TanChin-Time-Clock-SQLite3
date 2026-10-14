@@ -1,0 +1,23 @@
+.le-workspace { width: 100%; min-width: 0; }
+.le-workspace > section, .le-workspace > form, .le-allocation { margin-top: 20px; }
+.le-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.le-controls .field { flex: 1 1 145px; min-width: 0; }
+.le-controls .field input, .le-controls .field select { width: 100%; min-width: 0; }
+.le-controls button { flex: 0 0 auto; min-height: 40px; }
+.le-confirm { display: flex; align-items: center; gap: 8px; min-height: 40px; max-width: 100%; }
+.le-table-scroll { overflow-x: auto; max-width: 100%; margin: 12px 0; }
+.le-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.le-table th, .le-table td { padding: 10px 12px; border-bottom: 1px solid var(--border-color, #d5dce1); text-align: left; white-space: nowrap; }
+.le-table th { background: var(--surface-muted, #edf2f3); color: var(--text-color, #24363a); }
+.le-table small { display: block; margin-top: 4px; font-size: 12px; }
+.le-table .le-reason { min-width: 180px; max-width: 280px; white-space: normal; overflow-wrap: anywhere; }
+.le-table .le-warning { color: #a12a36; white-space: normal; min-width: 240px; }
+.le-own-table { table-layout: fixed; }
+.le-own-table th, .le-own-table td { padding: 8px 6px; white-space: normal; overflow-wrap: anywhere; }
+.le-own-table .le-warning { min-width: 0; }
+.le-own-details summary { cursor: pointer; padding: 10px 0; }
+.le-preview { border-top: 2px solid #34857b; padding-top: 12px; }
+.le-allocation summary { cursor: pointer; padding: 12px 0; }
+.admin-paper-field-grid .paper-span-8 { grid-column: span 8; min-width: 0; }
+@media (max-width: 760px) { .admin-paper-field-grid .paper-span-8 { grid-column: 1 / -1; } }
+@media (max-width: 600px) { .le-controls .field { flex-basis: calc(50% - 12px); } .le-controls button, .le-controls .le-confirm { flex-basis: 100%; } }

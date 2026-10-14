@@ -9444,6 +9444,7 @@ function beginAdminPaperCorrection(kind, requestId) {
     setPaperFormValue(form, "endDate", end.date);
     setPaperFormValue(form, "endTime", end.time);
     setPaperFormValue(form, "durationHours", request.duration_hours ?? "");
+    setPaperFormValue(form, "dailyHours", (request.dailyHours || []).map((row) => `${row.date}=${row.hours}`).join("\n"));
     setPaperFormValue(form, "reason", request.reason || "");
     setPaperFormValue(form, "paperNo", request.paperNo || "");
     setPaperFormValue(form, "approvedBy", request.paperApprovedBy || "");
@@ -9555,8 +9556,9 @@ function renderAdminPaperLeaveForm(datasets = {}) {
                     </label>
                     <label class="field paper-span-4">
                         <span>請假時數</span>
-                        <input name="durationHours" type="number" min="0.5" step="0.5" placeholder="未填則用時間差估算">
+                        <input name="durationHours" type="number" min="0.01" step="0.01" placeholder="實際請假時數">
                     </label>
+                    <label class="field paper-span-8"><span>每日實際時數（跨日額度請假）</span><textarea name="dailyHours" rows="2" placeholder="2026-10-15=8" title="每個請假日期一列，YYYY-MM-DD=小時；排除午休及非工作日，加總須等於整筆時數。"></textarea></label>
                     <label class="field paper-span-4">
                         <span>紙本單號</span>
                         <input name="paperNo" type="text" placeholder="選填">
@@ -9816,7 +9818,7 @@ function renderAdminLeaveSection(datasets) {
                     <div class="inline-message" data-form-message-for="admin-leave-types-form" aria-live="polite"></div>
                 </form>
             </article>
-
+            <article class="sub-panel" data-no-collapsible="true">${typeof renderLeaveEntitlementWorkspace === 'function' ? renderLeaveEntitlementWorkspace() : ''}</article>
         </div>
     `;
 }
@@ -9844,6 +9846,7 @@ function renderEmployeeLeaveApplicationPanel(dashboard) {
                 </div>
                 ${renderBadge(`可用假別 ${leaveTypes.length} 種`, "success")}
             </div>
+            <div id="employee-leave-balances" aria-live="polite"></div>
             <form id="employee-leave-form" class="stack-form">
                 <div class="request-period-grid dense-form">
                     <label class="field">
@@ -9870,13 +9873,14 @@ function renderEmployeeLeaveApplicationPanel(dashboard) {
                     </label>
                     <label class="field">
                         <span>請假時數</span>
-                        <input name="durationHours" type="number" min="0.5" step="0.5" placeholder="可留空由時間推算">
+                        <input name="durationHours" type="number" min="0.01" step="0.01" placeholder="實際請假時數">
                     </label>
                     <label class="field request-reason">
                         <span>請假原因</span>
                         <textarea name="reason" rows="2" placeholder="請簡述請假原因"></textarea>
                     </label>
                 </div>
+                <label class="field"><span>每日實際時數（跨日額度請假）</span><textarea name="dailyHours" rows="2" placeholder="2026-10-15=8" title="每個請假日期一列，YYYY-MM-DD=小時；排除午休及非工作日，加總須等於整筆時數。"></textarea></label>
                 <div class="form-toolbar dense-toolbar">
                     <button class="primary-btn" type="submit">送出請假申請</button>
                     <p class="helper-text">送出後會依照主管審核與管理部終審流程更新狀態。</p>
@@ -10421,6 +10425,7 @@ handleDashboardSubmit = async function handleDashboardSubmitLeaveOverride(event)
                     endDate: values.endDate,
                     endTime: values.endTime,
                     durationHours: values.durationHours,
+                    dailyHours: values.dailyHours,
                     reason: values.reason?.trim() || ""
                 }
             });
@@ -10452,6 +10457,7 @@ handleDashboardSubmit = async function handleDashboardSubmitLeaveOverride(event)
                     endDate: values.endDate,
                     endTime: values.endTime,
                     durationHours: values.durationHours,
+                    dailyHours: values.dailyHours,
                     reason: values.reason?.trim() || "",
                     paperNo: values.paperNo?.trim() || "",
                     approvedBy: values.approvedBy?.trim() || "",
@@ -12334,7 +12340,8 @@ const workspaceSubnavConfigs = {
                 {
                     label: "制度設定",
                     items: [
-                        { id: "types", label: "假別設定", panelIndex: 5, visible: () => hasCurrentAdminPermission("admin.leave.settings") }
+                        { id: "types", label: "假別設定", panelIndex: 5, visible: () => hasCurrentAdminPermission("admin.leave.settings") },
+                        { id: "balances", label: "假別額度", panelIndex: 6, visible: () => hasCurrentAdminPermission("admin.leave.balances.view") || hasCurrentAdminPermission("admin.leave.balances.manage") }
                     ]
                 }
             ]

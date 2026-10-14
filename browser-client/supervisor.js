@@ -116,6 +116,7 @@ function spRequestForm() {
         ${spField('結束日期', 'endDate', 'date', date)}${spField('結束時間', 'endTime', 'time', leave ? '18:00' : '20:00')}</div>
         <div class="sp-form-grid">${leave ? `<label class="field"><span>假別</span><select name="leaveTypeId" required>${supervisorState.data.leaveTypes.map((t) => `<option value="${spEscape(t.id)}">${spEscape(t.name)}</option>`).join('')}</select></label>` : ''}
         ${spField('每人整筆時數', 'durationHours', 'number', leave ? '8' : '2', 'min="0.01" step="0.01"')}</div>
+        ${leave ? '<label class="field"><span>每日實際時數（跨日額度請假）</span><textarea name="dailyHours" rows="2" placeholder="2026-10-15=8" title="每個請假日期一列，YYYY-MM-DD=小時；排除午休及非工作日，加總須等於整筆時數。"></textarea></label>' : ''}
         ${spField('申請事由', 'reason', 'text', '', 'maxlength="2000"')}${spField('代辦原因', 'proxyReason', 'text', '', 'maxlength="500"')}
         <label class="sp-confirm"><input type="checkbox" name="confirmApproval" required>確認替所有勾選員工代申請相同內容並由本人核准${leave ? '，送管理部終審' : ''}</label>
         <div class="inline-actions"><button class="primary-btn" type="submit" ${supervisorState.busy ? 'disabled' : ''}>${leave ? '送管理部終審' : '代申請並核准'}</button>${spButton('reset-form', '重設表單')}</div>
@@ -133,6 +134,7 @@ function spMealDetail() {
 function spRequestDetail() {
     const detail = supervisorState.data.calendar.detail;
     return `<section class="sp-day-detail"><div class="sp-toolbar"><h4>${supervisorState.date} ${supervisorState.kind === 'leave' ? '請假' : '加班'}</h4></div>
+        ${supervisorState.kind === 'leave' && typeof leBalanceTable === 'function' ? leBalanceTable(supervisorState.data.leaveBalances || []) : ''}
         ${spRequestForm()}
         <div class="sp-records">${detail.records.map((row) => `<article class="sp-record"><div class="sp-toolbar"><strong>${spEscape(row.leaveTypeName || '加班')} · ${spEscape(row.statusText)}</strong>
             ${row.canProxyWithdraw ? spButton('withdraw', '代撤回', `data-id="${spEscape(row.id)}"`) : ''}</div>

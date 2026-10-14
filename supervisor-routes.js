@@ -92,6 +92,7 @@ function attachSupervisorRoutes(server, context) {
                 return { id: employee.id, eligible: Boolean(row?.eligible), canChange: Boolean(row?.canChange), eating: Boolean(row?.eating) };
             }) },
             leaveTypes: db.loadLeaveTypes().filter((type) => type.enabled).map(({ id, name }) => ({ id, name })),
+            leaveBalances: db.getLeaveEntitlements().balances([employeeId], Number(range.month.slice(0, 4))).map(({ records, updated_by, revision, ...row }) => row),
             meals: db.getMeals().calendar({ month: range.month, employeeId }) } });
     }));
     for (const kind of ['leave', 'overtime']) {
@@ -112,7 +113,7 @@ function attachSupervisorRoutes(server, context) {
                 status: kind === 'leave' ? 'pending_admin' : 'approved', supervisor_id: actorId,
                 supervisor_decision: 'approved', supervisor_comment: `指定主管代申請並核准：${reason}`, supervisor_decided_at: now,
                 approval_mode: kind === 'leave' ? 'supervisor_proxy' : 'supervisor_proxy_auto_approved', created_at: now, updated_at: now,
-                ...(type ? { leave_type_id: type.id } : {}) }));
+                ...(type ? { leave_type_id: type.id, daily_hours: body.dailyHours, explicit_duration_hours: body.durationHours || '' } : {}) }));
             store().transaction(() => {
                 const overlap = kind === 'leave' ? db.hasOverlappingLeaveRequest : db.hasOverlappingOvertimeRequest;
                 targets.forEach((target) => targetFor(request, target.id));

@@ -128,6 +128,8 @@ $projectFiles = @(
     "request-calendar.js",
     "request-history.js",
     "review-supervisors.js",
+    "leave-entitlements.js",
+    "leave-entitlement-routes.js",
     "supervisor-management.js",
     "supervisor-routes.js",
     "browser-punch-permissions.js",

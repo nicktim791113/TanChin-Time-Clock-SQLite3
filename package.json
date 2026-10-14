@@ -1,6 +1,6 @@
 {
   "name": "TanChin-Time-Clock-SQLite3",
-  "version": "1.25.0",
+  "version": "1.26.0",
   "productName": "TanChin-Time-Clock-SQLite3",
   "description": "TanChin time clock desktop and browser system.",
   "main": "main.js",
@@ -26,7 +26,7 @@
     "electron-log": "^5.1.5",
     "electron-updater": "^6.2.1",
     "express": "^4.19.2",
-    "xlsx": "^0.18.5"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "electron": "^31.2.0",

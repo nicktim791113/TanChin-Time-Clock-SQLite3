@@ -10,6 +10,7 @@ const { attachMealRoutes } = require('./meal-routes');
 const { attachRequestCalendarRoutes } = require('./request-calendar');
 const { attachSupervisorRoutes } = require('./supervisor-routes');
 const { attachRequestHistoryRoutes } = require('./request-history');
+const { attachLeaveEntitlementRoutes } = require('./leave-entitlement-routes');
 const {
   ATTENDANCE_EXPORT_FIELD_DEFINITIONS,
   DEFAULT_ATTENDANCE_EXPORT_TEMPLATE_ID,
@@ -53,6 +54,8 @@ const ADMIN_PERMISSION_DEFINITIONS = [
   { code: 'admin.leave.review', category: '請假管理', label: '請假終審', section: 'leave' },
   { code: 'admin.leave.paperCreate', category: '請假管理', label: '紙本請假補登', section: 'leave', highRisk: true },
   { code: 'admin.leave.settings', category: '主管與請假設定', label: '假別與請假／加班共用審核路徑設定', section: 'supervisors' },
+  { code: 'admin.leave.balances.view', category: '請假管理', label: '查看與匯出員工假別額度', section: 'leave' },
+  { code: 'admin.leave.balances.manage', category: '請假管理', label: '設定與匯入員工假別額度', section: 'leave', highRisk: true },
   { code: 'admin.overtime.view', category: '加班管理', label: '查看加班申請、警示與匯出', section: 'overtime' },
   { code: 'admin.overtime.paperCreate', category: '加班管理', label: '紙本加班補登', section: 'overtime', highRisk: true },
   { code: 'admin.meals.view', category: '午餐團膳', label: '查看團膳名單、餐數與匯出', section: 'meals' },
@@ -74,7 +77,7 @@ const ADMIN_SECTION_RULES = [
   { id: 'shifts', label: '班別設定', permissions: ['admin.shifts.manage'] },
   { id: 'manualPunch', label: '手動補登', permissions: ['admin.manualPunch.create'] },
   { id: 'reports', label: '考勤報表', permissions: ['admin.reports.view', 'admin.reports.export'] },
-  { id: 'leave', label: '請假管理', permissions: ['admin.leave.review', 'admin.leave.paperCreate', 'admin.leave.settings'] },
+  { id: 'leave', label: '請假管理', permissions: ['admin.leave.review', 'admin.leave.paperCreate', 'admin.leave.settings', 'admin.leave.balances.view', 'admin.leave.balances.manage'] },
   { id: 'overtime', label: '加班管理', permissions: ['admin.overtime.view', 'admin.overtime.paperCreate'] },
   { id: 'meals', label: '午餐團膳', permissions: ['admin.meals.view'] },
   { id: 'supervisors', label: '主管指定', permissions: ['admin.supervisors.manage', 'admin.leave.settings'] },
@@ -124,6 +127,8 @@ const ADMIN_PERMISSION_PRESETS = [
       'admin.leave.review',
       'admin.leave.paperCreate',
       'admin.leave.settings',
+      'admin.leave.balances.view',
+      'admin.leave.balances.manage',
       'admin.overtime.view',
       'admin.overtime.paperCreate',
       'admin.meals.view',
@@ -1820,8 +1825,9 @@ function normalizeLeaveRoutePayload(route = {}) {
 function parseLeaveDateTime(dateText, timeText, fallbackTime) {
   const dateValue = String(dateText || '').trim();
   const timeValue = String(timeText || fallbackTime || '00:00').trim();
-  const timestamp = new Date(`${dateValue}T${timeValue}`).getTime();
-  if (!dateValue || Number.isNaN(timestamp)) {
+  const timestamp = new Date(`${dateValue}T${timeValue}+08:00`).getTime();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(timeValue) ||
+      !Number.isFinite(timestamp) || new Date(timestamp + 8 * 3600000).toISOString().slice(0, 10) !== dateValue) {
     throw createHttpError('請輸入有效的請假日期與時間。', 400);
   }
   return timestamp;
@@ -1864,6 +1870,7 @@ function formatLeaveRequestForDashboard(request, lookup = buildLeaveLookup()) {
     proxyReason: request.proxy_reason || '',
     leaveTypeId: request.leave_type_id,
     leaveTypeName: type.name || request.leave_type_id,
+    dailyHours: dbModule.getLeaveEntitlements().charges(request.id),
     supervisorId: request.supervisor_id || '',
     supervisorName: supervisor.name || '',
     adminDecisionBy: request.admin_decision_by || '',
@@ -5206,19 +5213,23 @@ function attachBrowserRoutes(server) {
         start_at: startAt,
         end_at: endAt,
         duration_hours: durationHours,
+        explicit_duration_hours: request.body?.durationHours || '',
+        daily_hours: request.body?.dailyHours,
         reason: String(request.body?.reason || '').trim(),
         status: 'pending_supervisor',
         supervisor_id: supervisorId,
         created_at: now,
         updated_at: now
       };
+      dbModule.getSupervisors().transaction(() => {
       dbModule.createLeaveRequest(leaveRequest);
-      writeBrowserAuditLog(request, {
+      dbModule.addAuditLog(buildBrowserAuditLogEntry(request, {
         action: 'create',
         target_type: 'leave_request',
         target_id: leaveRequest.id,
         summary: `${employee.id} ${employee.name} 送出請假申請：${leaveType.name}`,
         after_data: leaveRequest
+      }));
       });
       notifyDesktop('leaveRequests', getBrowserSyncMeta(request));
       response.json({
@@ -5242,13 +5253,15 @@ function attachBrowserRoutes(server) {
       if (!['pending_supervisor', 'pending_admin'].includes(leaveRequest.status)) {
         throw createHttpError('只有尚未終審的請假申請可以撤回。', 400);
       }
+      dbModule.getSupervisors().transaction(() => {
       dbModule.withdrawLeaveRequest({ requestId, withdrawnAt: Date.now() });
-      writeBrowserAuditLog(request, {
+      dbModule.addAuditLog(buildBrowserAuditLogEntry(request, {
         action: 'withdraw',
         target_type: 'leave_request',
         target_id: requestId,
         summary: `撤回請假申請 ${requestId}`,
         before_data: leaveRequest
+      }));
       });
       notifyDesktop('leaveRequests', getBrowserSyncMeta(request));
       response.json({
@@ -5274,19 +5287,21 @@ function attachBrowserRoutes(server) {
         throw createHttpError('這張請假申請目前不在主管審核階段。', 400);
       }
       const comment = String(request.body?.comment || '').trim();
+      dbModule.getSupervisors().transaction(() => {
       dbModule.updateLeaveRequestSupervisorDecision({
         requestId,
         decision,
         comment,
         decidedAt: Date.now()
       });
-      writeBrowserAuditLog(request, {
+      dbModule.addAuditLog(buildBrowserAuditLogEntry(request, {
         action: decision === 'approved' ? 'approve' : 'reject',
         target_type: 'leave_request',
         target_id: requestId,
         summary: `主管${decision === 'approved' ? '核准並送管理部複核' : '駁回'}請假申請 ${requestId}`,
         before_data: leaveRequest,
         after_data: { decision, comment }
+      }));
       });
       notifyDesktop('leaveRequests', getBrowserSyncMeta(request));
       response.json({
@@ -6027,7 +6042,7 @@ function attachBrowserRoutes(server) {
         approvedBy: paperApprovedBy,
         comment: paperNote
       });
-      const createdRequests = selectedEmployees.map((employee, index) => {
+      const createdRequests = dbModule.getSupervisors().transaction(() => selectedEmployees.map((employee, index) => {
         const supervisorId = getLeaveSupervisorForEmployee(employee) || '';
         const leaveRequest = {
           id: `leave_paper_${now}_${index}_${crypto.randomBytes(4).toString('hex')}`,
@@ -6036,6 +6051,8 @@ function attachBrowserRoutes(server) {
           start_at: startAt,
           end_at: endAt,
           duration_hours: durationHours,
+          explicit_duration_hours: request.body?.durationHours || '',
+          daily_hours: request.body?.dailyHours,
           reason: String(request.body?.reason || '').trim(),
           status: 'approved',
           supervisor_id: supervisorId,
@@ -6054,7 +6071,7 @@ function attachBrowserRoutes(server) {
           updated_at: now
         };
         dbModule.createLeaveRequest(leaveRequest);
-        writeBrowserAuditLog(request, {
+        dbModule.addAuditLog(buildBrowserAuditLogEntry(request, {
           action: 'create',
           target_type: 'leave_request',
           target_id: leaveRequest.id,
@@ -6065,9 +6082,9 @@ function attachBrowserRoutes(server) {
             paper_approved_by: paperApprovedBy,
             batch_employee_ids: employeeIds
           }
-        });
+        }));
         return leaveRequest;
-      });
+      }));
       notifyDesktop('leaveRequests', getBrowserSyncMeta(request));
       response.json({
         success: true,
@@ -6129,6 +6146,8 @@ function attachBrowserRoutes(server) {
         start_at: startAt,
         end_at: endAt,
         duration_hours: durationHours,
+        explicit_duration_hours: request.body?.durationHours || '',
+        daily_hours: request.body?.dailyHours,
         reason: String(request.body?.reason || '').trim(),
         supervisor_id: original.supervisor_id || getLeaveSupervisorForEmployee(employee) || '',
         supervisor_decision: 'approved',
@@ -6461,6 +6480,7 @@ function attachBrowserRoutes(server) {
         throw createHttpError('這張請假申請目前不在管理部複核階段。', 400);
       }
       const comment = String(request.body?.comment || '').trim();
+      dbModule.getSupervisors().transaction(() => {
       dbModule.updateLeaveRequestAdminDecision({
         requestId,
         decision,
@@ -6468,13 +6488,14 @@ function attachBrowserRoutes(server) {
         comment,
         decidedAt: Date.now()
       });
-      writeBrowserAuditLog(request, {
+      dbModule.addAuditLog(buildBrowserAuditLogEntry(request, {
         action: decision === 'approved' ? 'approve' : 'reject',
         target_type: 'leave_request',
         target_id: requestId,
         summary: `管理部${decision === 'approved' ? '終審核准' : '終審駁回'}請假申請 ${requestId}`,
         before_data: leaveRequest,
         after_data: { decision, comment }
+      }));
       });
       notifyDesktop('leaveRequests', getBrowserSyncMeta(request));
       response.json({ success: true, message: decision === 'approved' ? '請假申請已核准生效。' : '請假申請已由管理部駁回。' });
@@ -7569,6 +7590,12 @@ function createServerApp() {
     db: dbModule, requireSession: requireBrowserSession, requirePermission: requireAdminPermission,
     auditEntry: buildBrowserAuditLogEntry,
     notify: (request) => { notifyDesktop('requestHistorySettings', getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); }
+  });
+  attachLeaveEntitlementRoutes(server, {
+    db: dbModule, requireSession: requireBrowserSession, requirePermission: requireAdminPermission,
+    hasPermission: hasAdminPermission,
+    auditEntry: buildBrowserAuditLogEntry,
+    notify: (request) => { notifyDesktop('leaveEntitlements', getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); }
   });
   attachRequestCalendarRoutes(server, {
     db: dbModule, requireSession: requireBrowserSession, requireRole: requireBrowserRole,

@@ -8,12 +8,14 @@ const { createSupervisorStore } = require('./supervisor-management');
 const { createBrowserPunchPermissionStore } = require('./browser-punch-permissions');
 const { createRequestHistoryStore } = require('./request-history');
 const { createReviewSupervisorStore } = require('./review-supervisors');
+const { createLeaveEntitlementStore } = require('./leave-entitlements');
 let db = null;
 let meals = null;
 let supervisors = null;
 let browserPunchPermissions = null;
 let requestHistory = null;
 let reviewSupervisors = null;
+let leaveEntitlements = null;
 let currentDbFilePath = '';
 
 function init(dbFilePath) {
@@ -471,6 +473,7 @@ function init(dbFilePath) {
   browserPunchPermissions = createBrowserPunchPermissionStore(db, (entry) => addAuditLog(entry));
   requestHistory = createRequestHistoryStore(db, (entry) => addAuditLog(entry));
   reviewSupervisors = createReviewSupervisorStore(db, (entry) => addAuditLog(entry));
+  leaveEntitlements = createLeaveEntitlementStore(db, (entry) => addAuditLog(entry));
 }
 
 function close() {
@@ -482,6 +485,7 @@ function close() {
   browserPunchPermissions = null;
   requestHistory = null;
   reviewSupervisors = null;
+  leaveEntitlements = null;
   currentDbFilePath = '';
 }
 
@@ -642,6 +646,7 @@ const saveEmployees = (employees) => {
         )
     `);
     db.transaction(() => {
+        leaveEntitlements?.removeEmployees(all('SELECT id FROM employees').map((row) => row.id).filter((id) => !employees.some((e) => String(e.id ?? '').trim() === id)));
         run('DELETE FROM employees');
         for (const emp of employees) insert.run(normalizeEmployeeForStorage(emp));
         run('DELETE FROM web_credentials WHERE employee_id NOT IN (SELECT id FROM employees)');
@@ -652,6 +657,7 @@ const saveEmployees = (employees) => {
 };
 const loadEmployees = () => all('SELECT * FROM employees ORDER BY id');
 const deleteAllEmployees = () => db.transaction(() => {
+    leaveEntitlements?.removeEmployees(all('SELECT id FROM employees').map((row) => row.id));
     run('DELETE FROM web_credentials');
     run('DELETE FROM supervisor_assignments');
     run('DELETE FROM employee_review_supervisors');
@@ -930,6 +936,8 @@ function mapLeaveRequestRow(row) {
 }
 
 const createLeaveRequest = (request) => {
+    const charges = Object.hasOwn(request, 'explicit_duration_hours') || request.daily_hours ?
+        leaveEntitlements.allocation(request, request.daily_hours, request.explicit_duration_hours ?? request.duration_hours) : [];
     const insertRequest = db.prepare(`
         INSERT INTO leave_requests (
             id, employee_id, applicant_id, applicant_role, proxy_reason, leave_type_id, start_at, end_at, duration_hours,
@@ -972,6 +980,7 @@ const createLeaveRequest = (request) => {
     };
     db.transaction(() => {
         insertRequest.run(requestForDb);
+        leaveEntitlements.replaceCharges(request.id, charges);
         insertStep.run(
             request.id,
             1,
@@ -1184,6 +1193,10 @@ const updatePaperLeaveRequest = ({ requestId, updates, auditLog }) => db.transac
     if (!auditLog) {
         throw new Error('修正紙本請假補登時必須同時寫入稽核紀錄。');
     }
+    const original = getLeaveRequestById(requestId);
+    const changed = !original || ['employee_id', 'leave_type_id', 'start_at', 'end_at', 'duration_hours'].some((key) => updates[key] !== original[key]);
+    const hasDailyHours = Array.isArray(updates.daily_hours) ? updates.daily_hours.length > 0 : typeof updates.daily_hours === 'string' ? Boolean(updates.daily_hours.trim()) : updates.daily_hours != null;
+    const charges = changed || hasDailyHours ? leaveEntitlements.allocation({ ...original, ...updates }, updates.daily_hours, updates.explicit_duration_hours ?? updates.duration_hours) : null;
     const result = run(
         `UPDATE leave_requests
          SET employee_id = ?, leave_type_id = ?, start_at = ?, end_at = ?, duration_hours = ?,
@@ -1237,6 +1250,7 @@ const updatePaperLeaveRequest = ({ requestId, updates, auditLog }) => db.transac
         requestId
     );
     addAuditLog(auditLog);
+    if (charges) leaveEntitlements.replaceCharges(requestId, charges);
     return getLeaveRequestById(requestId);
 })();
 
@@ -2160,6 +2174,7 @@ module.exports = {
   getBrowserPunchPermissions: () => browserPunchPermissions,
   getRequestHistory: () => requestHistory,
   getReviewSupervisors: () => reviewSupervisors,
+  getLeaveEntitlements: () => leaveEntitlements,
   getMeals: () => meals,
   init, close,
   getDatabasePath, backupDatabase, validateBackupDatabaseFile, replaceDatabaseFromBackup,
