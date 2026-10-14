@@ -10662,18 +10662,16 @@ function renderOvertimeRequestRows(requests = [], { showEmployee = false, showAp
 
 function renderEmployeeOvertimeApplicationPanel(dashboard) {
     const overtime = dashboard.overtime || {};
-    const employees = overtime.eligibleEmployees?.length
-        ? overtime.eligibleEmployees
-        : [{ ...(dashboard.user || {}), isSelf: true }];
+    const employee = dashboard.user || {};
     const today = formatDateInputValue(new Date());
     return `
         <article class="workspace-card employee-workbench-panel" data-no-collapsible="true">
             <div class="list-toolbar">
                 <div>
                     <h3>加班申請</h3>
-                    <p class="helper-text">本人申請會送主管審核；主管替直屬員工申請會直接核准，主管替自己申請仍需上層主管審核。</p>
+                    <p class="helper-text">本人加班送指定主管審核，主管本人的申請也不會自動核准。</p>
                 </div>
-                ${renderBadge(`可申請 ${employees.length} 人`, "success")}
+                ${renderBadge('本人申請', "success")}
             </div>
             <form id="employee-overtime-form" class="stack-form">
                 <div class="request-period-grid dense-form">
@@ -10697,7 +10695,8 @@ function renderEmployeeOvertimeApplicationPanel(dashboard) {
                 <div class="request-meta-grid dense-form">
                     <label class="field">
                         <span>加班員工</span>
-                        <select name="employeeId" required>${renderOvertimeEmployeeOptions(employees, dashboard.user?.id || "")}</select>
+                        <input type="hidden" name="employeeId" value="${escapeHtml(employee.id || '')}">
+                        <input value="${escapeHtml(`${employee.id || ''} ${employee.name || ''}`)}" readonly aria-label="本人加班員工">
                     </label>
                     <label class="field">
                         <span>加班時數</span>
@@ -10757,7 +10756,7 @@ renderEmployeeWorkspaceItems = function renderEmployeeWorkspaceItemsOvertimeOver
         {
             id: "overtime-request",
             label: "加班申請",
-            meta: `${overtime.eligibleEmployees?.length || 1} 人可申請`,
+            meta: '本人申請',
             html: renderEmployeeOvertimeApplicationPanel(dashboard)
         },
         {

@@ -33,7 +33,11 @@ function attachSupervisorRoutes(server, context) {
         return requirePermission('admin.supervisors.manage')(request, response, next);
     };
     server.get('/api/browser/supervisors/assignments', requireSession, requireManage, handle((request, response) => {
-        response.json({ success: true, assignments: store().assignmentsState() });
+        const assignments = store().assignmentsState();
+        assignments.reviewOnly = db.getReviewSupervisors().rows().filter((row) => row.supervisor_id &&
+            assignments.employees.some((e) => e.id === row.employee_id && !e.supervisorIds.includes(row.supervisor_id)))
+            .map(({ employee_id, supervisor_id }) => ({ employeeId: employee_id, supervisorId: supervisor_id }));
+        response.json({ success: true, assignments });
     }));
     server.post('/api/browser/supervisors/assignments', requireSession, requireManage, handle((request, response) => {
         store().saveAssignments(request.body || {}, (entry) => auditEntry(request, entry));

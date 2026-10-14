@@ -1,11 +1,16 @@
-const requestCalendars = { identity: '', dashboard: null, leave: null, overtime: null };
+const requestCalendars = { identity: '', dashboard: null, leave: null, overtime: null, review: {}, reviewKind: 'leave' };
 const requestCalendarLabels = { leave: '請假', overtime: '加班' };
 const requestCalendarStatuses = { pending_supervisor: '待主管審核', pending_admin: '待管理部終審', approved: '已核准', rejected: '已駁回', withdrawn: '已撤回', cancelled: '已作廢' };
 const rcEscape = (value) => escapeHtml(String(value ?? ''));
 function rcToday() { return new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); }
 function rcAdmin() { return state.dashboard?.role === 'admin'; }
+function rcReviewer() { return state.dashboard?.role === 'employee' && state.employeeWorkspacePanel === 'supervisor-review'; }
 function rcState(kind) {
-    return requestCalendars[kind] ||= { month: rcToday().slice(0, 7), date: rcToday(), view: 'calendar', scope: 'mine', filters: {}, page: 1, data: null, loading: false, sequence: 0, error: '', pending: false, cache: new Map() };
+    const states = rcReviewer() ? requestCalendars.review : requestCalendars;
+    return states[kind] ||= { month: rcToday().slice(0, 7), date: rcToday(), view: 'calendar', scope: rcReviewer() ? 'review' : 'mine', filters: {}, page: 1, data: null, loading: false, sequence: 0, error: '', pending: false, cache: new Map() };
+}
+function rcAllStates() {
+    return ['leave', 'overtime'].flatMap((kind) => [requestCalendars[kind], requestCalendars.review[kind]].filter(Boolean).map((current) => [kind, current]));
 }
 function rcHistoryWindow(kind) {
     return rcAdmin() || rcState(kind).scope !== 'mine' ? null : state.dashboard?.[kind]?.historyWindow;
@@ -48,7 +53,7 @@ function rcEntries(kind, detail) {
     </article>`).join('')}</div>`;
 }
 function rcReviewQueue(kind) {
-    if (rcAdmin()) return '';
+    if (rcAdmin() || rcState(kind).scope !== 'review') return '';
     const rows = state.dashboard?.[kind]?.supervisorQueue || [];
     if (!rows.length) return '';
     const table = kind === 'leave' ? renderEmployeeLeaveRequestRows(rows, { showEmployee: true, reviewMode: 'supervisor' }) : renderOvertimeRequestRows(rows, { showEmployee: true, showApplicant: true, reviewMode: 'supervisor' });
@@ -76,14 +81,14 @@ function rcRender(kind, advancedHtml = '') {
     const statuses = Object.entries(requestCalendarStatuses).filter(([id]) => kind === 'leave' || id !== 'pending_admin');
     const detail = data?.detail;
     return `<section id="rc-${kind}" class="rc-workspace" data-kind="${kind}" aria-label="${label}紀錄" aria-busy="${current.loading}">
-        <div class="rc-toolbar"><h3>${rcAdmin() ? '' : '我的'}${label}紀錄</h3><div class="meal-month-controls">
+        <div class="rc-toolbar"><h3>${current.scope === 'review' && !rcAdmin() ? '待審' + label : (rcAdmin() ? '' : '我的') + label + '紀錄'}</h3><div class="meal-month-controls">
             ${rcButton(kind, 'month', '←', `data-offset="-1" aria-label="上個月" title="上個月" ${current.month <= minimum ? 'disabled' : ''}`)}
             <input type="month" data-rc-month data-kind="${kind}" aria-label="${label}月份" min="${minimum}" max="2100-12" value="${current.month}">
             ${rcButton(kind, 'month', '→', `data-offset="1" aria-label="下個月" title="下個月" ${current.month === '2100-12' ? 'disabled' : ''}`)}
             ${rcButton(kind, 'today', '本月')}${rcButton(kind, 'refresh', '↻', 'aria-label="重新整理" title="重新整理"')}
         </div></div>
         <div class="rc-view-toolbar"><div class="rc-views" role="group" aria-label="紀錄呈現方式">${['calendar', 'list'].map((view) => `<button type="button" data-action="rc-view" data-kind="${kind}" data-view="${view}" aria-pressed="${current.view === view}">${view === 'calendar' ? '日曆' : '列表'}</button>`).join('')}</div>
-        ${rcAdmin() ? rcButton(kind, 'view', '進階查詢／匯出', 'data-view="advanced"') : `<label class="field rc-scope"><span>紀錄範圍</span><select data-rc-filter="scope" data-kind="${kind}"><option value="mine" ${current.scope === 'mine' ? 'selected' : ''}>我的紀錄</option><option value="review" ${current.scope === 'review' ? 'selected' : ''}>待我審核</option></select></label>`}</div>
+        ${rcAdmin() ? rcButton(kind, 'view', '進階查詢／匯出', 'data-view="advanced"') : ''}</div>
         <div class="rc-filters">
             ${rcAdmin() || kind === 'overtime' || current.scope === 'review' ? rcSelect(kind, 'employeeId', '員工', (data?.employees || []).map((e) => [e.id, `${e.id} ${e.name}`]), current.filters.employeeId, '全部員工') : ''}
             ${rcAdmin() ? rcSelect(kind, 'department', '部門', (data?.departments || []).map((d) => [d, d]), current.filters.department, '全部部門') : ''}
@@ -130,12 +135,12 @@ async function rcLoad(kind) {
 const rcPreviousDashboard = renderDashboard;
 renderDashboard = function renderDashboardWithRequestCalendars(dashboard) {
     const identity = `${state.token}/${dashboard.role}/${dashboard.user?.id || ''}`;
-    if (requestCalendars.identity !== identity) Object.assign(requestCalendars, { identity, leave: null, overtime: null });
+    if (requestCalendars.identity !== identity) Object.assign(requestCalendars, { identity, leave: null, overtime: null, review: {}, reviewKind: 'leave' });
     else if (requestCalendars.dashboard !== dashboard) {
-        for (const kind of ['leave', 'overtime']) {
-            const current = rcState(kind); current.sequence += 1; current.data = null; current.cache.clear(); current.loading = false;
-            rcResetHistory(kind);
+        for (const [, current] of rcAllStates()) {
+            current.sequence += 1; current.data = null; current.cache.clear(); current.loading = false;
         }
+        for (const kind of ['leave', 'overtime']) rcResetHistory(kind);
     }
     requestCalendars.dashboard = dashboard;
     return rcPreviousDashboard(dashboard);
@@ -144,7 +149,10 @@ renderEmployeeLeaveRecordsPanel = () => rcRender('leave');
 renderEmployeeOvertimeRecordsPanel = () => rcRender('overtime');
 const rcPreviousEmployeeItems = renderEmployeeWorkspaceItems;
 renderEmployeeWorkspaceItems = function renderEmployeeItemsWithCalendars(dashboard) {
-    return rcPreviousEmployeeItems(dashboard).map((item) => ['leave-history', 'overtime-history'].includes(item.id) ? { ...item, meta: '日曆／列表' } : item);
+    const items = rcPreviousEmployeeItems(dashboard).map((item) => ['leave-history', 'overtime-history'].includes(item.id) ? { ...item, meta: '日曆／列表' } : item);
+    if (dashboard.supervisorReview?.canUse) items.push({ id: 'supervisor-review', label: '主管審核', meta: `${dashboard.supervisorReview.count} 筆待審`,
+        html: `<section aria-label="主管審核"><h3>主管審核</h3><div class="meal-tabs" role="tablist" aria-label="審核項目">${['leave', 'overtime'].map((kind) => `<button type="button" role="tab" data-action="rc-review-kind" data-kind="${kind}" aria-selected="${requestCalendars.reviewKind === kind}">${requestCalendarLabels[kind]}</button>`).join('')}</div>${rcRender(requestCalendars.reviewKind)}</section>` });
+    return items;
 };
 for (const kind of ['leave', 'overtime']) {
     const item = workspaceSubnavConfigs.admin[kind].groups.flatMap((group) => group.items).find((entry) => entry.id === 'records');
@@ -174,8 +182,15 @@ function rcConfirmDiscard(kind) {
 const rcPreviousClick = handleDashboardClick;
 handleDashboardClick = async function handleRequestCalendarClick(event) {
     const target = event.target.closest('[data-action]');
-    if (!target?.dataset.action?.startsWith('rc-')) return rcPreviousClick(event);
+    if (!target?.dataset.action?.startsWith('rc-')) {
+        if (rcReviewer() && target?.dataset.action?.includes('workspace') && !rcConfirmDiscard(requestCalendars.reviewKind)) { event.preventDefault(); return; }
+        return rcPreviousClick(event);
+    }
     event.preventDefault();
+    if (target.dataset.action === 'rc-review-kind') {
+        if (!rcReviewer() || !['leave', 'overtime'].includes(target.dataset.kind) || !rcConfirmDiscard(requestCalendars.reviewKind)) return;
+        requestCalendars.reviewKind = target.dataset.kind; renderDashboard(state.dashboard); return;
+    }
     const kind = target.dataset.kind, current = rcState(kind), action = target.dataset.action;
     if (!rcConfirmDiscard(kind)) return;
     if (action === 'rc-create') {
@@ -210,7 +225,7 @@ document.addEventListener('change', (event) => {
     if (target.hasAttribute('data-rc-month')) {
         if (!/^(20\d{2}|2100)-(0[1-9]|1[0-2])$/.test(target.value) || target.value < rcMinMonth(kind)) { rcPaint(kind); return; }
         current.month = target.value; current.date = `${target.value}-01`;
-    } else if (target.dataset.rcFilter === 'scope') { current.scope = target.value; current.filters = {}; }
+    } else if (target.dataset.rcFilter === 'scope') return;
     else current.filters[target.dataset.rcFilter] = target.value;
     current.page = 1; current.data = null; rcLoad(kind);
 });
@@ -227,16 +242,18 @@ handleRealtimeSyncMessage = async function handleCalendarSync(payload) {
             const token = state.token, result = await requestJson('/api/browser/dashboard', { auth: true });
             if (token !== state.token) return;
             state.dashboard = result.dashboard; requestCalendars.dashboard = result.dashboard;
-            for (const kind of ['leave', 'overtime']) {
-                if (rcState(kind).scope === 'review') continue;
-                const current = rcState(kind); current.sequence += 1; current.data = null; current.cache.clear(); current.loading = false;
-                rcResetHistory(kind); rcPaint(kind);
+            for (const [kind, current] of rcAllStates()) {
+                if (current.scope === 'review') continue;
+                current.sequence += 1; current.data = null; current.cache.clear(); current.loading = false;
+                const minimum = state.dashboard?.[kind]?.historyWindow?.earliestMonth || '2000-01';
+                if (current.month < minimum) { current.month = minimum; current.date = `${minimum}-01`; current.page = 1; }
+                if (current === rcState(kind)) rcPaint(kind);
             }
             return;
         }
-        for (const kind of ['leave', 'overtime']) {
-            const current = rcState(kind); current.sequence += 1; current.data = null; current.cache.clear(); current.loading = false;
-            rcPaint(kind);
+        for (const [kind, current] of rcAllStates()) {
+            current.sequence += 1; current.data = null; current.cache.clear(); current.loading = false;
+            if (current === rcState(kind)) rcPaint(kind);
         }
         await reloadDashboard('已同步員工紀錄可見範圍。', 'info'); return;
     }
@@ -260,6 +277,6 @@ function rcConfirmDiscardQuietly(kind) {
 }
 const rcPreviousLogout = handleLogout;
 handleLogout = function logoutWithCalendarCleanup(...args) {
-    Object.assign(requestCalendars, { identity: '', dashboard: null, leave: null, overtime: null });
+    Object.assign(requestCalendars, { identity: '', dashboard: null, leave: null, overtime: null, review: {}, reviewKind: 'leave' });
     return rcPreviousLogout(...args);
 };

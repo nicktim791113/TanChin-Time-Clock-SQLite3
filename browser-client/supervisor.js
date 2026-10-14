@@ -86,7 +86,9 @@ function renderSupervisorAssignments() {
             <button type="submit" class="primary-btn" ${supervisorState.busy ? 'disabled' : ''}>批量儲存主管指定</button>
             </div><label class="sp-confirm" data-sp-clear-confirm hidden><input type="checkbox" name="confirmClear" disabled>確認清除所有勾選員工的全部代辦主管授權（未選主管）</label>
         </form>` : '<p>尚無可設定的員工。</p>'}
-        ${spAssignmentTable(data)}`}`}
+        ${data.reviewOnly?.length ? `<section aria-label="審核主管代辦授權待確認"><h4>審核主管代辦授權待確認</h4>
+            <div class="sp-table-scroll"><table class="sp-table"><thead><tr><th>員工</th><th>審核主管（尚未有代辦授權）</th></tr></thead><tbody>${data.reviewOnly.map((r) => `<tr><td>${spEscape(r.employeeId)} ${spEscape(data.employees.find((e) => e.id === r.employeeId)?.name || '')}</td><td>${spEscape(r.supervisorId)} ${spEscape(data.employees.find((e) => e.id === r.supervisorId)?.name || '')}</td></tr>`).join('')}</tbody></table></div>
+        </section>` : ''}${spAssignmentTable(data)}`}`}
         </div></div>
     </section>`;
 }

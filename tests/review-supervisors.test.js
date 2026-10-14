@@ -96,9 +96,9 @@ test('individual review routing APIs preserve historical cases, scoped authoriza
         for (const route of ['/admin/leave-routes/save', '/supervisors/routes'])
             assert.equal((await request(route, { approvalRoutes: [{ department: '*', supervisor_id: 'A001', enabled: true }] }, system.token)).status, 409);
         const dashboard = (await request('/dashboard', null, newSupervisor.token)).dashboard;
-        assert.ok(dashboard.overtime.eligibleEmployees.some((e) => e.id === 'E001'));
+        assert.deepEqual(dashboard.overtime.eligibleEmployees.map((e) => e.id), ['D001']);
         assert.equal((await request('/employee/overtime/request', { ...period('12'), employeeId: 'E001' }, oldSupervisor.token)).status, 403);
-        assert.equal((await request('/employee/overtime/request', { ...period('12'), employeeId: 'E001' }, newSupervisor.token)).status, 200);
+        assert.equal((await request('/employee/overtime/request', { ...period('12'), employeeId: 'E001' }, newSupervisor.token)).status, 403);
     });
     await t.test('every target revision and the roster are checked; invalid batches leave all assignments unchanged', async () => {
         const before = db.getReviewSupervisors().rows(), valid = payload(['E001', 'A002'], 'A001');

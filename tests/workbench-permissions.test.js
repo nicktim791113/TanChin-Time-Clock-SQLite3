@@ -148,7 +148,8 @@ test('batch proxy, shared routes and individual browser punching preserve scope 
         assert.equal((await request('/admin/browser-punch-permissions', payload, admin.token)).status, 409);
         const logged = await login('E001', 'employee-card');
         assert.equal(logged.status, 200); assert.equal(logged.dashboard.punchAction.enabled, false);
-        assert.equal((await request('/employee/overtime/request', { ...body, startDate: '2026-10-24', endDate: '2026-10-24' }, logged.token)).status, 200);
+        assert.equal((await request('/employee/overtime/request', { startDate: '2026-10-24', endDate: '2026-10-24', startTime: body.startTime,
+            endTime: body.endTime, durationHours: body.durationHours, reason: body.reason }, logged.token)).status, 200);
         const current = store.state();
         assert.equal((await request('/admin/browser-punch-permissions', { revision: current.revision, reason: 'Restore', employees: current.employees.map((e) => ({ id: e.id, enabled: true })) }, system.token)).status, 200);
         assert.equal((await request('/punch', {}, employee.token)).status, 200);

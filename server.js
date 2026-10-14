@@ -341,7 +341,7 @@ const API_ROUTE_CATALOG = [
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/employee/overtime/calendar?month=YYYY-MM', auth: '員工', description: '本人與本人代申請加班月曆／指定主管待審，完整月份查詢' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/leave/withdraw', auth: '員工', description: '員工撤回尚未終審的請假申請' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/leave/supervisor-decision', auth: '員工主管', description: '原案件指定主管審核員工請假申請' },
-  { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/overtime/request', auth: '員工', description: '員工或主管送出加班申請' },
+  { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/overtime/request', auth: '員工', description: '僅本人送出加班申請，主管代申請統一使用主管代辦 API' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/overtime/withdraw', auth: '員工', description: '員工撤回尚未核准的加班申請' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/overtime/supervisor-decision', auth: '員工主管', description: '主管審核加班申請' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/logout', auth: 'Session', description: '登出目前瀏覽器 Session' },
@@ -2440,24 +2440,12 @@ function formatOvertimeRequestForExternal(request, lookup = buildOvertimeLookup(
   };
 }
 
-function getSupervisedEmployees(supervisorId, employees = dbModule.loadEmployees(), routes = dbModule.getReviewSupervisors().rows()) {
-  const normalizedSupervisorId = String(supervisorId || '').trim();
-  if (!normalizedSupervisorId) return [];
-  return employees.filter((employee) =>
-    employee.id !== normalizedSupervisorId &&
-    getLeaveSupervisorForEmployee(employee, routes) === normalizedSupervisorId
-  );
-}
-
 function getEmployeeOvertimeState(employee) {
   const historyNow = Date.now();
   const employees = dbModule.loadEmployees();
-  const routes = dbModule.getReviewSupervisors().rows();
   const lookup = buildOvertimeLookup(employees);
-  const supervisedEmployees = getSupervisedEmployees(employee.id, employees, routes);
-  const eligibleEmployeeMap = new Map([employee, ...supervisedEmployees].map((item) => [item.id, item]));
   return {
-    eligibleEmployees: [...eligibleEmployeeMap.values()].map((item) => ({
+    eligibleEmployees: [employee].map((item) => ({
       id: item.id,
       name: item.name,
       department: item.department,
@@ -3034,6 +3022,8 @@ function buildEmployeeDashboard(employee, session = null) {
   const validRecordCount = recentRecords.filter((record) => record.status !== '重複打卡').length;
   const nextPunchType = determinePunchType(employee.id) === 'in' ? '上班' : '下班';
   const currentShift = findShiftForDate();
+  const leave = getEmployeeLeaveState(employee), overtime = getEmployeeOvertimeState(employee);
+  const reviewCount = leave.supervisorQueue.length + overtime.supervisorQueue.length;
 
   return {
     role: 'employee',
@@ -3053,8 +3043,9 @@ function buildEmployeeDashboard(employee, session = null) {
       label: `現在打卡（預計${nextPunchType}）`,
       enabled: dbModule.getBrowserPunchPermissions().allowed(employee.id)
     },
-    leave: getEmployeeLeaveState(employee),
-    overtime: getEmployeeOvertimeState(employee),
+    leave,
+    overtime,
+    supervisorReview: { count: reviewCount, canUse: reviewCount > 0 || dbModule.getReviewSupervisors().rows().some((row) => row.supervisor_id === employee.id) },
     meals: dbModule.getMeals().calendar({ employeeId: employee.id }),
     supervisorProxy: { count: dbModule.getSupervisors().assignedEmployees(employee.id).length,
       canUse: session?.authMethod === 'web_password' && !session?.impersonation?.active },
@@ -5313,24 +5304,21 @@ function attachBrowserRoutes(server) {
       const applicant = getEmployeeById(request.browserSession.employeeId);
       if (!applicant) throw createHttpError('登入帳號對應的員工資料已不存在，請重新登入。', 401);
 
-      const employees = dbModule.loadEmployees();
-      const routes = dbModule.getReviewSupervisors().rows();
-      const targetEmployeeId = String(request.body?.employeeId || request.body?.employee_id || applicant.id).trim();
-      const targetEmployee = employees.find((employee) => employee.id === targetEmployeeId) || null;
-      if (!targetEmployee) throw createHttpError('找不到指定的加班員工。', 404);
-
-      const supervisedIds = new Set(getSupervisedEmployees(applicant.id, employees, routes).map((employee) => employee.id));
-      const isSelfRequest = targetEmployee.id === applicant.id;
-      const isSupervisorProxy = !isSelfRequest && supervisedIds.has(targetEmployee.id);
-      if (!isSelfRequest && !isSupervisorProxy) {
-        throw createHttpError('只能替自己或目前審核路徑內的直屬員工提出加班申請。', 403);
+      for (const key of ['employeeId', 'employee_id']) {
+        const value = request.body?.[key];
+        if (value !== undefined && (typeof value !== 'string' || value.trim() !== applicant.id)) {
+          throw createHttpError('加班申請僅限本人；替員工申請請使用「主管代辦」並取得代辦授權。', 403);
+        }
       }
-
-      const supervisorId = getLeaveSupervisorForEmployee(targetEmployee, routes);
+      if (request.body?.employeeIds !== undefined) throw createHttpError('本人申請不能批量送件；請使用「主管代辦」。', 403);
+      if (request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能送出加班申請。', 403);
+      const targetEmployee = applicant;
+      const employees = dbModule.loadEmployees();
+      const supervisorId = getLeaveSupervisorForEmployee(targetEmployee);
       if (!supervisorId) {
         throw createHttpError(`尚未指定 ${targetEmployee.id} ${targetEmployee.name} 的請假／加班審核主管，請先聯絡管理者。`, 400);
       }
-      if (isSelfRequest && supervisorId === applicant.id) {
+      if (supervisorId === applicant.id) {
         throw createHttpError('主管本人提出加班申請時仍需上層主管審核，請先在主管審核路徑中指定上層主管。', 400);
       }
       if (!employees.some((employee) => employee.id === supervisorId)) {
@@ -5343,46 +5331,47 @@ function attachBrowserRoutes(server) {
 
       const durationHours = calculateLeaveDurationHours(startAt, endAt, request.body?.durationHours);
       if (durationHours <= 0) throw createHttpError('請輸入有效的加班時數。', 400);
-      if (dbModule.hasOverlappingOvertimeRequest(targetEmployee.id, startAt, endAt)) {
-        throw createHttpError('這段時間已經有待審或已核准的加班申請。', 409);
-      }
-
       const now = Date.now();
-      const autoApproved = isSupervisorProxy;
       const overtimeRequest = {
         id: `overtime_${now}_${crypto.randomBytes(4).toString('hex')}`,
         employee_id: targetEmployee.id,
         applicant_id: applicant.id,
-        applicant_role: autoApproved ? 'supervisor_proxy' : 'self',
+        applicant_role: 'self',
         start_at: startAt,
         end_at: endAt,
         duration_hours: durationHours,
         reason: String(request.body?.reason || '').trim(),
-        status: autoApproved ? 'approved' : 'pending_supervisor',
-        supervisor_id: autoApproved ? applicant.id : supervisorId,
-        supervisor_decision: autoApproved ? 'approved' : null,
-        supervisor_comment: autoApproved ? '主管替直屬員工提出，系統自動核准。' : null,
-        supervisor_decided_at: autoApproved ? now : null,
-        approval_mode: autoApproved ? 'supervisor_proxy_auto_approved' : 'self_request',
+        status: 'pending_supervisor',
+        supervisor_id: supervisorId,
+        supervisor_decision: null,
+        supervisor_comment: null,
+        supervisor_decided_at: null,
+        approval_mode: 'self_request',
         created_at: now,
         updated_at: now
       };
-      dbModule.createOvertimeRequest(overtimeRequest);
-      writeBrowserAuditLog(request, {
-        action: 'create',
-        target_type: 'overtime_request',
-        target_id: overtimeRequest.id,
-        summary: `${applicant.id} ${applicant.name} 送出 ${targetEmployee.id} ${targetEmployee.name} 加班申請`,
-        after_data: overtimeRequest
+      dbModule.getSupervisors().transaction(() => {
+        if (dbModule.hasOverlappingOvertimeRequest(targetEmployee.id, startAt, endAt)) {
+          throw createHttpError('這段時間已經有待審或已核准的加班申請。', 409);
+        }
+        dbModule.createOvertimeRequest(overtimeRequest);
+        dbModule.addAuditLog(buildBrowserAuditLogEntry(request, {
+          action: 'create',
+          target_type: 'overtime_request',
+          target_id: overtimeRequest.id,
+          summary: `${applicant.id} ${applicant.name} 送出本人加班申請`,
+          after_data: overtimeRequest
+        }));
       });
       notifyDesktop('overtimeRequests', getBrowserSyncMeta(request));
+      notifyDesktop('auditLogs', getBrowserSyncMeta(request));
       response.json({
         success: true,
-        message: autoApproved ? '主管代申請已建立並自動核准。' : '加班申請已送出，等待主管審核。',
+        message: '本人加班申請已送出，等待指定主管審核。',
         data: { dashboard: buildDashboardForSession(request.browserSession) }
       });
     } catch (error) {
-      response.status(error.statusCode || 400).json({ success: false, error: error.message });
+      response.status(error.statusCode || 500).json({ success: false, error: error.statusCode ? error.message : '本人加班申請儲存失敗，未建立紀錄，請稍後重試。' });
     }
   });
 
