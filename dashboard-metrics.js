@@ -1,28 +1,43 @@
 const crypto = require('node:crypto');
 const DAY = 86400000, OFFSET = 8 * 3600000;
-const DEFAULT_CARDS = ['employeeCount', 'todayPunchCount', 'leaveDay:0', 'overtimeDay:0', 'leavePendingSupervisor', 'leavePendingAdmin', 'overtimePendingSupervisor', 'mealToday'];
+const METRIC_GROUPS = [
+    { key: 'people', label: '人員與考勤', items: ['employeeCount', 'todayPunchCount', 'todayAbnormalPunchCount'], kind: 'people' },
+    { key: 'leaveWeek', label: '請假 7 日', items: Array.from({ length: 7 }, (_, i) => `leaveDay:${i - 3}`), kind: 'week' },
+    { key: 'leaveReview', label: '請假待審核', items: ['leavePendingSupervisor', 'leavePendingAdmin'], kind: 'review' },
+    { key: 'overtimeWeek', label: '加班 7 日', items: Array.from({ length: 7 }, (_, i) => `overtimeDay:${i - 3}`), kind: 'week' },
+    { key: 'overtimeReview', label: '加班待審核', items: ['overtimePendingSupervisor'], kind: 'review' },
+    { key: 'meals', label: '午餐團膳', items: ['mealToday', 'mealTomorrow', 'mealParticipants'], kind: 'meals' },
+    { key: 'schedule', label: '班別與響鈴', items: ['shiftCount', 'bellScheduleCount'], kind: 'settings' },
+    { key: 'appearance', label: '問候語與主題', items: ['greetingCount', 'customThemeCount'], kind: 'settings' }
+];
+const DEFAULT_CARDS = METRIC_GROUPS.map((group) => group.key);
 const relative = ['前3天', '前天', '昨天', '今天', '明天', '後天', '後3天'];
 const dateText = (now) => new Date(now + OFFSET).toISOString().slice(0, 10);
 function fail(message, statusCode = 400) { throw Object.assign(new Error(message), { statusCode }); }
 function createDashboardMetricStore(sql, addAuditLog) {
     sql.exec('CREATE TABLE IF NOT EXISTS dashboard_metric_preferences (employee_id TEXT PRIMARY KEY, cards_json TEXT NOT NULL, revision TEXT NOT NULL, updated_at INTEGER NOT NULL)');
+    const columns = sql.prepare('PRAGMA table_info(dashboard_metric_preferences)').all().map((row) => row.name);
+    if (!columns.includes('layout_version')) sql.exec('ALTER TABLE dashboard_metric_preferences ADD COLUMN layout_version INTEGER NOT NULL DEFAULT 1');
+    if (!columns.includes('density')) sql.exec("ALTER TABLE dashboard_metric_preferences ADD COLUMN density TEXT NOT NULL DEFAULT 'comfortable'");
     const preferences = (id, catalog) => {
         const saved = sql.prepare('SELECT * FROM dashboard_metric_preferences WHERE employee_id = ?').get(id);
-        const allowed = catalog.filter((c) => c.available).map((c) => c.key);
-        const cards = [...new Set([...(saved ? JSON.parse(saved.cards_json) : DEFAULT_CARDS), ...DEFAULT_CARDS, ...allowed])].filter((key) => allowed.includes(key)).slice(0, 8);
-        while (cards.length < 8) cards.push('');
-        return { cardKeys: cards, revision: saved?.revision || 'new' };
+        let previous = [];
+        try { previous = saved ? JSON.parse(saved.cards_json) : []; } catch { /* Recover an invalid old preference using the complete default groups. */ }
+        if (!Array.isArray(previous)) previous = [];
+        const migrated = Boolean(saved && saved.layout_version !== 2);
+        const order = migrated ? previous.map((key) => METRIC_GROUPS.find((group) => group.items.includes(key))?.key).filter(Boolean) : previous;
+        const cards = [...new Set([...order, ...DEFAULT_CARDS])].filter((key) => DEFAULT_CARDS.includes(key));
+        return { cardKeys: cards, revision: saved?.revision || 'new', layoutVersion: 2, migrated, density: saved?.density === 'compact' ? 'compact' : 'comfortable' };
     };
     const save = (id, body, catalog, audit) => sql.transaction(() => {
-        const before = preferences(id, catalog), allowed = catalog.filter((c) => c.available).map((c) => c.key), cards = body.cardKeys;
+        const before = preferences(id, catalog), cards = body.cardKeys, density = body.density || before.density;
         if (body.revision !== before.revision) fail('指標設定已變更，請重新開啟設定。', 409);
-        if (body.confirm !== true || !Array.isArray(cards) || cards.length !== 8 || cards.some((key) => typeof key !== 'string' || (key && !allowed.includes(key)))) fail('請確認選擇八個已授權指標。');
-        const selected = cards.filter(Boolean);
-        if (new Set(selected).size !== selected.length || selected.length !== Math.min(8, allowed.length)) fail('八個位置不得重複；權限不足八種時其餘位置保留空白。');
+        if (body.confirm !== true || !Array.isArray(cards) || cards.length !== 8 || cards.some((key) => !DEFAULT_CARDS.includes(key)) || new Set(cards).size !== 8) fail('請保留八張不同的分組指標；只能調整順序。');
+        if (!['compact', 'comfortable'].includes(density)) fail('指標高度選項不正確。');
         const revision = crypto.randomUUID();
-        sql.prepare('INSERT OR REPLACE INTO dashboard_metric_preferences VALUES (?, ?, ?, ?)').run(id, JSON.stringify(cards), revision, Date.now());
-        addAuditLog(audit({ action: 'dashboard_metric_preferences', target_type: 'dashboard_preferences', target_id: id, summary: '更新個人管理者指標列', before_data: before.cardKeys, after_data: cards }));
-        return { cardKeys: cards, revision };
+        sql.prepare('INSERT OR REPLACE INTO dashboard_metric_preferences (employee_id, cards_json, revision, updated_at, layout_version, density) VALUES (?, ?, ?, ?, 2, ?)').run(id, JSON.stringify(cards), revision, Date.now(), density);
+        addAuditLog(audit({ action: 'dashboard_metric_preferences', target_type: 'dashboard_preferences', target_id: id, summary: '更新個人八張分組指標排列與高度', before_data: before, after_data: { cardKeys: cards, density, layoutVersion: 2 } }));
+        return { cardKeys: cards, revision, layoutVersion: 2, migrated: false, density };
     })();
     const removeEmployees = (ids) => ids.forEach((id) => sql.prepare('DELETE FROM dashboard_metric_preferences WHERE employee_id = ?').run(id));
     return { preferences, save, removeEmployees };
@@ -69,8 +84,12 @@ function buildDashboardMetrics(db, can, summary = {}, now = Date.now(), supplied
         add(key, label, '午餐', Boolean(meal), meal?.currentCount || 0, meal ? `${meal.serving ? '供餐' : '未供餐'} · ${meal.submittedCount == null ? '未交單' : `已交單 ${meal.submittedCount} 份`}` : '', meal?.date);
     }
     add('mealParticipants', '參加午餐團膳人數', '午餐', Boolean(source.meals), source.meals?.today.rows.filter((r) => r.eligible).length || 0, '今日生效參加資格', source.today);
-    for (const [key, label, permission] of [['shiftCount', '班別數量', 'admin.shifts.manage'], ['bellScheduleCount', '響鈴排程', 'admin.bells.manage'], ['greetingCount', '問候語', 'admin.system.manage'], ['customThemeCount', '自訂主題', 'admin.themes.manage']]) add(key, label, '系統', can(permission), summary[key] ?? 0);
-    return { today: source.today, timeZone: 'Asia/Taipei', catalog,
+    for (const [key, label, permission] of [['shiftCount', '班別數量', 'admin.shifts.manage'], ['bellScheduleCount', '響鈴排程', 'admin.bells.manage'], ['greetingCount', '問候語', 'admin.system.manage'], ['customThemeCount', '自訂主題', 'admin.themes.manage']]) {
+        const bellCounts = key === 'bellScheduleCount' ? String(summary[key] ?? '').match(/^(\d+)\/(\d+)$/) : null;
+        add(key, label, '系統', can(permission), bellCounts ? Number(bellCounts[2]) : summary[key] ?? 0, bellCounts ? `啟用 ${bellCounts[1]} 組／全部 ${bellCounts[2]} 組` : '');
+    }
+    const groups = METRIC_GROUPS.map((group) => ({ ...group, available: group.items.some((key) => catalog.find((item) => item.key === key)?.available) }));
+    return { today: source.today, timeZone: 'Asia/Taipei', catalog, groups,
         roster: roster ? db.loadEmployees().map(({ id, name, department, job_title, termination_date }) => ({ id, name, department, job_title, termination_date })) : [] };
 }
 function attachDashboardMetricRoutes(server, { db, requireSession, requireAdmin, can, auditEntry, notify, formatRecord }) {
@@ -79,7 +98,7 @@ function attachDashboardMetricRoutes(server, { db, requireSession, requireAdmin,
         if (request.browserSession.impersonation?.active) fail('身份模擬不能修改個人指標設定。', 403);
         const catalog = buildDashboardMetrics(db, (p) => can(request.browserSession, p)).catalog;
         const preferences = db.getDashboardMetrics().save(request.browserSession.employeeId, request.body || {}, catalog, (entry) => auditEntry(request, entry));
-        notify(request); response.json({ success: true, preferences, message: '已儲存個人八張指標與順序。' });
+        notify(request); response.json({ success: true, preferences, message: '已儲存個人八張分組指標的排列與高度。' });
     }));
     server.get('/api/browser/admin/dashboard-metrics/detail', requireSession, requireAdmin, handle((request, response) => {
         const allowed = (p) => can(request.browserSession, p), now = Date.now(), source = metricSources(db, allowed, now);
@@ -94,10 +113,20 @@ function attachDashboardMetricRoutes(server, { db, requireSession, requireAdmin,
             kind = 'meal'; const meal = metric.key === 'mealTomorrow' ? source.meals.tomorrow : source.meals.today;
             rows = meal.rows.filter((r) => metric.key === 'mealParticipants' ? r.eligible : r.eating);
         } else fail('此指標請使用原明細入口。');
+        const employees = new Map(db.loadEmployees().map((employee) => [employee.id, employee]));
+        const identity = (row) => kind === 'meal' ? { id: row.employee_id, name: row.name || '', department: row.department || '' } : { id: row.employee_id, name: employees.get(row.employee_id)?.name || '', department: employees.get(row.employee_id)?.department || '' };
+        const departments = [...new Set(rows.map((row) => identity(row).department).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+        const unfilteredRecords = rows.length;
+        const keyword = String(request.query.keyword || '').trim().toLocaleLowerCase(), department = String(request.query.department || '').trim();
+        if (keyword.length > 100 || department.length > 100) fail('篩選條件過長。');
+        rows = rows.filter((row) => { const person = identity(row); return (!department || person.department === department) && (!keyword || `${person.id} ${person.name} ${person.department}`.toLocaleLowerCase().includes(keyword)); });
+        const summary = { people: new Set(rows.map((row) => row.employee_id)).size, requests: rows.length,
+            requestHours: kind === 'meal' ? null : Math.round(rows.reduce((sum, row) => sum + (Number(row.duration_hours) || 0), 0) * 100) / 100,
+            departments: [...new Set(rows.map((row) => identity(row).department).filter(Boolean))].length };
         const page = request.query.page == null ? 1 : Number(request.query.page);
         if (!Number.isSafeInteger(page) || page < 1) fail('頁碼不正確。');
         const totalPages = Math.max(1, Math.ceil(rows.length / 50)), current = Math.min(page, totalPages);
-        response.json({ success: true, detail: { metric, kind, page: current, totalPages, totalRecords: rows.length, records: rows.slice((current - 1) * 50, current * 50).map((r) => kind === 'meal' ? ({ employeeId: r.employee_id, employeeName: r.name, employeeDepartment: r.department, eating: r.eating, submittedEating: r.submittedEating }) : formatRecord(kind, r)) } });
+        response.json({ success: true, detail: { metric, kind, page: current, totalPages, totalRecords: rows.length, unfilteredRecords, summary, departments, filters: { keyword, department }, records: rows.slice((current - 1) * 50, current * 50).map((r) => kind === 'meal' ? ({ employeeId: r.employee_id, employeeName: r.name, employeeDepartment: r.department, eating: r.eating, submittedEating: r.submittedEating }) : formatRecord(kind, r)) } });
     }));
 }
-module.exports = { DEFAULT_CARDS, createDashboardMetricStore, buildDashboardMetrics, attachDashboardMetricRoutes };
+module.exports = { DEFAULT_CARDS, METRIC_GROUPS, createDashboardMetricStore, buildDashboardMetrics, attachDashboardMetricRoutes };

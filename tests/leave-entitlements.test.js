@@ -205,9 +205,31 @@ test('quota frontend keeps preview confirmation and emits explicit accounting in
         renderDashboard: noop, renderSystemAdminDashboard: noop, postRenderSetup: noop, handleDashboardClick: noop, handleDashboardChange: noop, handleDashboardSubmit: noop,
         handleRealtimeSyncMessage: noop, handleLogout: noop, document: { addEventListener: noop, querySelector: () => null }, hasCurrentAdminPermission: () => true, renderAdminPaperEmployeePicker: () => '<picker>', setMessage: noop };
     vm.createContext(context); vm.runInContext(source, context);
-    vm.runInContext(`leState.data = { settings: { dayHours: 8 }, employees: [], leaveTypes: [], balances: [] }; leState.preview = { rows: [], digest: 'preview' }; leState.body = { rows: [] };`, context);
-    const html = vm.runInContext('renderLeaveEntitlementWorkspace()', context);
-    assert.match(html, /data-le-form="save"/); assert.match(html, /曆年制/); assert.match(html, /額度天數/); assert.match(html, /扣抵起日/);
+    vm.runInContext(`leState.data = { settings: { dayHours: 8 }, employees: [], leaveTypes: [
+        { id: 'annual', name: '特休', unit: 'day', enabled: true, deducts_balance: true },
+        { id: 'sick', name: '病假', unit: 'hour', enabled: true, deducts_balance: false },
+        { id: 'personal', name: '事假', unit: 'hour', enabled: true, deducts_balance: false }
+    ], balances: [] }; leState.preview = { rows: [], digest: 'preview' }; leState.body = { rows: [] };`, context);
+    for (const typeId of ['annual', 'sick', 'personal']) {
+        vm.runInContext(`leState.typeId = '${typeId}'`, context);
+        const html = vm.runInContext('renderLeaveEntitlementWorkspace()', context);
+        assert.match(html, /共用額度換算設定/);
+        assert.match(html, /name="dayHours" type="number" value="8"/);
+        assert.match(html, /額度天數（換算用）/); assert.match(html, /扣抵起日/);
+        assert.match(html, /data-le-form="save"/);
+        assert.match(html, /type="checkbox" name="confirm" required>確認上述額度、扣抵起日及既有時數/);
+        if (typeId === 'annual') {
+            assert.match(html, /特休額度記帳期間/);
+            assert.match(html, /<select name="period"><option value="calendar_year">曆年記帳/);
+            assert.match(html, /假別申請單位：天/);
+            assert.match(html, /特休遞延小時（人工確認）/);
+        } else {
+            assert.doesNotMatch(html, /特休額度記帳期間|<select name="period">|年度制度/);
+            assert.match(html, /<input name="period" type="hidden" value="calendar_year">/);
+            assert.match(html, /假別申請單位：小時/);
+            assert.match(html, /上期轉入小時（人工）/);
+        }
+    }
     vm.runInContext(`handleDashboardChange({ target: { closest: (s) => s === '[data-le-form]' || s === '[data-le-form="save"]' ? {} : null, matches: () => false } })`, context);
     assert.equal(vm.runInContext('leState.preview.digest', context), 'preview');
     const app = fs.readFileSync(path.join(__dirname, '../browser-client/app.js'), 'utf8');

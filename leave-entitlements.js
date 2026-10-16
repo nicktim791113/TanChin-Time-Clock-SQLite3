@@ -30,7 +30,7 @@ function createLeaveEntitlementStore(sql, addAuditLog) {
         CREATE INDEX IF NOT EXISTS leave_entitlement_charge_date ON leave_entitlement_charges(date);
         CREATE TABLE IF NOT EXISTS leave_entitlement_employee_epochs (employee_id TEXT PRIMARY KEY, after_at INTEGER NOT NULL);`);
     const staff = () => sql.prepare('SELECT id, name, department, hire_date FROM employees ORDER BY id').all();
-    const types = () => sql.prepare('SELECT id, name, enabled, deducts_balance FROM leave_types ORDER BY display_order, id').all();
+    const types = () => sql.prepare('SELECT id, name, unit, enabled, deducts_balance FROM leave_types ORDER BY display_order, id').all();
     const grants = () => sql.prepare('SELECT * FROM leave_entitlements ORDER BY year, employee_id, leave_type_id').all();
     const settings = () => {
         const value = sql.prepare('SELECT value FROM settings WHERE key = ?').get(KEY)?.value;

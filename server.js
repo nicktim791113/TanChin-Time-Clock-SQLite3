@@ -12,6 +12,8 @@ const { attachSupervisorRoutes } = require('./supervisor-routes');
 const { attachRequestHistoryRoutes } = require('./request-history');
 const { attachLeaveEntitlementRoutes } = require('./leave-entitlement-routes');
 const { buildDashboardMetrics, attachDashboardMetricRoutes } = require('./dashboard-metrics');
+const { recentTaipeiDateRange, groupBrowserPunches, confirmedDeviceClear } = require('./admin-security-data');
+const { normalizeLeavePay } = require('./leave-type-pay');
 const {
   ATTENDANCE_EXPORT_FIELD_DEFINITIONS,
   DEFAULT_ATTENDANCE_EXPORT_TEMPLATE_ID,
@@ -1247,14 +1249,16 @@ function getPunchAttendanceStatusText(record = {}) {
 
 function mapEmployeeDeviceForDashboard(device, employeeMap = new Map()) {
   const employee = employeeMap.get(device.employee_id) || null;
+  const { device_token_hash, ...publicDevice } = device;
   const location = {
     latitude: device.last_gps_lat,
     longitude: device.last_gps_lng,
     accuracy: device.last_gps_accuracy
   };
   return {
-    ...device,
-    employeeName: employee?.name || '',
+    ...publicDevice,
+    employeeName: employee?.name || '已刪除員工',
+    employeeMissing: !employee,
     employeeDepartment: employee?.department || '',
     deviceDisplayName: formatDeviceDisplayName(device),
     createdAtText: device.created_at ? new Date(device.created_at).toLocaleString('zh-TW', { hour12: false }) : '-',
@@ -1808,7 +1812,7 @@ function normalizeLeaveTypePayload(type = {}, index = 0) {
     unit: String(type.unit || 'hour').trim(),
     requires_attachment: normalizeBoolean(type.requires_attachment ?? type.requiresAttachment),
     deducts_balance: normalizeBoolean(type.deducts_balance ?? type.deductsBalance),
-    paid: normalizeBoolean(type.paid),
+    ...normalizeLeavePay(type, dbModule.loadLeaveTypes().find((existing) => existing.id === id) || {}),
     enabled: type.enabled === false || type.enabled === 0 || type.enabled === '0' || type.enabled === 'false' ? false : true,
     display_order: Number(type.display_order ?? type.displayOrder ?? index * 10) || 0
   };
@@ -2414,7 +2418,7 @@ function formatLeaveTypeForExternal(type) {
     ...type,
     requiresAttachment: Number(type.requires_attachment) === 1,
     deductsBalance: Number(type.deducts_balance) === 1,
-    paid: Number(type.paid) === 1,
+    ...normalizeLeavePay(type),
     enabled: Number(type.enabled) === 1,
     displayOrder: Number(type.display_order) || 0
   };
@@ -2732,19 +2736,20 @@ function getAdminSecurityDatasets() {
   const employees = dbModule.loadEmployees();
   const employeeMap = new Map(employees.map((employee) => [employee.id, employee]));
   const employeeDevices = dbModule.loadEmployeeDevices().map((device) => mapEmployeeDeviceForDashboard(device, employeeMap));
+  const recentBrowserPunchRange = recentTaipeiDateRange();
   const recentBrowserPunches = dbModule.loadPunchRecords()
-    .filter((record) => record.source === 'browser')
-    .slice(0, 50)
+    .filter((record) => record.source === 'browser' && record.timestamp >= recentBrowserPunchRange.startAt && record.timestamp < recentBrowserPunchRange.endAt)
     .map((record) => {
       const employee = employeeMap.get(record.id) || null;
       const formatted = formatPunchRecord(record);
       const riskFlags = Array.isArray(record.risk_flags) ? record.risk_flags : [];
       return {
         employeeId: record.id,
-        employeeName: employee?.name || '',
+        employeeName: employee?.name || '已刪除員工',
+        employeeMissing: !employee,
         department: employee?.department || '',
         timestamp: record.timestamp,
-        timestampText: new Date(record.timestamp).toLocaleString('zh-TW', { hour12: false }),
+        timestampText: new Date(record.timestamp).toLocaleString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' }),
         type: record.type,
         typeText: formatted.typeText,
         status: record.status,
@@ -2773,6 +2778,8 @@ function getAdminSecurityDatasets() {
       riskyPunchCount: recentBrowserPunches.filter((item) => item.riskFlags.length > 0).length
     },
     employeeDevices,
+    recentBrowserPunchRange,
+    recentBrowserPunchEmployees: groupBrowserPunches(recentBrowserPunches),
     recentBrowserPunches
   };
 }
@@ -2916,6 +2923,7 @@ function getSystemHealthSnapshot() {
 function getAdminDatasets(session = {}) {
   const settings = getSettingsSnapshot();
   const employees = dbModule.loadEmployees();
+  const employeeMap = new Map(employees.map((employee) => [employee.id, employee]));
   const canPeople = hasAnyAdminPermission(session, ['admin.people.view', 'admin.people.edit', 'admin.people.delete']);
   const canSecurity = hasAnyAdminPermission(session, ['admin.security.view', 'admin.security.manage', 'admin.security.password']);
   const canShifts = hasAdminPermission(session, 'admin.shifts.manage');
@@ -2959,6 +2967,9 @@ function getAdminDatasets(session = {}) {
     employees: needsEmployees ? employees : [],
     departments,
     shifts: needsShifts ? dbModule.loadShifts() : [],
+    recentManualPunches: canManualPunch ? dbModule.loadPunchRecords()
+      .filter((record) => record.source === 'manual').slice(0, 50)
+      .map((record) => buildPunchAttendanceRecord(record, employeeMap)) : [],
     greetings: canSystem ? dbModule.loadGreetings() : [],
     bellSchedules: canBells ? dbModule.loadBellSchedules() : [],
     bellHistory: canBells ? dbModule.loadBellHistory().map((history) => ({
@@ -5737,15 +5748,20 @@ function attachBrowserRoutes(server) {
       return;
     }
 
-    dbModule.deleteEmployeeDevice(employeeId, deviceId);
-    writeBrowserAuditLog(request, {
-      action: 'delete',
-      target_type: 'employee_device',
-      target_id: `${employeeId}:${deviceId}`,
-      summary: `解除 ${employeeId} 的綁定裝置`,
-      before_data: device
-    });
+    try {
+      dbModule.getSupervisors().transaction(() => {
+        dbModule.deleteEmployeeDevice(employeeId, deviceId);
+        dbModule.addAuditLog(buildBrowserAuditLogEntry(request, {
+          action: 'delete', target_type: 'employee_device', target_id: `${employeeId}:${deviceId}`,
+          summary: `解除 ${employeeId} 的綁定裝置`, before_data: device
+        }));
+      });
+    } catch (error) {
+      response.status(500).json({ success: false, error: '解除裝置失敗，綁定未變更，請稍後再試。' });
+      return;
+    }
     notifyDesktop('employeeDevices', getBrowserSyncMeta(request));
+    notifyDesktop('auditLogs', getBrowserSyncMeta(request));
     response.json({ success: true, message: '裝置綁定已解除。' });
   });
 
@@ -5757,16 +5773,27 @@ function attachBrowserRoutes(server) {
     }
 
     const devices = dbModule.loadEmployeeDevices(employeeId);
-    dbModule.deleteEmployeeDevicesByEmployee(employeeId);
-    writeBrowserAuditLog(request, {
-      action: 'clear',
-      target_type: 'employee_device',
-      target_id: employeeId,
-      summary: `清除 ${employeeId} 的全部綁定裝置`,
-      before_data: devices
-    });
+    const confirmationError = confirmedDeviceClear(request.body, devices);
+    if (confirmationError) {
+      response.status(confirmationError.status).json({ success: false, error: confirmationError.error });
+      return;
+    }
+    try {
+      dbModule.getSupervisors().transaction(() => {
+        dbModule.deleteEmployeeDevicesByEmployee(employeeId);
+        dbModule.addAuditLog(buildBrowserAuditLogEntry(request, {
+          action: 'clear', target_type: 'employee_device', target_id: employeeId,
+          summary: `解除 ${employeeId} 的全部 ${devices.length} 台綁定裝置（工號及影響範圍已確認）`,
+          before_data: devices
+        }));
+      });
+    } catch (error) {
+      response.status(500).json({ success: false, error: '解除裝置失敗，綁定未變更，請稍後再試。' });
+      return;
+    }
     notifyDesktop('employeeDevices', getBrowserSyncMeta(request));
-    response.json({ success: true, message: '員工綁定裝置已全部清除。' });
+    notifyDesktop('auditLogs', getBrowserSyncMeta(request));
+    response.json({ success: true, message: `已解除 ${employeeId} 的 ${devices.length} 台裝置綁定；其他員工不受影響。` });
   });
 
   server.post('/api/browser/admin/account-access/save', requireBrowserSession, requireAccountAccessManagement, (request, response) => {
@@ -6539,15 +6566,17 @@ function attachBrowserRoutes(server) {
       if (!types.some((type) => type.id && type.name)) {
         throw createHttpError('至少需要保留一個有效假別。', 400);
       }
-      dbModule.saveLeaveTypes(types);
-      writeBrowserAuditLog(request, {
-        action: 'save',
-        target_type: 'leave_type',
-        target_id: 'all',
-        summary: `儲存請假假別設定，共 ${types.length} 組`,
-        after_data: { count: types.length }
+      dbModule.getSupervisors().transaction(() => {
+        const previousTypes = dbModule.loadLeaveTypes();
+        dbModule.saveLeaveTypes(types);
+        dbModule.addAuditLog(buildBrowserAuditLogEntry(request, {
+          action: 'save', target_type: 'leave_type', target_id: 'all',
+          summary: `儲存請假假別設定，共 ${types.length} 組`,
+          before_data: previousTypes, after_data: dbModule.loadLeaveTypes()
+        }));
       });
       notifyDesktop('leaveSettings', getBrowserSyncMeta(request));
+      notifyDesktop('auditLogs', getBrowserSyncMeta(request));
       response.json({ success: true, message: '請假假別設定已更新。' });
     } catch (error) {
       response.status(error.statusCode || 500).json({ success: false, error: error.message });

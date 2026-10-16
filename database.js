@@ -11,6 +11,7 @@ const { createReviewSupervisorStore } = require('./review-supervisors');
 const { createLeaveEntitlementStore } = require('./leave-entitlements');
 const { createReviewWorkflow } = require('./review-workflow');
 const { createDashboardMetricStore } = require('./dashboard-metrics');
+const { normalizeLeavePay } = require('./leave-type-pay');
 let db = null;
 let meals = null;
 let supervisors = null;
@@ -140,6 +141,7 @@ function init(dbFilePath) {
       requires_attachment INTEGER NOT NULL DEFAULT 0,
       deducts_balance INTEGER NOT NULL DEFAULT 0,
       paid INTEGER NOT NULL DEFAULT 0,
+      pay_mode TEXT,
       enabled INTEGER NOT NULL DEFAULT 1,
       display_order INTEGER NOT NULL DEFAULT 0
     );
@@ -305,6 +307,9 @@ function init(dbFilePath) {
   // --- 魔法加固區：自動升級寶庫結構 ---
   try {
     db.transaction(() => {
+        const leaveTypeColumns = db.prepare('PRAGMA table_info(leave_types)').all();
+        if (!leaveTypeColumns.some((column) => column.name === 'pay_mode')) run('ALTER TABLE leave_types ADD COLUMN pay_mode TEXT');
+        run("UPDATE leave_types SET pay_mode = CASE WHEN paid = 1 THEN 'full' ELSE 'unpaid' END WHERE pay_mode IS NULL");
         const bellTableInfo = db.prepare("PRAGMA table_info(bell_schedules)").all();
         if (!bellTableInfo.some(col => col.name === 'title')) {
             console.log('[資料庫] 偵測到舊版 bell_schedules 結構，正在施展升級魔法...');
@@ -842,8 +847,9 @@ function normalizeBooleanForDb(value) {
     return value === true || value === 1 || value === '1' || value === 'true' ? 1 : 0;
 }
 
-function normalizeLeaveTypeForStorage(type = {}) {
+function normalizeLeaveTypeForStorage(type = {}, previous = {}) {
     const id = String(type.id || type.name || `leave_${Date.now()}`).trim();
+    const pay = normalizeLeavePay(type, previous);
     return {
         id,
         name: String(type.name || id).trim(),
@@ -851,7 +857,8 @@ function normalizeLeaveTypeForStorage(type = {}) {
         unit: String(type.unit || 'hour').trim(),
         requires_attachment: normalizeBooleanForDb(type.requires_attachment ?? type.requiresAttachment),
         deducts_balance: normalizeBooleanForDb(type.deducts_balance ?? type.deductsBalance),
-        paid: normalizeBooleanForDb(type.paid),
+        pay_mode: pay.pay_mode,
+        paid: normalizeBooleanForDb(pay.paid),
         enabled: type.enabled === false || type.enabled === 0 || type.enabled === '0' || type.enabled === 'false' ? 0 : 1,
         display_order: Number(type.display_order ?? type.displayOrder ?? 0) || 0
     };
@@ -864,7 +871,7 @@ function mapLeaveTypeRow(row) {
         requiresAttachment: row.requires_attachment === 1,
         deducts_balance: row.deducts_balance === 1,
         deductsBalance: row.deducts_balance === 1,
-        paid: row.paid === 1,
+        ...normalizeLeavePay(row),
         enabled: row.enabled === 1
     };
 }
@@ -875,10 +882,10 @@ function seedDefaultLeaveTypes() {
     const insert = db.prepare(`
         INSERT INTO leave_types (
             id, name, description, unit, requires_attachment,
-            deducts_balance, paid, enabled, display_order
+            deducts_balance, paid, pay_mode, enabled, display_order
         ) VALUES (
             @id, @name, @description, @unit, @requires_attachment,
-            @deducts_balance, @paid, @enabled, @display_order
+            @deducts_balance, @paid, @pay_mode, @enabled, @display_order
         )
     `);
     db.transaction(() => {
@@ -894,16 +901,17 @@ const saveLeaveTypes = (types = []) => {
     const insert = db.prepare(`
         INSERT OR REPLACE INTO leave_types (
             id, name, description, unit, requires_attachment,
-            deducts_balance, paid, enabled, display_order
+            deducts_balance, paid, pay_mode, enabled, display_order
         ) VALUES (
             @id, @name, @description, @unit, @requires_attachment,
-            @deducts_balance, @paid, @enabled, @display_order
+            @deducts_balance, @paid, @pay_mode, @enabled, @display_order
         )
     `);
     db.transaction(() => {
+        const previousTypes = new Map(loadLeaveTypes().map((type) => [type.id, type]));
         run('DELETE FROM leave_types');
         for (const type of types) {
-            const normalized = normalizeLeaveTypeForStorage(type);
+            const normalized = normalizeLeaveTypeForStorage(type, previousTypes.get(type.id));
             if (normalized.id && normalized.name) insert.run(normalized);
         }
     })();

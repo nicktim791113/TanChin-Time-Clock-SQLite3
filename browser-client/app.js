@@ -1853,7 +1853,6 @@ function renderEmployeeRows(employees, visibleRows = "25") {
                             <td class="actions">
                                 <div class="table-actions">
                                     <button class="mini-btn" type="button" data-action="edit-employee" data-id="${escapeHtml(employee.id)}">編輯</button>
-                                    <button class="mini-btn" type="button" data-action="jump-leave-routes" data-id="${escapeHtml(employee.id)}">主管設定</button>
                                     <button class="mini-btn" type="button" data-action="delete-employee" data-id="${escapeHtml(employee.id)}">刪除</button>
                                 </div>
                             </td>
@@ -2114,7 +2113,7 @@ function renderAdminPeopleSection(datasets) {
                         <span id="employee-filter-badge">${renderBadge(`顯示 ${filteredEmployees.length} / ${datasets.employees.length} 人`, "success")}</span>
                     </div>
                 </div>
-                <div class="field-grid employee-filter-grid">
+                <div class="field-grid employee-filter-grid directory-roster-filters">
                     <label class="field">
                         <span>關鍵字篩選</span>
                         <input id="employee-filter-query" value="${escapeHtml(filters.query)}" placeholder="工號 / 姓名 / 部門 / 職稱 / 卡號 / 備註">
@@ -4663,7 +4662,7 @@ renderAdminPeopleSection = function renderAdminPeopleSectionOverride(datasets) {
                         <span id="employee-filter-badge">${renderBadge(`顯示 ${filteredEmployees.length} / ${datasets.employees.length} 筆`, "success")}</span>
                     </div>
                 </div>
-                <div class="field-grid employee-filter-grid">
+                <div class="field-grid employee-filter-grid directory-roster-filters">
                     <label class="field">
                         <span>關鍵字篩選</span>
                         <input id="employee-filter-query" value="${escapeHtml(filters.query)}" placeholder="工號 / 姓名 / 部門 / 職稱 / 卡號 / 備註">
@@ -5048,7 +5047,7 @@ renderAdminPeopleSection = function renderAdminPeopleSectionTabsOverride(dataset
                         <span id="employee-filter-badge">${renderBadge(`顯示 ${filteredEmployees.length} / ${datasets.employees.length} 筆`, "success")}</span>
                     </div>
                 </div>
-                <div class="field-grid employee-filter-grid">
+                <div class="field-grid employee-filter-grid directory-roster-filters">
                     <label class="field">
                         <span>關鍵字篩選</span>
                         <input id="employee-filter-query" value="${escapeHtml(filters.query)}" placeholder="工號 / 姓名 / 性別 / 部門 / 職稱 / 卡號 / 國籍 / 身分證 / 手機 / 地址 / 備註">
@@ -5067,6 +5066,7 @@ renderAdminPeopleSection = function renderAdminPeopleSectionTabsOverride(dataset
                             <option value="50" ${filters.visibleRows === "50" ? "selected" : ""}>加大 50 列</option>
                         </select>
                     </label>
+                    <button class="outline-btn" type="button" data-action="reset-employee-filters">清除篩選</button>
                 </div>
                 <div class="employee-column-panel">
                     <div class="list-toolbar">
@@ -5080,7 +5080,6 @@ renderAdminPeopleSection = function renderAdminPeopleSectionTabsOverride(dataset
                 </div>
                 <div class="list-toolbar">
                     <p id="employee-filter-summary" class="helper-text">目前顯示 ${filteredEmployees.length} / ${datasets.employees.length} 筆員工資料。</p>
-                    <button class="outline-btn" type="button" data-action="reset-employee-filters">清除篩選</button>
                 </div>
                 <div id="employee-table-host">${renderEmployeeRows(filteredEmployees, filters.visibleRows)}</div>
             </article>
@@ -5493,13 +5492,13 @@ function renderAdminManualPunchSection(datasets) {
                 <div class="list-toolbar">
                     <div>
                         <p class="sub-kicker">管理者工作台</p>
-                        <h3>補登打卡</h3>
+                        <h3>手動補登</h3>
                     </div>
                     <div class="badge-row">
                         ${renderBadge(`班別 ${datasets.shifts.length} 組`, "success")}
                     </div>
                 </div>
-                <p class="helper-text">把補登打卡獨立成單一頁籤後，流程會更直接，也比較不容易和員工主檔操作混在一起。</p>
+                <p class="helper-text">替指定員工補登打卡，並在下方檢視最近 50 筆手動補登紀錄。</p>
             </article>
 
             <article class="sub-panel">
@@ -5521,6 +5520,7 @@ function renderAdminManualPunchSection(datasets) {
                         <button class="primary-btn" type="submit">送出補登打卡</button>
                     </div>
                 </form>
+                ${window.AdminDirectory.renderManual(datasets.recentManualPunches || [])}
             </article>
         </div>
     `;
@@ -8002,48 +8002,8 @@ function renderAdminSecuritySection(datasets) {
         recentBrowserPunches: []
     };
 
-    const deviceItems = security.employeeDevices.length
-        ? `
-            <div class="record-list security-record-list">
-                ${security.employeeDevices.map((device) => `
-                    <div class="list-item security-list-item">
-                        <div class="list-item-top">
-                            <span>${escapeHtml(device.employee_id)} / ${escapeHtml(device.employeeName || "未命名員工")}</span>
-                            <div class="inline-actions">
-                                <button class="mini-btn" type="button" data-action="delete-employee-device" data-employee-id="${escapeHtml(device.employee_id)}" data-device-id="${escapeHtml(device.device_id)}">解除這台</button>
-                                <button class="mini-btn" type="button" data-action="clear-employee-devices" data-employee-id="${escapeHtml(device.employee_id)}">清除全部</button>
-                            </div>
-                        </div>
-                        <div class="record-subline">裝置：${escapeHtml(device.deviceDisplayName || device.device_name || device.device_id)}</div>
-                        <div class="security-detail-line">最近登入：${escapeHtml(device.lastSeenText || "-")}</div>
-                        <div class="security-detail-line">最近 IP：${escapeHtml(device.last_ip || "-")}</div>
-                        <div class="security-detail-line">最近 GPS：${escapeHtml(device.lastLocationText || "尚未記錄")}</div>
-                    </div>
-                `).join("")}
-            </div>
-        `
-        : renderEmptyState("目前尚未有任何綁定裝置。");
-
-    const recentPunchItems = security.recentBrowserPunches.length
-        ? `
-            <div class="record-list security-record-list">
-                ${security.recentBrowserPunches.map((item) => `
-                    <div class="list-item security-list-item">
-                        <div class="list-item-top">
-                            <span>${escapeHtml(item.employeeId)} / ${escapeHtml(item.employeeName || "-")}</span>
-                            <div class="badge-row">
-                                ${renderBadge(item.typeText || "-")}
-                                ${renderSecurityRiskBadges(item.riskFlags)}
-                            </div>
-                        </div>
-                        <div class="record-subline">時間：${escapeHtml(item.timestampText || "-")}</div>
-                        <div class="security-detail-line">裝置：${escapeHtml(item.deviceName || item.deviceId || "-")}</div>
-                        <div class="security-detail-line">GPS：${escapeHtml(item.locationText || "未提供定位")}</div>
-                    </div>
-                `).join("")}
-            </div>
-        `
-        : renderEmptyState("目前還沒有瀏覽器遠端打卡紀錄。");
+    const deviceItems = window.AdminDirectory.renderDevices(datasets);
+    const recentPunchItems = window.AdminDirectory.renderRemote(datasets);
 
     return `
         <div class="workspace-stack">
@@ -8095,8 +8055,8 @@ function renderAdminSecuritySection(datasets) {
             <article class="table-card">
                 <div class="list-toolbar">
                     <div>
-                        <h3>員工綁定裝置</h3>
-                        <p class="helper-text">可直接解除單一裝置，或清除該員工全部綁定後讓他重新綁定。</p>
+                        <h3>裝置綁定清單</h3>
+                        <p class="helper-text">以人員查看綁定狀況；檢視裝置後可解除單台或該員工全部裝置，送出前會確認影響範圍。</p>
                     </div>
                 </div>
                 ${deviceItems}
@@ -8106,7 +8066,7 @@ function renderAdminSecuritySection(datasets) {
                 <div class="list-toolbar">
                     <div>
                         <h3>最近遠端打卡</h3>
-                        <p class="helper-text">顯示近 50 筆瀏覽器打卡的裝置與定位資訊，方便查核異常。</p>
+                        <p class="helper-text">彙總最近 14 日每位人員的遠端打卡、裝置及風險提示；點選明細可查看區間全部紀錄。</p>
                     </div>
                 </div>
                 ${recentPunchItems}
@@ -8285,47 +8245,6 @@ handleRealtimeSyncMessage = async function handleRealtimeSyncMessageSecurityOver
 };
 
 SAVE_FEEDBACK_FORM_IDS.add("security-settings-form");
-
-const originalHandleDashboardClickWithSecurity = handleDashboardClick;
-handleDashboardClick = async function handleDashboardClickSecurityOverride(event) {
-    const actionTarget = event.target.closest("[data-action]");
-    if (!actionTarget) return originalHandleDashboardClickWithSecurity(event);
-
-    const action = actionTarget.dataset.action;
-    try {
-        if (action === "delete-employee-device") {
-            const employeeId = actionTarget.dataset.employeeId || "";
-            const deviceId = actionTarget.dataset.deviceId || "";
-            if (!window.confirm("確定要解除這台綁定裝置嗎？")) return;
-            const result = await requestJson("/api/browser/admin/employee-device/delete", {
-                method: "POST",
-                auth: true,
-                body: { employeeId, deviceId }
-            });
-            await reloadDashboard(result.message || "裝置綁定已解除。");
-            setMessage(ui.dashboardMessage, result.message || "裝置綁定已解除。", "success");
-            return;
-        }
-
-        if (action === "clear-employee-devices") {
-            const employeeId = actionTarget.dataset.employeeId || "";
-            if (!window.confirm("確定要清除該員工全部綁定裝置嗎？")) return;
-            const result = await requestJson("/api/browser/admin/employee-devices/clear", {
-                method: "POST",
-                auth: true,
-                body: { employeeId }
-            });
-            await reloadDashboard(result.message || "員工綁定裝置已全部清除。");
-            setMessage(ui.dashboardMessage, result.message || "員工綁定裝置已全部清除。", "success");
-            return;
-        }
-    } catch (error) {
-        setMessage(ui.dashboardMessage, error.message, "error");
-        return;
-    }
-
-    return originalHandleDashboardClickWithSecurity(event);
-};
 
 const originalHandleDashboardSubmitWithSecurity = handleDashboardSubmit;
 handleDashboardSubmit = async function handleDashboardSubmitSecurityOverride(event) {
@@ -9123,12 +9042,21 @@ function renderAdminLeaveTypeRows(leaveTypes = []) {
             </select></label>
             <label class="field"><span>排序</span><input name="display_order" type="number" value="${escapeHtml(type.display_order ?? type.displayOrder ?? "")}"></label>
             <label class="switch-line"><input name="enabled" type="checkbox" ${type.enabled !== false ? "checked" : ""}>啟用</label>
-            <label class="switch-line"><input name="paid" type="checkbox" ${type.paid ? "checked" : ""}>有薪</label>
+            ${renderLeavePayModeField(type)}
             <label class="switch-line"><input name="deducts_balance" type="checkbox" ${type.deducts_balance || type.deductsBalance ? "checked" : ""}>扣額度</label>
             <label class="switch-line"><input name="requires_attachment" type="checkbox" ${type.requires_attachment || type.requiresAttachment ? "checked" : ""}>需附件</label>
             <label class="field span-2"><span>說明</span><input name="description" value="${escapeHtml(type.description || "")}" placeholder="假別規則與備註"></label>
         </div>
     `).join("");
+}
+
+function renderLeavePayModeField(type = {}) {
+    const mode = type.pay_mode || (type.paid === true || type.paid === 1 || type.paid === '1' ? 'full' : 'unpaid');
+    return `<label class="field"><span>給薪方式（標記）</span><select name="pay_mode">
+        <option value="full" ${mode === 'full' ? 'selected' : ''}>全薪</option>
+        <option value="half" ${mode === 'half' ? 'selected' : ''}>半薪</option>
+        <option value="unpaid" ${mode === 'unpaid' ? 'selected' : ''}>無薪</option>
+    </select></label>`;
 }
 
 function renderAdminLeaveTypeEditorRows(leaveTypes = []) {
@@ -9173,11 +9101,12 @@ function renderAdminLeaveTypeEditorRows(leaveTypes = []) {
                 </div>
                 <div class="leave-type-switch-row">
                     <label class="switch-line"><input name="enabled" type="checkbox" ${type.enabled !== false ? "checked" : ""}>啟用</label>
-                    <label class="switch-line"><input name="paid" type="checkbox" ${type.paid ? "checked" : ""}>有薪</label>
+                    ${renderLeavePayModeField(type)}
                     <label class="switch-line"><input name="deducts_balance" type="checkbox" ${type.deducts_balance || type.deductsBalance ? "checked" : ""}>扣額度</label>
                     <label class="switch-line"><input name="requires_attachment" type="checkbox" ${type.requires_attachment || type.requiresAttachment ? "checked" : ""}>需附件</label>
                 </div>
                 <label class="field leave-type-description-row"><span>說明與備註</span><textarea name="description" rows="3" placeholder="假別規則與備註">${escapeHtml(type.description || "")}</textarea></label>
+                <p class="helper-text">給薪方式是供制度辨識與外部資料使用的標記，不會自動計算或扣薪。病假等給薪條件請依適用制度另行核對。</p>
             </div>
         `;
     };
@@ -10330,7 +10259,8 @@ function collectAdminLeaveTypes(form) {
         unit: row.querySelector('[name="unit"]')?.value || "hour",
         display_order: Number(row.querySelector('[name="display_order"]')?.value || index * 10),
         enabled: Boolean(row.querySelector('[name="enabled"]')?.checked),
-        paid: Boolean(row.querySelector('[name="paid"]')?.checked),
+        pay_mode: row.querySelector('[name="pay_mode"]')?.value || "unpaid",
+        paid: (row.querySelector('[name="pay_mode"]')?.value || "unpaid") !== "unpaid",
         deducts_balance: Boolean(row.querySelector('[name="deducts_balance"]')?.checked),
         requires_attachment: Boolean(row.querySelector('[name="requires_attachment"]')?.checked)
     })).filter((type) => type.id && type.name);
@@ -12259,7 +12189,7 @@ const workspaceSubnavConfigs = {
                     items: [
                         { id: "settings", label: "遠端打卡規則", panelIndex: 1 },
                         { id: "devices", label: "裝置綁定清單", panelIndex: 2 },
-                        { id: "recent", label: "最近安全紀錄", panelIndex: 3 },
+                        { id: "recent", label: "最近遠端打卡", panelIndex: 3 },
                         { id: "punchPermissions", label: "員工網頁打卡權限", panelIndex: 4 },
                         { id: "requestHistory", label: "員工紀錄可見範圍", panelIndex: 5 }
                     ]

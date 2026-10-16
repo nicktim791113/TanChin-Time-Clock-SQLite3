@@ -132,6 +132,8 @@ $projectFiles = @(
     "dashboard-metrics.js",
     "leave-entitlements.js",
     "leave-entitlement-routes.js",
+    "leave-type-pay.js",
+    "admin-security-data.js",
     "supervisor-management.js",
     "supervisor-routes.js",
     "browser-punch-permissions.js",

@@ -18,6 +18,10 @@
 .le-own-details summary { cursor: pointer; padding: 10px 0; }
 .le-preview { border-top: 2px solid #34857b; padding-top: 12px; }
 .le-allocation summary { cursor: pointer; padding: 12px 0; }
+.le-type-context, .le-settings-form { padding: 16px; border: 1px solid var(--border-color, #d5dce1); border-radius: 12px; background: var(--surface-muted, #f4f7f7); }
+.le-type-context h4, .le-settings-form h4 { margin: 0 0 8px; }
+.le-type-context p { margin: 6px 0; line-height: 1.65; overflow-wrap: anywhere; }
+.le-settings-form .le-controls { margin-bottom: 0; }
 .admin-paper-field-grid .paper-span-8 { grid-column: span 8; min-width: 0; }
 @media (max-width: 760px) { .admin-paper-field-grid .paper-span-8 { grid-column: 1 / -1; } }
 @media (max-width: 600px) { .le-controls .field { flex-basis: calc(50% - 12px); } .le-controls button, .le-controls .le-confirm { flex-basis: 100%; } }
