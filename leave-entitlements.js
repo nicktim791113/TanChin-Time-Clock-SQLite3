@@ -19,6 +19,7 @@ function units(value, label, negative = false) {
 }
 function reason(value) { if (typeof value !== 'string' || !value.trim() || value.trim().length > 500) fail('請填寫設定原因（最多 500 字）。'); return value.trim(); }
 function createLeaveEntitlementStore(sql, addAuditLog) {
+    let annualProvider = null;
     sql.exec(`CREATE TABLE IF NOT EXISTS leave_entitlements (
         employee_id TEXT NOT NULL, leave_type_id TEXT NOT NULL, year INTEGER NOT NULL,
         day_units INTEGER NOT NULL, grant_units INTEGER NOT NULL, carry_units INTEGER NOT NULL,
@@ -43,7 +44,7 @@ function createLeaveEntitlementStore(sql, addAuditLog) {
         charges: sql.prepare('SELECT * FROM leave_entitlement_charges ORDER BY request_id, date').all() });
     function allocation(request, dailyHours, explicitHours) {
         const start = day(request.start_at), end = day(request.end_at - 1);
-        const tracked = Boolean(types().find((t) => t.id === request.leave_type_id)?.deducts_balance) ||
+        const tracked = Boolean(types().find((t) => t.id === request.leave_type_id)?.deducts_balance) || annualProvider?.isManaged(request.employee_id, request.leave_type_id, Number(start.slice(0, 4))) ||
             grants().some((g) => g.employee_id === request.employee_id && g.leave_type_id === request.leave_type_id);
         if (tracked && (explicitHours === '' || explicitHours == null || units(explicitHours, '實際請假時數') <= 0)) fail('額度假別請填寫實際請假時數，不可用起訖時間自動推算。');
         let rows = dailyHours;
@@ -110,7 +111,8 @@ function createLeaveEntitlementStore(sql, addAuditLog) {
     });
     const balances = (employeeIds, requestedYear) => {
         const selectedYear = year(requestedYear);
-        return grants().filter((g) => employeeIds.includes(g.employee_id) && g.year === selectedYear).map(balance);
+        const precise = selectedYear >= 2017 ? annualProvider?.balances(employeeIds, selectedYear) || [] : [];
+        return [...grants().filter((g) => employeeIds.includes(g.employee_id) && g.year === selectedYear && !precise.some((a) => a.employee_id === g.employee_id && a.leave_type_id === g.leave_type_id)).map(balance), ...precise];
     };
     const state = (requestedYear) => ({ year: year(requestedYear), settings: settings(), employees: staff(), leaveTypes: types(),
         revision: revision(), usageRevision: usageRevision(), balances: balances(staff().map((e) => e.id), requestedYear) });
@@ -120,6 +122,7 @@ function createLeaveEntitlementStore(sql, addAuditLog) {
         return rows.map((row) => {
             const y = year(row.year), employee = people.find((e) => e.id === row.employeeId), type = leaveTypes.find((t) => t.id === row.leaveTypeId);
             if (!employee || !type) fail('員工或假別已不存在，請重新匯出名單。', 409);
+            if (annualProvider?.isManaged(employee.id, type.id, y)) fail('此員工的特休已由精確權利帳管理，請使用年資特休的獨立額度調整，不可用人工表單或 Excel 覆蓋。', 409);
             const key = `${employee.id}\0${type.id}\0${y}`;
             if (seen.has(key)) fail('相同員工、假別、年度不可重複設定。'); seen.add(key);
             const old = current.find((g) => g.employee_id === employee.id && g.leave_type_id === type.id && g.year === y);
@@ -173,6 +176,7 @@ function createLeaveEntitlementStore(sql, addAuditLog) {
         replaceCharges(request.id, rows);
         addAuditLog(audit({ action: 'leave_entitlement_allocation', target_type: 'leave_entitlement', target_id: request.id,
             summary: `確認請假扣抵分配：${why}`, before_data: before, after_data: { rows, reason: why, requestUpdatedAt: request.updated_at } }));
+        annualProvider?.reconcile();
     })();
     function workbook(requestedYear, leaveTypeId) {
         const data = state(requestedYear), type = data.leaveTypes.find((t) => t.id === leaveTypeId);
@@ -240,6 +244,6 @@ function createLeaveEntitlementStore(sql, addAuditLog) {
         }
         const body = { revision: currentRevision, rows }; return { ...body, preview: preview(body) };
     }
-    return { settings, state, revision, usageRevision, balances, allocation, replaceCharges, charges, preview, save, saveSettings, allocateLegacy, workbook, readWorkbook, removeEmployees };
+    return { settings, state, revision, usageRevision, balances, allocation, replaceCharges, charges, preview, save, saveSettings, allocateLegacy, workbook, readWorkbook, removeEmployees, setAnnualProvider: (provider) => { annualProvider = provider; } };
 }
 module.exports = { createLeaveEntitlementStore };

@@ -12271,7 +12271,7 @@ const workspaceSubnavConfigs = {
                     label: "制度設定",
                     items: [
                         { id: "types", label: "假別設定", panelIndex: 5, visible: () => hasCurrentAdminPermission("admin.leave.settings") },
-                        { id: "balances", label: "假別額度", panelIndex: 6, visible: () => hasCurrentAdminPermission("admin.leave.balances.view") || hasCurrentAdminPermission("admin.leave.balances.manage") }
+                        { id: "balances", label: "假別額度", panelIndex: 6, visible: () => ["admin.leave.balances.view", "admin.leave.balances.manage", "admin.leave.entitlements.policy.manage", "admin.leave.entitlements.grant", "admin.leave.entitlements.close"].some(hasCurrentAdminPermission) }
                     ]
                 }
             ]

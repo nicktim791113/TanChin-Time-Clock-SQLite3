@@ -9,6 +9,7 @@ const { createBrowserPunchPermissionStore } = require('./browser-punch-permissio
 const { createRequestHistoryStore } = require('./request-history');
 const { createReviewSupervisorStore } = require('./review-supervisors');
 const { createLeaveEntitlementStore } = require('./leave-entitlements');
+const { createAnnualLeaveStore } = require('./annual-leave-store');
 const { createReviewWorkflow } = require('./review-workflow');
 const { createDashboardMetricStore } = require('./dashboard-metrics');
 const { normalizeLeavePay } = require('./leave-type-pay');
@@ -19,6 +20,7 @@ let browserPunchPermissions = null;
 let requestHistory = null;
 let reviewSupervisors = null;
 let leaveEntitlements = null;
+let annualLeave = null;
 let reviewWorkflow = null;
 let dashboardMetrics = null;
 let currentDbFilePath = '';
@@ -483,6 +485,8 @@ function init(dbFilePath) {
   requestHistory = createRequestHistoryStore(db, (entry) => addAuditLog(entry));
   reviewSupervisors = createReviewSupervisorStore(db, (entry) => addAuditLog(entry));
   leaveEntitlements = createLeaveEntitlementStore(db, (entry) => addAuditLog(entry));
+  annualLeave = createAnnualLeaveStore(db, (entry) => addAuditLog(entry));
+  leaveEntitlements.setAnnualProvider(annualLeave);
   reviewWorkflow = createReviewWorkflow(db);
   dashboardMetrics = createDashboardMetricStore(db, (entry) => addAuditLog(entry));
 }
@@ -497,6 +501,7 @@ function close() {
   requestHistory = null;
   reviewSupervisors = null;
   leaveEntitlements = null;
+  annualLeave = null;
   reviewWorkflow = null;
   dashboardMetrics = null;
   currentDbFilePath = '';
@@ -660,6 +665,7 @@ const saveEmployees = (employees) => {
     `);
     db.transaction(() => {
         const removedIds = all('SELECT id FROM employees').map((row) => row.id).filter((id) => !employees.some((e) => String(e.id ?? '').trim() === id));
+        annualLeave?.removeEmployees(removedIds);
         leaveEntitlements?.removeEmployees(removedIds);
         reviewSupervisors?.removeEmployees(removedIds);
         reviewWorkflow?.removeEmployees(removedIds);
@@ -674,6 +680,7 @@ const saveEmployees = (employees) => {
 };
 const loadEmployees = () => all('SELECT * FROM employees ORDER BY id');
 const deleteAllEmployees = () => db.transaction(() => {
+    annualLeave?.removeEmployees(all('SELECT id FROM employees').map((row) => row.id));
     leaveEntitlements?.removeEmployees(all('SELECT id FROM employees').map((row) => row.id));
     reviewSupervisors?.removeEmployees(all('SELECT id FROM employees').map((row) => row.id));
     reviewWorkflow?.removeEmployees(all('SELECT id FROM employees').map((row) => row.id));
@@ -2200,12 +2207,21 @@ const countPunchFailureAuditLogsSince = (startTimestamp, excludedFailureCodes = 
 };
 
 
+// Reconcile exact source allocations in the same transaction as each request mutation.
+// Existing caller transactions and strict audit logs remain the outer atomic boundary.
+const withAnnualLeave = (callback) => (...args) => db.transaction(() => {
+    const result = callback(...args);
+    annualLeave?.reconcile();
+    return result;
+})();
+
 module.exports = {
   getSupervisors: () => supervisors,
   getBrowserPunchPermissions: () => browserPunchPermissions,
   getRequestHistory: () => requestHistory,
   getReviewSupervisors: () => reviewSupervisors,
   getLeaveEntitlements: () => leaveEntitlements,
+  getAnnualLeave: () => annualLeave,
   getReviewWorkflow: () => reviewWorkflow,
   getDashboardMetrics: () => dashboardMetrics,
   getMeals: () => meals,
@@ -2235,10 +2251,10 @@ module.exports = {
   saveCustomThemes, loadCustomThemes,
   loadLeaveTypes, saveLeaveTypes,
   loadLeaveApprovalRoutes, saveLeaveApprovalRoutes,
-  createLeaveRequest, getLeaveRequestById, queryLeaveRequests, countLeaveRequests,
-  hasOverlappingLeaveRequest, updateLeaveRequestSupervisorDecision,
-  updateLeaveRequestAdminDecision, withdrawLeaveRequest,
-  cancelPaperLeaveRequest, updatePaperLeaveRequest,
+  createLeaveRequest: withAnnualLeave(createLeaveRequest), getLeaveRequestById, queryLeaveRequests, countLeaveRequests,
+  hasOverlappingLeaveRequest, updateLeaveRequestSupervisorDecision: withAnnualLeave(updateLeaveRequestSupervisorDecision),
+  updateLeaveRequestAdminDecision: withAnnualLeave(updateLeaveRequestAdminDecision), withdrawLeaveRequest: withAnnualLeave(withdrawLeaveRequest),
+  cancelPaperLeaveRequest: withAnnualLeave(cancelPaperLeaveRequest), updatePaperLeaveRequest: withAnnualLeave(updatePaperLeaveRequest),
   createOvertimeRequest, getOvertimeRequestById, queryOvertimeRequests, countOvertimeRequests,
   hasOverlappingOvertimeRequest, updateOvertimeRequestSupervisorDecision,
   withdrawOvertimeRequest, cancelPaperOvertimeRequest, updatePaperOvertimeRequest,

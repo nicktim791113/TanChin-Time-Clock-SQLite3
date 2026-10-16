@@ -11,6 +11,7 @@ const { attachRequestCalendarRoutes } = require('./request-calendar');
 const { attachSupervisorRoutes } = require('./supervisor-routes');
 const { attachRequestHistoryRoutes } = require('./request-history');
 const { attachLeaveEntitlementRoutes } = require('./leave-entitlement-routes');
+const { attachAnnualLeaveRoutes, ANNUAL_LEAVE_PERMISSIONS } = require('./annual-leave-routes');
 const { buildDashboardMetrics, attachDashboardMetricRoutes } = require('./dashboard-metrics');
 const { recentTaipeiDateRange, groupBrowserPunches, confirmedDeviceClear } = require('./admin-security-data');
 const { normalizeLeavePay } = require('./leave-type-pay');
@@ -58,7 +59,10 @@ const ADMIN_PERMISSION_DEFINITIONS = [
   { code: 'admin.leave.paperCreate', category: '請假管理', label: '紙本請假補登', section: 'leave', highRisk: true },
   { code: 'admin.leave.settings', category: '主管與請假設定', label: '假別與請假／加班共用審核路徑設定', section: 'supervisors' },
   { code: 'admin.leave.balances.view', category: '請假管理', label: '查看與匯出員工假別額度', section: 'leave' },
-  { code: 'admin.leave.balances.manage', category: '請假管理', label: '設定與匯入員工假別額度', section: 'leave', highRisk: true },
+  { code: 'admin.leave.balances.manage', category: '請假管理', label: '設定、匯入與調整員工假別額度', section: 'leave', highRisk: true },
+  { code: ANNUAL_LEAVE_PERMISSIONS.policyManage, category: '特休制度', label: '管理特休制度與年資認列', section: 'leave', highRisk: true, delegatedOnly: true },
+  { code: ANNUAL_LEAVE_PERMISSIONS.grant, category: '特休制度', label: '確認特休年資給假入帳', section: 'leave', highRisk: true, delegatedOnly: true },
+  { code: ANNUAL_LEAVE_PERMISSIONS.close, category: '特休制度', label: '確認特休結算與協商遞延', section: 'leave', highRisk: true, delegatedOnly: true },
   { code: 'admin.overtime.view', category: '加班管理', label: '查看加班申請、警示與匯出', section: 'overtime' },
   { code: 'admin.overtime.paperCreate', category: '加班管理', label: '紙本加班補登', section: 'overtime', highRisk: true },
   { code: 'admin.meals.view', category: '午餐團膳', label: '查看團膳名單、餐數與匯出', section: 'meals' },
@@ -80,7 +84,7 @@ const ADMIN_SECTION_RULES = [
   { id: 'shifts', label: '班別設定', permissions: ['admin.shifts.manage'] },
   { id: 'manualPunch', label: '手動補登', permissions: ['admin.manualPunch.create'] },
   { id: 'reports', label: '考勤報表', permissions: ['admin.reports.view', 'admin.reports.export'] },
-  { id: 'leave', label: '請假管理', permissions: ['admin.leave.review', 'admin.leave.paperCreate', 'admin.leave.settings', 'admin.leave.balances.view', 'admin.leave.balances.manage'] },
+  { id: 'leave', label: '請假管理', permissions: ['admin.leave.review', 'admin.leave.paperCreate', 'admin.leave.settings', 'admin.leave.balances.view', 'admin.leave.balances.manage', ANNUAL_LEAVE_PERMISSIONS.policyManage, ANNUAL_LEAVE_PERMISSIONS.grant, ANNUAL_LEAVE_PERMISSIONS.close] },
   { id: 'overtime', label: '加班管理', permissions: ['admin.overtime.view', 'admin.overtime.paperCreate'] },
   { id: 'meals', label: '午餐團膳', permissions: ['admin.meals.view'] },
   { id: 'supervisors', label: '主管指定', permissions: ['admin.supervisors.manage', 'admin.leave.settings'] },
@@ -117,7 +121,7 @@ const ADMIN_PERMISSION_PRESETS = [
   {
     id: 'full_admin',
     label: '完整管理者',
-    description: '可使用管理者功能；查看與重設他人網頁密碼須另行授權。',
+    description: '可使用一般管理者功能；他人網頁密碼與特休制度、給假、結轉須另行授權。',
     permissions: ADMIN_PERMISSION_DEFINITIONS.filter((permission) => !permission.delegatedOnly).map((permission) => permission.code)
   },
   {
@@ -353,6 +357,18 @@ const API_ROUTE_CATALOG = [
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/overtime/withdraw', auth: '員工', description: '員工撤回尚未核准的加班申請' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/overtime/supervisor-decision', auth: '員工主管', description: '主管審核加班申請' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/logout', auth: 'Session', description: '登出目前瀏覽器 Session' },
+  { category: '特休權利 API', method: 'GET', path: '/api/browser/annual-leave', auth: '額度查看或獨立特休權限', description: '依年度讀取特休制度、年資與權利帳，回傳細分操作權限' },
+  { category: '特休權利 API', method: 'GET', path: '/api/browser/annual-leave/policies', auth: '額度查看或獨立特休權限', description: '讀取特休制度版本及資料 revision' },
+  { category: '特休權利 API', method: 'POST', path: '/api/browser/annual-leave/policy', auth: '特休制度管理權限', description: '儲存特休制度版本；身份模擬禁止，資料與稽核同一交易' },
+  { category: '特休權利 API', method: 'POST', path: '/api/browser/annual-leave/service', auth: '特休制度管理權限', description: '核對員工年資、適用制度與既有人工額度接管依據' },
+  { category: '特休權利 API', method: 'POST', path: '/api/browser/annual-leave/grant-preview', auth: '額度查看或獨立特休權限', description: '依年資試算給假；預覽綁定操作者與登入，不入帳' },
+  { category: '特休權利 API', method: 'POST', path: '/api/browser/annual-leave/grant-confirm', auth: '特休給假權限', description: '驗證 revision/digest/確認/冪等鍵後整批給假入帳' },
+  { category: '特休權利 API', method: 'POST', path: '/api/browser/annual-leave/close-preview', auth: '額度查看或獨立特休權限', description: '預覽結算與協商遞延、待結案及未休工資待核對項目' },
+  { category: '特休權利 API', method: 'POST', path: '/api/browser/annual-leave/close-confirm', auth: '特休結轉權限', description: '確認結算與有依據的遞延；不核定薪資、不標記付款' },
+  { category: '特休權利 API', method: 'POST', path: '/api/browser/annual-leave/correction-preview', auth: '額度調整權限', description: '預覽可追溯的特休權利差額修正，不覆寫原流水' },
+  { category: '特休權利 API', method: 'POST', path: '/api/browser/annual-leave/correction-confirm', auth: '額度調整權限', description: '確認修正及稽核同一交易；給假權限不能代替調整權限' },
+  { category: '特休權利 API', method: 'GET', path: '/api/browser/annual-leave/export', auth: '額度查看或獨立特休權限', description: '依年度匯出 JSON/CSV 額度核對資料，不含年資證據與無關個資' },
+  { category: '特休權利 API', method: 'GET', path: '/api/browser/employee/annual-leave', auth: '本人或明確代辦授權主管', description: '僅查看本人或一位授權員工已入帳特休快照；主管需個人網頁密碼' },
 
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/employees/save', auth: '管理者', description: '整批覆寫員工資料' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/employee/save', auth: '管理者', description: '新增或更新單一員工' },
@@ -7650,6 +7666,11 @@ function createServerApp() {
   attachLeaveEntitlementRoutes(server, {
     db: dbModule, requireSession: requireBrowserSession, requirePermission: requireAdminPermission,
     hasPermission: hasAdminPermission,
+    auditEntry: buildBrowserAuditLogEntry,
+    notify: (request) => { notifyDesktop('leaveEntitlements', getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); }
+  });
+  attachAnnualLeaveRoutes(server, {
+    db: dbModule, requireSession: requireBrowserSession, hasPermission: hasAdminPermission,
     auditEntry: buildBrowserAuditLogEntry,
     notify: (request) => { notifyDesktop('leaveEntitlements', getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); }
   });

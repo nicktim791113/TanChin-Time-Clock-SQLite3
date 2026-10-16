@@ -17,22 +17,25 @@ function leTypeContext(type) {
     const unit = { hour: '小時', day: '天', half_day: '半日' }[type.unit] || '依假別設定';
     return `<section class="le-type-context" aria-label="目前假別額度說明"><h4>${leEscape(type.name || '假別')}額度</h4>
         <p>假別申請單位：${unit}。額度統一以小時計算；下方天數按各員工已保存的每日工時換算。</p>
-        ${leIsAnnualType(type) ? '<p>特休額度目前依曆年記帳，由管理者人工設定。年資自動給假、週年制折算與年度自動結轉尚未提供。</p>'
+        ${leIsAnnualType(type) ? '<p>此區為人工額度記帳。年資特休制度提供已核對年資的試算、核准入帳與結算；使用前須先對帳接管，避免與人工額度重複。</p>'
         : '<p>記帳年度用於彙整額度，不代表此假別適用特休年資或年度結轉制度；額度與可請期間請依適用規定設定。</p>'}
-        ${!type.deducts_balance && !type.deductsBalance ? '<p>此假別未勾選「扣額度」；若另行設定個人額度，仍會追蹤該筆額度的使用與預占。</p>' : ''}</section>`;
+        ${!type.deducts_balance && !type.deductsBalance ? '<p>此假別未勾選「扣額度」；若另行設定個人額度，仍會追蹤該筆額度的使用與預占。</p>' : ''}
+        ${leIsAnnualType(type) && typeof alCanOpen === 'function' && alCanOpen() ? '<div class="al-entry"><button type="button" class="primary-btn" data-al-action="open">年資特休制度</button><span>制度、年資核對、給假與結算</span></div>' : ''}</section>`;
 }
 function leBalanceTable(rows, people = [], types = [], preview = false) {
     if (!rows.length) return '<p class="helper-text">尚未設定假別額度；不代表沒有請假權利。</p>';
     const typeName = (row) => types.find((t) => t.id === row.leave_type_id)?.name || state.dashboard?.leave?.leaveTypes?.find((t) => t.id === row.leave_type_id)?.name || row.leave_type_id;
-    const table = `<div class="le-table-scroll"><table class="le-table"><thead><tr>${people.length ? '<th>員工</th>' : ''}<th>假別</th><th>年度</th><th>額度小時</th><th>結轉</th><th>調整</th><th>已核准</th><th>待審預占</th><th>可用小時</th><th>可用天數</th><th>扣抵起日</th>${preview ? '<th>設定原因</th>' : ''}</tr></thead><tbody>${rows.map((r) => `<tr>
+    const scopeNote = rows.some((r) => r.summaryScope === 'overlapping_source_lifetimes') ? '<p class="helper-text">週年制：所選年交集來源的全期餘額（含跨年使用），不是當年請假發生量。</p>' : '';
+    const dayLabel = (r) => r.mixedDayHours ? '依來源工時' : `${leNumber(r.dayHours)} 小時／日`;
+    const table = `${scopeNote}<div class="le-table-scroll"><table class="le-table"><thead><tr>${people.length ? '<th>員工</th>' : ''}<th>假別</th><th>年度</th><th>額度小時</th><th>結轉</th><th>調整</th><th>已核准</th><th>待審預占</th><th>可用小時</th><th>可用天數</th><th>扣抵起日</th>${preview ? '<th>設定原因</th>' : ''}</tr></thead><tbody>${rows.map((r) => `<tr>
         ${people.length ? `<td>${leEscape(r.employee_id)} ${leEscape(people.find((e) => e.id === r.employee_id)?.name)}</td>` : ''}
-        <td>${leEscape(types.find((t) => t.id === r.leave_type_id)?.name || state.dashboard?.leave?.leaveTypes?.find((t) => t.id === r.leave_type_id)?.name || r.leave_type_id)}<small>${leNumber(r.dayHours)} 小時／日</small></td>
-        <td>${r.year}</td><td>${leNumber(r.grantHours)}</td><td>${leNumber(r.carryHours)}</td><td>${leNumber(r.adjustmentHours)}</td><td>${leNumber(r.usedHours)}</td><td>${leNumber(r.heldHours)}</td>
-        <td class="${r.availableHours < 0 ? 'le-warning' : ''}">${leNumber(r.availableHours)}</td><td>${leNumber(r.availableDays)}</td><td>${leEscape(r.accounting_start)}<small>${r.mode === 'remaining' ? '期中剩餘額度' : '全年總額'}</small></td>${preview ? `<td class="le-reason">${leEscape(r.reason)}</td>` : ''}</tr>
+        <td>${leEscape(types.find((t) => t.id === r.leave_type_id)?.name || state.dashboard?.leave?.leaveTypes?.find((t) => t.id === r.leave_type_id)?.name || r.leave_type_id)}<small>${dayLabel(r)}</small></td>
+        <td>${r.year}</td><td>${leNumber(r.grantHours)}</td><td>${leNumber(r.carryHours)}</td><td>${leNumber(r.adjustmentHours)}${r.mode === 'annual_ledger' ? '<small>含結算扣除</small>' : ''}</td><td>${leNumber(r.usedHours)}</td><td>${leNumber(r.heldHours)}</td>
+        <td class="${r.availableHours < 0 ? 'le-warning' : ''}">${leNumber(r.availableHours)}</td><td>${leNumber(r.availableDays)}</td><td>${leEscape(r.accounting_start)}<small>${r.mode === 'annual_ledger' ? '年資特休權利帳' : r.mode === 'remaining' ? '期中剩餘額度' : '全年總額'}</small></td>${preview ? `<td class="le-reason">${leEscape(r.reason)}</td>` : ''}</tr>
         ${r.warnings?.length ? `<tr><td colspan="${(people.length ? 11 : 10) + (preview ? 1 : 0)}" class="le-warning">${r.warnings.map(leEscape).join('<br>')}</td></tr>` : ''}`).join('')}</tbody></table></div>`;
     if (people.length || preview) return table;
-    return `<h4>${rows[0].year} 年假別餘額</h4><table class="le-table le-own-table"><thead><tr><th>假別</th><th>可用</th><th>已核准</th><th>預占</th></tr></thead><tbody>${rows.map((r) => `<tr>
-        <td>${leEscape(typeName(r))}<small>${leNumber(r.dayHours)} 小時／日</small></td>
+    return `<h4>${rows[0].year} 年假別餘額</h4>${scopeNote}<table class="le-table le-own-table"><thead><tr><th>假別</th><th>可用</th><th>已核准</th><th>預占</th></tr></thead><tbody>${rows.map((r) => `<tr>
+        <td>${leEscape(typeName(r))}<small>${dayLabel(r)}</small></td>
         <td class="${r.availableHours < 0 || r.availableHours == null ? 'le-warning' : ''}">${leNumber(r.availableHours)}${r.availableHours == null ? '' : ' 小時'}<small>${r.availableDays == null ? '需管理者確認' : `${leNumber(r.availableDays)} 天`}</small></td>
         <td>${leNumber(r.usedHours)} 小時</td><td>${leNumber(r.heldHours)} 小時</td></tr>`).join('')}</tbody></table><details class="le-own-details"><summary>額度明細</summary>${table}</details>`;
 }

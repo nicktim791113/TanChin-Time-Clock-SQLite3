@@ -17,7 +17,7 @@ const workbenchHelpTopics = {
     'leave.pending': ['管理部待複核', '管理部處理已完成主管程序的待複核請假。', ['核對人員、假別、日期、實際時數與主管審核進度。', '填審核備註後選核准或駁回，確認結果。'], ['部分必審主管核准不會提前進入管理部；請勿在這裡代替主管投票。', '核准轉為已用額度；駁回釋放預占。']],
     'leave.records': ['請假紀錄', '用日曆或列表查看請假，依權限審核、修正或作廢。', ['切換日曆／列表、月份與篩選條件；列表可翻頁。', '點原單查看起訖、實際時數、狀態與審核進度。', '修正保留同一單號；作廢前確認原因及影響。'], ['跨日單會在涵蓋日期出現，不能把日曆格數當作申請件數。', '待審是預占，終審核准才計為已用。']],
     'leave.types': ['假別設定', '維護假別名稱、單位、附件需求、額度扣抵與給薪標記。', ['新增或編輯假別，核對是否需要附件及是否扣抵額度。', '給薪標記可選全薪、半薪或無薪，完成後儲存設定。'], ['給薪標記只供資訊與 API 輸出；不會自動計算薪資、扣薪或改變薪資匯出金額。', '病假的半薪可能有法定天數與情況限制；此欄不是完整法定病假薪資引擎。', '停用保留歷史引用，與刪除假單不同。']],
-    'leave.balances': ['假別額度', '按員工、假別與記帳年度設定額度，區分核准使用與待審預占。', ['選記帳年度與假別；先查看目前餘額與提醒。', '選員工、全年總額或期中剩餘、扣抵起日、天數、人工轉入與調整，填原因後預覽。', '逐筆核對預覽再確認全部儲存。Excel 也須先預覽再確認；取消預覽不寫入。', '舊單每日扣抵分配使用原單號及日期＝實際時數，僅補分配，不改原單。'], ['可用＝額度＋轉入＋調整－已核准－待審預占；未設定不代表沒有請假權利。', '每日換算工時是共用新額度設定，既有額度保留原工時。特休記帳期間不會套用為其他假別法定制度。', '自動年資給假與年度結轉本版僅有設計草案，尚未實作。']],
+    'leave.balances': ['假別額度', '按員工、假別與記帳年度設定額度，區分核准使用與待審預占。', ['選記帳年度與假別；先查看目前餘額與提醒。', '選員工、全年總額或期中剩餘、扣抵起日、天數、人工轉入與調整，填原因後預覽。', '逐筆核對預覽再確認全部儲存。Excel 也須先預覽再確認；取消預覽不寫入。', '舊單每日扣抵分配使用原單號及日期＝實際時數，僅補分配，不改原單。'], ['可用＝額度＋轉入＋調整－已核准－待審預占；未設定不代表沒有請假權利。', '每日換算工時是共用新額度設定，既有額度保留原工時。特休記帳期間不會套用為其他假別法定制度。', '特休可進入年資特休制度，以核對、試算及確認建立精確權利帳；已接管帳目不得用人工表單覆寫。']],
     'overtime.paper': ['紙本核准加班補登', '登錄已在紙本核准的加班，保留正式單號與核准依據。', ['選員工、起訖、實際加班時數、主管與原因。', '核對多人名單及已核准確認後送出。'], ['一般待審申請與紙本補登不同；不得把待審單當已核准補登。']],
     'overtime.alerts': ['加班出勤查核', '檢視加班申請與出勤資料的差異提醒。', ['核對警示期間與實際打卡，再查原加班單。'], ['警示需人工查核，不直接計算薪資或認定責任。']],
     'overtime.records': ['加班申請紀錄', '查看加班日曆、列表與審核進度。', ['選月份、狀態與員工，切日曆／列表並翻頁查找。', '開啟原單查看主管票權；有權限者可依核准依據修正或作廢。'], ['本人加班應由本人申請；主管代送須使用已授權的主管代辦。']],
@@ -63,21 +63,42 @@ const workbenchHelpLabels = {
 const workbenchHelpFields = {
     id: '員工或設定的唯一識別碼；編輯時先核對對象，避免以新代碼重建既有資料。', name: '此筆人員或設定的顯示名稱。', employeeId: '選擇本次操作的員工；送出前核對工號與姓名。', employee_id: '選擇本次操作的員工。', employeeIds: '勾選本次批量操作對象；搜尋只篩選畫面，不等於勾選。',
     department: '員工所屬部門；在篩選列選取時只影響畫面範圍。', job_title: '員工職稱，供主檔顯示及篩選使用。', shift: '員工適用的班別；請先在班別設定建立。', card: '打卡卡號，須避免與其他員工重複。', password: '此功能指定帳號或桌面共用密碼，請確認頁面說明的適用範圍。',
-    hire_date: '員工到職日期。本版不會據此自動發給特休。', leave_date: '員工離職日期，影響在職判斷；不刪除歷史紀錄。', birth_date: '員工出生日期。', gender: '員工性別資料。', national_id: '身分識別資料，屬敏感個資。', bank_account: '銀行帳戶資料；本頁不執行薪資付款。', mobile_phone: '員工聯絡電話。', emergency_contact: '緊急聯絡人。', emergency_phone: '緊急聯絡電話。', address: '員工聯絡地址。', registered_address: '戶籍地址。', notes: '補充備註；避免放入不必要的密碼或機密。',
+    hire_date: '員工名冊到職日期；年資給假仍須先在年資特休制度核對起算日及接管基準，不會單憑此欄自動入帳。', leave_date: '員工離職日期，影響在職判斷；不刪除歷史紀錄。', birth_date: '員工出生日期。', gender: '員工性別資料。', national_id: '身分識別資料，屬敏感個資。', bank_account: '銀行帳戶資料；本頁不執行薪資付款。', mobile_phone: '員工聯絡電話。', emergency_contact: '緊急聯絡人。', emergency_phone: '緊急聯絡電話。', address: '員工聯絡地址。', registered_address: '戶籍地址。', notes: '補充備註；避免放入不必要的密碼或機密。',
     date: '操作適用的日期，請核對是否為補登、供餐或查詢日期。', time: '操作適用時間；補登請使用實際應記錄的時點。', start: '開始時間。', end: '結束時間。', startDate: '查詢或作業開始日期，須不晚於結束日期。', endDate: '查詢或作業結束日期。', start_at: '申請開始日期與時間。', end_at: '申請結束日期與時間。', duration_hours: '實際請假／加班時數，不能直接用起訖經過時間代替工作時數。', reason: '本次申請或異動原因，保存後供審核與稽核使用。',
     unit: '假別的填寫／顯示單位；不等於給薪比例。', pay_mode: '全薪／半薪／無薪資訊標記，不會自動算薪資或扣薪。', requires_attachment: '是否要求此假別附證明。', deducts_balance: '是否納入假別額度扣抵。', enabled: '是否啟用此設定；停用與刪除不同。', display_order: '清單排序數值。', description: '此設定的用途或補充說明。',
-    year: '額度記帳年度；各假別法定資格與期間須依制度另外確認。', period: '特休額度記帳方式；本版為曆年制，不會自動按年資給假。', dayHours: '將天數換算小時的共用工時，新額度才採用；既有額度保留原工時。', mode: '全年總額會扣全年既有紀錄；期中剩餘則自指定扣抵日起計算，勿重複扣減已在外部帳冊扣除的時數。', accountingStart: '額度開始扣抵的日期，應與所選總額／剩餘方式一致。', grantDays: '輸入的額度天數會按該筆每日工時換算為小時。', carryHours: '人工確認的上期轉入／特休遞延時數；本版不會自動年度結轉。', adjustmentHours: '人工增減時數，可正可負，需寫明原因。', requestId: '原請假單號；補每日分配不會建立另一張假單。', dailyHours: '每列用 YYYY-MM-DD=時數，合計須等於原單實際時數。',
+    year: '額度記帳年度；各假別法定資格與期間須依制度另外確認。', period: '人工額度使用曆年記帳；年資特休制度另有週年／曆年選項，並保存來源權利。', dayHours: '將天數換算小時的共用工時，新額度才採用；既有額度保留原工時。', mode: '全年總額會扣全年既有紀錄；期中剩餘則自指定扣抵日起計算，勿重複扣減已在外部帳冊扣除的時數。', accountingStart: '額度開始扣抵的日期，應與所選總額／剩餘方式一致。', grantDays: '輸入的額度天數會按該筆每日工時換算為小時。', carryHours: '人工額度的上期轉入時數；已接管精確權利帳者改由年資特休的年度結算保留來源及同意證據。', adjustmentHours: '人工增減時數，可正可負，需寫明原因。', requestId: '原請假單號；補每日分配不會建立另一張假單。', dailyHours: '每列用 YYYY-MM-DD=時數，合計須等於原單實際時數。',
     reviewMode: '任一主管核准，或全部指定必審主管核准。', reviewEmployeeIds: '要套用審核路徑的員工，與審核主管名單分開。', reviewSupervisorIds: '可審核所選員工新申請的主管。', requiredSupervisorIds: '必審模式中必須核准的主管，不能留空或包含申請者本人。', supervisorIds: '要授予代辦的主管；不會同時改變審核路徑。',
     eating: '當天用餐／不用餐的登記選擇。', serving: '該日是否供餐。', cutoff: '供餐當日登記截止時間（台北時間）。', note: '該日或設定的補充說明。', member: '是否參加團膳，另核對有效起訖期間。',
     deviceBindingEnabled: '要求員工遠端登入／打卡使用符合綁定政策的裝置。', gpsRequiredOnPunch: '遠端打卡時要求提供 GPS；瀏覽器仍須取得定位權限。', maxGpsAccuracyMeters: '允許的定位誤差上限，單位公尺，並非地理圍欄半徑。', confirmEmployeeId: '輸入確認窗指定的工號，避免誤解除他人裝置。',
     mainTitle: '登入頁與工作台主標題。', subtitle: '共用副標題。', heroDescription: '頁首說明文字。', content: '問候語或作業文字內容。', title: '此場景、任務或設定的名稱。', sound: '響鈴使用的音效。', duration: '播放時長，請依頁面單位輸入。', days: '要執行／供餐的星期，可複選。', frequency: '自動化任務的執行頻率。', export_template: '匯出欄位格式；需與下游薪資／ERP 接收格式一致。', export_directory: '此任務的匯出資料夾，指主機端可存取的位置。', defaultDirectory: '主機端的預設備份資料夾。', retentionCount: '保留備份份數，超出時依備份機制清理。', sourceFilePath: '要還原的主機端完整備份檔路徑；先核對版本與配套金鑰。', confirmText: '依頁面指定文字確認此高影響操作。'
 };
 
+Object.assign(workbenchHelpTopics, {
+    'annual.overview': ['年資特休權利總覽', '以完整來源權利及精確年度配置追蹤給假、使用、預占與結算。', ['選查看年度，核對已給、已休、待審預占與可用小時。', '點查看明細，展開資格事件、每段公式、原始分數及年度配置。', '匯出 JSON 保留精確計算；CSV 提供額度核對。'], ['小數摘要可能省略循環尾數，帳本保留完整分子與分母，不以畫面小數回算。', '已取得來源配置於後續年度的部分，不是額外給假或協商遞延。', '既有人工額度接管後，使用精確調整；人工表單與 Excel 不能覆蓋新權利帳。', '週年制顯示所選年交集來源的全期餘額，包含跨年使用，不是當年請假發生量。', '來源工時不同時顯示依來源工時，天數逐來源換算相加；不可用最新工時反推所有歷史日數。']],
+    'annual.policy': ['特休制度版本', '建立可追溯的制度與小數規則，保存舊版本供每筆給假重算。', ['填制度名稱、生效日與特休假別代碼；假別須啟用並扣額度。', '選曆年或週年、曆月比例或實際日數、保留原值或無條件進位一位。', '填協商／制度依據及原因，逐項確認後建立版本。'], ['新生效日須晚於既有版本，不能回溯覆蓋已發給來源。', '進位在精確分段加總後只做一次；7.01 變 7.1，精確 7.1 不變 7.2。', '全薪／半薪標記不參與特休權利計算，本功能不計薪或付款。']],
+    'annual.service': ['年資核對與期初接管', '確認真正受僱年資、工時與期初餘額，避免漏給或與人工額度重複。', ['選員工，核對名冊到職日與認列年資起算日。', '填正常工時、工作型態及必要的比例依據；不計年資區間每列填起日、復職日、原因。', '填接管起日、接管日前未休剩餘小時、期限與對帳來源；接管前權利不再重複自動發給。', '月底／閏日等日期人工核對後勾確認；保存核對版本及原因。後續服務修訂只影響適用版本，不改寫已入帳快照。'], ['不計年資區間採起日含、復職日不含，不可重疊。', '每週工作日相同、每天較短者維持完整日數；比例型工時不能再重複折減每日工時。', '名冊或人工額度在核對後異動時需重新核對；已發權利不能以改到職日直接回寫。']],
+    'annual.grant': ['年資特休試算與核准', '先計算、再核對、最後確認入帳；未取得的未來權利清楚分開顯示。', ['選制度、配置年度及資格基準日，填原因。', '用工號／姓名或部門篩選並選取 1 至 100 位員工；篩選不會取消已選人員。', '產生試算後展開每人與各來源，核對法定級距、資格日、年資排除、分攤權重、精確原值、進位差額及後續年度配置。', '全部待確認項目處理完，具給假權限者勾確認後核准入帳；舊預覽、未來基準日及重複請求會受檢查。'], ['半年 3 日與滿一年 7 日是獨立權利，不只補 4 日。', '只有已取得事件入帳；未達資格日的試算沒有可用額度。', '同一員工資格事件只給一次，確認失敗時整批回滾。']],
+    'annual.close': ['年度結算與協商遞延', '逐來源核對未休餘額；結轉保留來源，工資項目維持待核定狀態。', ['選來源年度、基準日及年度終結／契約終止情境。', '展開來源並勾選本次處理；待審預占與每日分配異常須先結案。', '協商遞延須逐筆填同意日期與證據；其餘列待未休工資處理。', '預覽核對來源扣除與轉入結果，再由結轉權限確認；離職須涵蓋全部已取得來源，包括後續年度配置。'], ['結轉不是兩個年度都保留完整可用額度，之後先扣遞延來源。', '已遞延批次不能再次遞延；已離職者也不能以年度情境繞過工資結算。', '年資仍待歷史對帳，或名冊到職／離職日尚未完成版本核對時，先核對再結算。', '待未休工資不是已核薪或已付款；本版不執行薪資付款。', '舊單撤回會回到原來源，若來源已結算，需重新核對新增剩餘，不自動加到下一年。']],
+    'annual.correction': ['精確特休額度調整', '用獨立額度管理權限作差額修正，保存原始給假與完整異動。', ['選員工來源批次，確認其可用、已休、預占及結算情況。', '填正或負的精確小時，接受十進位或分數，例如 -0.125、1/3，並填原因。', '預覽前後差額，核對後確認調整。'], ['負調整不能移除已使用、預占或已結轉的權利。', '查看、給假或結轉權限不等於額度調整權限。', '修正保留原批次與異動紀錄，不刪除原請假單。']],
+    'annual.detail': ['個人特休計算與來源明細', '唯讀查看授權範圍內的已入帳權利、計算快照與異動。', ['核對年度及員工。', '展開來源權利與計算過程，查看起算日、資格日、法定日數、分段比例、分數原值及進位差額。', '查看使用、預占、結轉與調整流水；關閉返回原頁。'], ['員工只看本人，代辦主管只看已明確授權員工，均不能從此視窗調整額度。', '來源快照保留當時規則，不因後續制度版本而被改寫。', '不同來源期限與工時可能不同，應以各來源精確明細核對。']]
+});
+const annualHelpFields = {
+    detailYear: '切換已入帳計算明細年度；此視窗唯讀，不會新增或調整額度。', verified: '實際核對到職年資、留職停薪區間與正常工時後才勾選，未核對不能保存。',
+    name: '本制度版本的名稱，供試算與已入帳快照辨識。', leaveTypeId: '明確指定特休假別；須為啟用且扣額度的代碼，不會把事假或病假套用年資。', effectiveFrom: '制度版本的開始生效日，新版本不可回溯覆蓋既有給假。',
+    period: '週年制保存資格事件的完整期間；曆年制另依約定將完整權利分攤到年度，仍保留法定來源。', prorationBasis: '曆月比例採完整月及未滿月權重；實際日數採真實日數，閏年也保留實際分母。', rounding: '保留精確原值，或加總後無條件進位至小數第一位；不四捨五入，也不逐段進位。', agreementReference: '填寫公司採用制度與折算方式的協商依據或文件編號。',
+    serviceDate: '已核實的認列年資起算日，可與名冊到職日不同，但須有確認依據。', serviceEffectiveFrom: '首次版本須與接管起日相同；後續工時或工作型態按資格取得日選版本，不改寫已入帳權利。', employmentType: '依核實工作型態選全時、相同工作日的短工時或比例型部分工時。', entitlementFactor: '比例型部分工時才使用核實比例；其他型態為 1，不再次減少日數。', factorBasis: '比例型部分工時的計算與核對依據。', dayHours: '天數換小時的核實工時。比例型需填比例換算基準，避免與比例重複折減；各已入帳來源保留當時工時。', excludedPeriodsText: '每列為起日,復職日,原因；起日計入排除，復職日不排除，區間不能重疊。',
+    cutoverDate: '精確權利帳開始接管日；此前已取得權利以核對後期初餘額承接，不再次給假。', openingHours: '截至接管日前的已核對剩餘小時，接受精確十進位或分數；不要填入尚未扣已休的全年總額。', openingExpires: '核對後期初餘額的使用迄日（含當日），須有來源依據。', openingSource: '期初餘額與原人工額度的對帳來源或文件編號。', edgeDateConfirmed: '已人工確認月底／2 月 29 日採用的資格日期規則，未核對不得勾選。',
+    year: '試算的配置年度或結算的來源年度；離職結算年度自動依基準日帶入並唯讀。', alYear: '切換要查看的配置年度，不發給額度。', asOf: '判斷資格或是否可結算的基準日；未來日期僅能試算，不能提前確認。', policyId: '選已建立、適用資格日期的制度版本。', allocationId: '選擇本次調整的精確來源批次，不直接覆寫整人全年餘額。', quantity: '正數加額度，負數減尚未使用的額度；單位小時，支援小數或分數。', closureType: '年度終結處理所選來源年度；契約終止核對該人全部已取得來源。', closeEmployeeId: '選已離職員工，列出所有已取得來源，包含後續年度配置。'
+};
+
 function workbenchHelpContext(includeModal = true) {
+    if (includeModal && document.querySelector('#annual-leave-detail-dialog[open]')) return { role: state.dashboard?.role, section: 'annual', sub: 'detail', topic: workbenchHelpTopics['annual.detail'], root: '#annual-leave-detail-dialog' };
     if (includeModal && document.querySelector('#dashboard-metric-settings[open]')) return { role: 'admin', section: 'metrics', sub: 'settings', topic: workbenchHelpTopics['metrics.settings'], root: '#dashboard-metric-settings' };
     const directoryDialog = document.querySelector('#admin-directory-dialog[open]');
     if (includeModal && directoryDialog) { const remote = directoryDialog.querySelector('h2')?.textContent.includes('的遠端打卡'); const sub = remote ? 'remoteDialog' : 'deviceDialog'; return { role: 'admin', section: 'security', sub, topic: workbenchHelpTopics[`security.${sub}`], root: '#admin-directory-dialog' }; }
     if (includeModal && document.querySelector('#dashboard-insight-modal:not(.hidden)')) return { role: 'admin', section: 'metrics', sub: 'detail', topic: workbenchHelpTopics['metrics.detail'], root: '#dashboard-insight-content' };
+    const annualRoot = document.getElementById('annual-leave-workspace');
+    if (annualRoot && !annualRoot.closest('.hidden,[hidden]')) { const sub = annualRoot.querySelector('[data-al-context]')?.dataset.alContext || 'overview'; return { role: state.dashboard?.role, section: 'annual', sub, topic: workbenchHelpTopics[`annual.${sub}`], root: '#annual-leave-workspace' }; }
     const role = state.dashboard?.role || 'employee', section = state.activeSections[role] || '';
     let sub = state.activeSubSections?.[role]?.[section] || '';
     if (section === 'meals' && typeof mealState !== 'undefined') sub = mealState.panel;
@@ -86,6 +107,8 @@ function workbenchHelpContext(includeModal = true) {
     return { role, section, sub, topic };
 }
 function workbenchControlLabel(node) {
+    if (node.matches('[data-al-employee]')) return '選擇員工';
+    if (node.matches('summary') && node.closest('#annual-leave-workspace,#annual-leave-detail-dialog')) return '展開來源批次與計算明細';
     const personField = node.name || '';
     if (personField === 'confirmEmployeeId') return '輸入確認工號';
     if (node.matches('[data-paper-employee-checkbox]') || /^(employeeIds|reviewEmployeeIds|reviewSupervisorIds|requiredSupervisorIds|supervisorIds)$/.test(personField)) {
@@ -103,6 +126,39 @@ function workbenchControlLabel(node) {
 }
 function workbenchControlDescription(node, context) {
     const name = node.name, label = workbenchControlLabel(node), action = node.dataset.action || '', form = node.closest('form');
+    if (context.section === 'annual') {
+        const annualActions = {
+            'open': '開啟年資特休的制度、年資核對、試算及結算；已修改的人工額度表單會先提示確認。',
+            'back': '返回人工假別額度；尚未儲存的年資作業先提示確認。',
+            'tab': '切換目前可用權限的特休子頁；未儲存輸入會先提示確認。',
+            'refresh': '重新取得最新年資、政策及權利帳；先確認是否捨棄未儲存內容。',
+            'export-json': '下載所選年度的精確額度、來源計算與結算核對資料，保留完整分數；不含年資及協商的私人證據。',
+            'export-csv': '下載所選年度的額度核對表，包含精確數值欄位；此處沒有匯出模板選項，也不能作為人工額度覆寫匯入。',
+            'cancel-preview': '取消待確認預覽，保留表單輸入供修改後重新試算；不會入帳。',
+            'employee-detail': '展開此員工已入帳權利、計算快照與來源餘額；此視窗唯讀。',
+            'select-visible': '選取目前搜尋及部門篩選可見員工，保留原先已選取者；每批最多 100 位。',
+            'clear-selected': '清空本次給假試算的人員勾選，不刪除員工或已入帳權利。'
+        };
+        if (annualActions[node.dataset.alAction]) return annualActions[node.dataset.alAction];
+        const annualSubmits = {
+            'policy': '建立新的制度版本並保存原因與稽核；舊版本及既有給假不覆寫。',
+            'service': '保存核對的年資版本。若影響已入帳來源，記錄為待核對而不套用，並封鎖後續給假。',
+            'grant-preview': '產生給假計算預覽，不寫入額度；展開逐筆計算及警示後才可確認。',
+            'grant-confirm': '確認此預覽的已取得特休給假及所有年度配置入帳；需獨立給假權限，不是請假單審核。',
+            'close-preview': '核對到期或離職來源，預覽遞延或待未休工資結果，不寫入結算。',
+            'close-confirm': '確認原來源扣除與遞延轉入或待結薪紀錄，需獨立結算權限；不執行付款。',
+            'correction-preview': '預覽精確調整的來源、前值、差額與後值；需要額度調整權限。',
+            'correction-confirm': '確認精確差額並保存稽核，保留原始權利；已使用、預占或結轉部分不能任意減除。'
+        };
+        if (node.matches('button[type="submit"]') && annualSubmits[form?.dataset.alForm]) return annualSubmits[form.dataset.alForm];
+        if (annualHelpFields[name]) return annualHelpFields[name];
+        if (/^closeMode_/.test(name)) return '協商遞延會扣除原來源並建立下一期同來源額度；待未休工資僅列待核定，不代表已付款。';
+        if (/^agreementDate_/.test(name)) return '此筆遞延取得員工同意的日期，不得晚於結算基準日。';
+        if (/^evidence_/.test(name)) return '此筆員工同意證據或文件編號；缺少依據不能遞延。';
+        if (/^include_/.test(name)) return '勾選此來源納入本次結算，須展開核對金額及處理方式。';
+        if (node.matches('[data-al-employee]')) return '把這位員工納入給假試算，最多 100 位；篩選不代表已選取。';
+        if (label === '展開來源批次與計算明細') return '展開查看完整公式、原始分數、來源期間及異動，不會寫入額度。';
+    }
     if (node.matches('[data-dm-move]')) return '將這個資訊群組向上或向下移動一個位置；確認排列並儲存後才套用。';
     if (name === 'density') return '選擇標準或緊湊高度；只調整卡片間距，保留所有資訊。';
     if (node.matches('button') && (/^reset-.+-form$/.test(action) || /^(清空|重設).*表單$/.test(label))) return '將目前表單恢復新增／初始狀態，捨棄尚未儲存的輸入；不刪除已儲存資料。';
@@ -180,7 +236,7 @@ function workbenchControlInventory(context = workbenchHelpContext()) {
     return entries;
 }
 function installWorkbenchModalHelp() {
-    for (const root of document.querySelectorAll('#admin-directory-dialog[open],#dashboard-metric-settings[open],#dashboard-insight-modal:not(.hidden)')) {
+    for (const root of document.querySelectorAll('#admin-directory-dialog[open],#dashboard-metric-settings[open],#dashboard-insight-modal:not(.hidden),#annual-leave-detail-dialog[open]')) {
         if (root.querySelector('[data-wb-modal-help]')) continue;
         const header = root.querySelector('.modal-header,.ad-dialog-header,.dm-dialog-header,header') || root.firstElementChild;
         if (!header) continue;
