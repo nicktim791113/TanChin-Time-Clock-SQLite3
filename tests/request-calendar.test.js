@@ -102,8 +102,8 @@ test('calendar browser endpoints retain complete history, permission scopes, fil
         assert.equal(emptyReview.calendar.totalCount, 0);
         for (const kind of ['leave', 'overtime']) {
             const review = await request(`/employee/${kind}/calendar?month=2026-10&scope=review`, supervisor.token);
-            assert.equal(review.calendar.totalCount, 20);
-            assert.ok(review.calendar.detail.records.every((row) => row.supervisor_id === 'A001' && row.status === 'pending_supervisor' && row.calendarActions.review === 'supervisor'));
+            assert.equal(review.calendar.totalCount, 19);
+            assert.ok(review.calendar.detail.records.every((row) => row.employee_id !== 'A001' && row.supervisor_id === 'A001' && row.status === 'pending_supervisor' && row.calendarActions.review === 'supervisor'));
         }
     });
     await t.test('role and fine-grained permissions are enforced on every read', async () => {

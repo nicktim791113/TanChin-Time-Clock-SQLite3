@@ -11,6 +11,7 @@ const { attachRequestCalendarRoutes } = require('./request-calendar');
 const { attachSupervisorRoutes } = require('./supervisor-routes');
 const { attachRequestHistoryRoutes } = require('./request-history');
 const { attachLeaveEntitlementRoutes } = require('./leave-entitlement-routes');
+const { buildDashboardMetrics, attachDashboardMetricRoutes } = require('./dashboard-metrics');
 const {
   ATTENDANCE_EXPORT_FIELD_DEFINITIONS,
   DEFAULT_ATTENDANCE_EXPORT_TEMPLATE_ID,
@@ -1861,6 +1862,7 @@ function formatLeaveRequestForDashboard(request, lookup = buildLeaveLookup()) {
     : {};
   return {
     ...request,
+    reviewPolicy: formatRequestReviewPolicy('leave', request, lookup),
     employeeId: request.employee_id,
     employeeName: employee.name || '',
     employeeDepartment: employee.department || '',
@@ -1899,6 +1901,7 @@ function getEmployeeLeaveState(employee) {
   return {
     leaveTypes: leaveTypes.filter((type) => type.enabled),
     historyWindow: dbModule.getRequestHistory().window('leave', historyNow),
+    supervisorQueueCount: dbModule.countLeaveRequests({ supervisorId: employee.id, status: 'pending_supervisor' }),
     myRequests: dbModule.queryLeaveRequests({ employeeId: employee.id, ...dbModule.getRequestHistory().filters('leave', historyNow), limit: 50 })
       .map((request) => formatLeaveRequestForDashboard(request, lookup)),
     supervisorQueue: dbModule.queryLeaveRequests({
@@ -2070,6 +2073,7 @@ const OVERTIME_STATUS_LABELS = {
 const OVERTIME_APPROVAL_MODE_LABELS = {
   self_request: '本人申請',
   supervisor_proxy_auto_approved: '主管代申請自動核准',
+  supervisor_proxy: '主管代申請（指定主管審核）',
   admin_paper_approved: '管理者紙本核准補登'
 };
 
@@ -2087,6 +2091,11 @@ function buildOvertimeLookup(employees = dbModule.loadEmployees()) {
   };
 }
 
+function formatRequestReviewPolicy(kind, request, lookup) {
+  const policy = dbModule.getReviewWorkflow().state(kind, request.id);
+  return policy ? { ...policy, reviewers: policy.reviewers.map((r) => ({ ...r, name: lookup.employeeMap.get(r.id)?.name || r.id })) } : null;
+}
+
 function formatOvertimeRequestForDashboard(request, lookup = buildOvertimeLookup()) {
   const employee = lookup.employeeMap.get(request.employee_id) || {};
   const applicant = lookup.employeeMap.get(request.applicant_id) || {};
@@ -2096,6 +2105,7 @@ function formatOvertimeRequestForDashboard(request, lookup = buildOvertimeLookup
     : {};
   return {
     ...request,
+    reviewPolicy: formatRequestReviewPolicy('overtime', request, lookup),
     employeeId: request.employee_id,
     employeeName: employee.name || '',
     employeeDepartment: employee.department || '',
@@ -2460,6 +2470,7 @@ function getEmployeeOvertimeState(employee) {
       isSelf: item.id === employee.id
     })),
     historyWindow: dbModule.getRequestHistory().window('overtime', historyNow),
+    supervisorQueueCount: dbModule.countOvertimeRequests({ supervisorId: employee.id, status: 'pending_supervisor' }),
     myRequests: dbModule.queryOvertimeRequests({ employeeOrApplicantId: employee.id, ...dbModule.getRequestHistory().filters('overtime', historyNow), limit: 80 })
       .map((request) => formatOvertimeRequestForDashboard(request, lookup)),
     supervisorQueue: dbModule.queryOvertimeRequests({
@@ -3030,7 +3041,7 @@ function buildEmployeeDashboard(employee, session = null) {
   const nextPunchType = determinePunchType(employee.id) === 'in' ? '上班' : '下班';
   const currentShift = findShiftForDate();
   const leave = getEmployeeLeaveState(employee), overtime = getEmployeeOvertimeState(employee);
-  const reviewCount = leave.supervisorQueue.length + overtime.supervisorQueue.length;
+  const reviewCount = leave.supervisorQueueCount + overtime.supervisorQueueCount;
 
   return {
     role: 'employee',
@@ -3052,7 +3063,8 @@ function buildEmployeeDashboard(employee, session = null) {
     },
     leave,
     overtime,
-    supervisorReview: { count: reviewCount, canUse: reviewCount > 0 || dbModule.getReviewSupervisors().rows().some((row) => row.supervisor_id === employee.id) },
+    supervisorReview: { count: reviewCount, leaveCount: leave.supervisorQueueCount, overtimeCount: overtime.supervisorQueueCount,
+      canUse: reviewCount > 0 || dbModule.getReviewSupervisors().rows().some((row) => row.supervisor_id === employee.id) },
     meals: dbModule.getMeals().calendar({ employeeId: employee.id }),
     supervisorProxy: { count: dbModule.getSupervisors().assignedEmployees(employee.id).length,
       canUse: session?.authMethod === 'web_password' && !session?.impersonation?.active },
@@ -3211,9 +3223,18 @@ function buildManagerDashboard(employee, session = {}) {
   const insights = buildAdminDashboardInsights(datasets, allRecords);
   const adminPermissions = getAdminPermissionsForSession(session);
   const adminSections = getAdminSectionAccess(session);
+  const canAttendance = hasAnyAdminPermission(session, ['admin.reports.view', 'admin.manualPunch.create']);
+  if (!canAttendance) insights.todayAttendance = { records: [], normalRecords: [], abnormalRecords: [], normalEmployeeIds: [], abnormalEmployeeIds: [], failureLogs: [] };
+  const dashboardMetrics = buildDashboardMetrics(dbModule, (p) => hasAdminPermission(session, p), {
+    todayPunchCount: insights.todayAttendance.normalEmployeeIds.length, todayAbnormalPunchCount: canAttendance ? todayAbnormalPunchCount : 0,
+    shiftCount: datasets.shifts.length, bellScheduleCount: `${insights.bells.enabledCount}/${insights.bells.totalCount}`,
+    greetingCount: datasets.greetings.length, customThemeCount: datasets.customThemes.length
+  });
+  Object.assign(dashboardMetrics, dbModule.getDashboardMetrics().preferences(session.employeeId, dashboardMetrics.catalog));
 
   return {
     role: 'admin',
+    dashboardMetrics,
     user: sanitizeEmployeeForProfile(employee),
     displaySettings: getBrowserDisplaySettings(),
     workspaceNavOrder: buildWorkspaceNavOrderState(session),
@@ -3225,8 +3246,8 @@ function buildManagerDashboard(employee, session = {}) {
     summary: {
       employeeCount: datasets.employees.length,
       shiftCount: datasets.shifts.length,
-      todayPunchCount,
-      todayAbnormalPunchCount,
+      todayPunchCount: canAttendance ? todayPunchCount : 0,
+      todayAbnormalPunchCount: canAttendance ? todayAbnormalPunchCount : 0,
       bellScheduleCount: datasets.bellSchedules.length,
       greetingCount: datasets.greetings.length,
       customThemeCount: datasets.customThemes.length
@@ -5218,6 +5239,7 @@ function attachBrowserRoutes(server) {
         reason: String(request.body?.reason || '').trim(),
         status: 'pending_supervisor',
         supervisor_id: supervisorId,
+        review_policy: dbModule.getReviewSupervisors().policy(employee.id),
         created_at: now,
         updated_at: now
       };
@@ -5277,10 +5299,11 @@ function attachBrowserRoutes(server) {
   server.post('/api/browser/employee/leave/supervisor-decision', requireBrowserSession, requireBrowserRole('employee'), (request, response) => {
     try {
       const requestId = String(request.body?.requestId || '').trim();
-      const decision = String(request.body?.decision || '').trim() === 'approved' ? 'approved' : 'rejected';
+      const decision = String(request.body?.decision || '').trim();
+      if (!['approved', 'rejected'].includes(decision)) throw createHttpError('請選擇有效審核結果。', 400);
       const leaveRequest = dbModule.getLeaveRequestById(requestId);
       if (!leaveRequest) throw createHttpError('找不到指定的請假申請。', 404);
-      if (leaveRequest.supervisor_id !== request.browserSession.employeeId) {
+      if (request.browserSession.impersonation?.active || !dbModule.getReviewWorkflow().canReview('leave', leaveRequest, request.browserSession.employeeId)) {
         throw createHttpError('只有指定主管可以審核這張請假申請。', 403);
       }
       if (leaveRequest.status !== 'pending_supervisor') {
@@ -5292,21 +5315,21 @@ function attachBrowserRoutes(server) {
         requestId,
         decision,
         comment,
-        decidedAt: Date.now()
+        decidedAt: Date.now(), reviewerId: request.browserSession.employeeId
       });
       dbModule.addAuditLog(buildBrowserAuditLogEntry(request, {
         action: decision === 'approved' ? 'approve' : 'reject',
         target_type: 'leave_request',
         target_id: requestId,
-        summary: `主管${decision === 'approved' ? '核准並送管理部複核' : '駁回'}請假申請 ${requestId}`,
+        summary: `主管${decision === 'approved' ? (dbModule.getLeaveRequestById(requestId).status === 'pending_supervisor' ? '核准；等待其他必審主管' : '核准並送管理部複核') : '駁回'}請假申請 ${requestId}`,
         before_data: leaveRequest,
-        after_data: { decision, comment }
+        after_data: { decision, comment, reviewPolicy: dbModule.getReviewWorkflow().state('leave', requestId) }
       }));
       });
       notifyDesktop('leaveRequests', getBrowserSyncMeta(request));
       response.json({
         success: true,
-        message: decision === 'approved' ? '已送交管理部複核。' : '請假申請已由主管駁回。',
+        message: dbModule.getLeaveRequestById(requestId).status === 'pending_supervisor' ? '已記錄您的核准，等待指定必審主管。' : decision === 'approved' ? '已送交管理部複核。' : '請假申請已由主管駁回。',
         data: { dashboard: buildDashboardForSession(request.browserSession) }
       });
     } catch (error) {
@@ -5358,6 +5381,7 @@ function attachBrowserRoutes(server) {
         reason: String(request.body?.reason || '').trim(),
         status: 'pending_supervisor',
         supervisor_id: supervisorId,
+        review_policy: dbModule.getReviewSupervisors().policy(applicant.id),
         supervisor_decision: null,
         supervisor_comment: null,
         supervisor_decided_at: null,
@@ -5424,34 +5448,37 @@ function attachBrowserRoutes(server) {
   server.post('/api/browser/employee/overtime/supervisor-decision', requireBrowserSession, requireBrowserRole('employee'), (request, response) => {
     try {
       const requestId = String(request.body?.requestId || '').trim();
-      const decision = String(request.body?.decision || '').trim() === 'approved' ? 'approved' : 'rejected';
+      const decision = String(request.body?.decision || '').trim();
+      if (!['approved', 'rejected'].includes(decision)) throw createHttpError('請選擇有效審核結果。', 400);
       const overtimeRequest = dbModule.getOvertimeRequestById(requestId);
       if (!overtimeRequest) throw createHttpError('找不到指定的加班申請。', 404);
-      if (overtimeRequest.supervisor_id !== request.browserSession.employeeId) {
+      if (request.browserSession.impersonation?.active || !dbModule.getReviewWorkflow().canReview('overtime', overtimeRequest, request.browserSession.employeeId)) {
         throw createHttpError('只有指定主管可以審核這張加班申請。', 403);
       }
       if (overtimeRequest.status !== 'pending_supervisor') {
         throw createHttpError('這張加班申請目前不在主管審核階段。', 400);
       }
       const comment = String(request.body?.comment || '').trim();
+      dbModule.getSupervisors().transaction(() => {
       dbModule.updateOvertimeRequestSupervisorDecision({
         requestId,
         decision,
         comment,
-        decidedAt: Date.now()
+        decidedAt: Date.now(), reviewerId: request.browserSession.employeeId
       });
-      writeBrowserAuditLog(request, {
+      dbModule.addAuditLog(buildBrowserAuditLogEntry(request, {
         action: decision === 'approved' ? 'approve' : 'reject',
         target_type: 'overtime_request',
         target_id: requestId,
-        summary: `主管${decision === 'approved' ? '核准' : '駁回'}加班申請 ${requestId}`,
+        summary: `主管${decision === 'approved' ? (dbModule.getOvertimeRequestById(requestId).status === 'pending_supervisor' ? '核准；等待其他必審主管' : '核准') : '駁回'}加班申請 ${requestId}`,
         before_data: overtimeRequest,
-        after_data: { decision, comment }
+        after_data: { decision, comment, reviewPolicy: dbModule.getReviewWorkflow().state('overtime', requestId) }
+      }));
       });
       notifyDesktop('overtimeRequests', getBrowserSyncMeta(request));
       response.json({
         success: true,
-        message: decision === 'approved' ? '加班申請已核准。' : '加班申請已由主管駁回。',
+        message: dbModule.getOvertimeRequestById(requestId).status === 'pending_supervisor' ? '已記錄您的核准，等待指定必審主管。' : decision === 'approved' ? '加班申請已核准。' : '加班申請已由主管駁回。',
         data: { dashboard: buildDashboardForSession(request.browserSession) }
       });
     } catch (error) {
@@ -7596,6 +7623,11 @@ function createServerApp() {
     hasPermission: hasAdminPermission,
     auditEntry: buildBrowserAuditLogEntry,
     notify: (request) => { notifyDesktop('leaveEntitlements', getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); }
+  });
+  attachDashboardMetricRoutes(server, {
+    db: dbModule, requireSession: requireBrowserSession, requireAdmin: requireBrowserRole('admin'), can: hasAdminPermission, auditEntry: buildBrowserAuditLogEntry,
+    notify: (request) => { notifyDesktop('dashboardMetrics', getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); },
+    formatRecord: (kind, row) => kind === 'leave' ? formatLeaveRequestForDashboard(row) : formatOvertimeRequestForDashboard(row)
   });
   attachRequestCalendarRoutes(server, {
     db: dbModule, requireSession: requireBrowserSession, requireRole: requireBrowserRole,

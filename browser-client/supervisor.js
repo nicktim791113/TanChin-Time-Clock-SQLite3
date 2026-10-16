@@ -38,9 +38,13 @@ function spManagementView() {
     if (supervisorState.managementView === 'assignments' && !spCanAssignments()) supervisorState.managementView = 'review';
     return supervisorState.managementView;
 }
+function spReviewPolicyLabel(employee) {
+    const missing = (employee.requiredSupervisorIds || []).filter((id) => !(employee.supervisorIds || []).includes(id));
+    return `<small class="sp-policy-label">${employee.mode === 'required' ? '指定必審主管皆需核准' : '任一位核准即可'}${missing.length ? `；必審主管 ${spEscape(missing.join('、'))} 已停用，請重新指定後才能送新單` : ''}</small>`;
+}
 function spAssignmentTable(data, review = false) {
     return `<div class="sp-table-scroll"><table class="sp-table"><thead><tr><th>員工</th><th>部門</th><th>${review ? '審核主管' : '指定代辦主管'}</th></tr></thead><tbody>
-        ${data.employees.map((e) => `<tr><td>${spEscape(e.id)} ${spEscape(e.name)}</td><td>${spEscape(e.department)}</td><td>${(review ? [e.supervisorId].filter(Boolean) : e.supervisorIds).map((id) => spEscape(`${id} ${data.employees.find((s) => s.id === id)?.name || '（已不存在）'}`)).join('、') || '未指定'}</td></tr>`).join('')}
+        ${data.employees.map((e) => `<tr><td>${spEscape(e.id)} ${spEscape(e.name)}</td><td>${spEscape(e.department)}</td><td>${(review ? e.supervisorIds || [e.supervisorId].filter(Boolean) : e.supervisorIds).map((id) => spEscape(`${id} ${data.employees.find((s) => s.id === id)?.name || '（已不存在）'}${review && e.requiredSupervisorIds?.includes(id) ? '（必審）' : ''}`)).join('、') || '未指定'}${review ? spReviewPolicyLabel(e) : ''}</td></tr>`).join('')}
         </tbody></table></div>`;
 }
 function spRenderRoutes() {
@@ -49,8 +53,9 @@ function spRenderRoutes() {
     return `<section class="sp-route-section"><h3>請假／加班共用主管審核路徑</h3>${!data ? '<p role="status">讀取共用審核路徑中…</p>' : `
         ${data.employees.length ? `<form data-sp-form="reviewers/batch" class="sp-form">
             ${renderAdminPaperEmployeePicker(data.employees, '設定審核主管的員工', [], { name: 'reviewEmployeeIds', maxSelection: 100 })}
-            ${renderAdminPaperEmployeePicker(data.employees, '指定的審核主管', [], { name: 'reviewSupervisorId', single: true, allowClear: true })}
-            <div class="sp-review-submit-row">${spField('設定原因', 'reason', 'text', '', 'maxlength="500"')}
+            ${renderAdminPaperEmployeePicker(data.employees, '指定的審核主管', [], { name: 'reviewSupervisorIds', maxSelection: 100 })}
+            <div data-sp-required hidden></div>
+            <div class="sp-review-submit-row"><label class="field"><span>審核規則</span><select name="reviewMode"><option value="any">任一位核准即可</option><option value="required">指定必審主管皆需核准</option></select></label>${spField('設定原因', 'reason', 'text', '', 'maxlength="500"')}
                 <label class="sp-confirm"><input type="checkbox" name="confirmReview" required>確認更新所有勾選員工的請假／加班審核主管</label>
                 <button class="primary-btn" type="submit">批量儲存審核主管</button></div>
             <label class="sp-confirm" data-sp-review-clear-confirm><input type="checkbox" name="confirmClear" required>確認清除所選員工的審核主管（未選主管）</label>
@@ -118,8 +123,8 @@ function spRequestForm() {
         ${spField('每人整筆時數', 'durationHours', 'number', leave ? '8' : '2', 'min="0.01" step="0.01"')}</div>
         ${leave ? '<label class="field"><span>每日實際時數（跨日額度請假）</span><textarea name="dailyHours" rows="2" placeholder="2026-10-15=8" title="每個請假日期一列，YYYY-MM-DD=小時；排除午休及非工作日，加總須等於整筆時數。"></textarea></label>' : ''}
         ${spField('申請事由', 'reason', 'text', '', 'maxlength="2000"')}${spField('代辦原因', 'proxyReason', 'text', '', 'maxlength="500"')}
-        <label class="sp-confirm"><input type="checkbox" name="confirmApproval" required>確認替所有勾選員工代申請相同內容並由本人核准${leave ? '，送管理部終審' : ''}</label>
-        <div class="inline-actions"><button class="primary-btn" type="submit" ${supervisorState.busy ? 'disabled' : ''}>${leave ? '送管理部終審' : '代申請並核准'}</button>${spButton('reset-form', '重設表單')}</div>
+        <label class="sp-confirm"><input type="checkbox" name="confirmApproval" required>確認替所有勾選員工代申請相同內容；多主管設定依各人審核規則送審，原單主管代辦流程保留</label>
+        <div class="inline-actions"><button class="primary-btn" type="submit" ${supervisorState.busy ? 'disabled' : ''}>送出代申請</button>${spButton('reset-form', '重設表單')}</div>
     </form>`;
 }
 function spMealDetail() {
@@ -173,10 +178,20 @@ function spPaint() {
 function spSyncAssignmentClear(form, reset = false) {
     const review = form?.dataset.spForm === 'reviewers/batch';
     if (!review && form?.dataset.spForm !== 'assignments/batch') return;
-    const clearing = review ? !form.querySelector('[name="reviewSupervisorId"]:checked') : form.querySelector('[name="mode"]').value === 'replace' && !form.querySelector('[name="supervisorIds"]:checked');
+    const clearing = review ? !form.querySelector('[name="reviewSupervisorIds"]:checked') : form.querySelector('[name="mode"]').value === 'replace' && !form.querySelector('[name="supervisorIds"]:checked');
     const label = form.querySelector(review ? '[data-sp-review-clear-confirm]' : '[data-sp-clear-confirm]'), control = label.querySelector('input');
     label.hidden = !clearing; control.disabled = !clearing; control.required = clearing;
     if (reset || !clearing) control.checked = false;
+    if (review) spSyncRequired(form);
+}
+function spSyncRequired(form) {
+    const root = form.querySelector('[data-sp-required]');
+    const enabled = form.querySelector('[name="reviewMode"]').value === 'required'; root.hidden = !enabled;
+    if (!enabled) { root.innerHTML = ''; return; }
+    const ids = [...form.querySelectorAll('[name="reviewSupervisorIds"]:checked')].map((input) => input.value);
+    const selectedIds = [...root.querySelectorAll('[name="requiredSupervisorIds"]:checked')].map((input) => input.value);
+    root.innerHTML = renderAdminPaperEmployeePicker(supervisorState.routes.employees.filter((e) => ids.includes(e.id)), '必須核准的主管', [], { name: 'requiredSupervisorIds', selectedIds, maxSelection: 100 });
+    root.querySelectorAll('[data-paper-employee-field]').forEach(syncAdminPaperEmployeePicker);
 }
 async function spLoad() {
     const identity = supervisorState.identity, sequence = ++supervisorState.sequence, managing = spManagement();
@@ -317,7 +332,7 @@ async function spSave(operation, body) {
         if (identity !== supervisorState.identity) return;
         supervisorState.busy = false; supervisorState.dirty = false; supervisorState.form = '';
         if (operation === 'reviewers/batch' && state.dashboard?.datasets?.leave) {
-            state.dashboard.datasets.leave.approvalRoutes = result.routes.employees.map((e) => ({ employee_id: e.id, supervisor_id: e.supervisorId }));
+            state.dashboard.datasets.leave.approvalRoutes = result.routes.employees.flatMap((e) => e.supervisorIds.map((id) => ({ employee_id: e.id, supervisor_id: id })));
         }
         if (await spLoad()) spMessage(result.message, 'success');
     } finally {
@@ -339,12 +354,13 @@ handleDashboardSubmit = async function handleSupervisorSubmit(event) {
         body.revisions = Object.fromEntries(supervisorState.assignments.employees.filter((e) => body.employeeIds.includes(e.id)).map((e) => [e.id, e.revision]));
         delete body.assignmentEmployeeIds;
     } else if (operation === 'reviewers/batch') {
-        body.employeeIds = fields.getAll('reviewEmployeeIds'); body.supervisorId = fields.get('reviewSupervisorId') || '';
+        body.employeeIds = fields.getAll('reviewEmployeeIds'); body.supervisorIds = fields.getAll('reviewSupervisorIds');
+        body.mode = fields.get('reviewMode'); body.requiredSupervisorIds = body.mode === 'required' ? fields.getAll('requiredSupervisorIds') : [];
         body.confirmReview = fields.has('confirmReview'); body.confirmClear = fields.has('confirmClear');
         if (!body.employeeIds.length || body.employeeIds.length > 100) { spMessage('請選擇 1 至 100 位設定員工。'); return; }
-        if (body.employeeIds.includes(body.supervisorId)) { spMessage('不可指定員工本人為自己的審核主管。'); return; }
+        if (body.employeeIds.some((id) => body.supervisorIds.includes(id))) { spMessage('不可指定員工本人為自己的審核主管。'); return; }
         body.revisions = Object.fromEntries(supervisorState.routes.employees.filter((e) => body.employeeIds.includes(e.id)).map((e) => [e.id, e.revision]));
-        delete body.reviewEmployeeIds; delete body.reviewSupervisorId;
+        delete body.reviewEmployeeIds; delete body.reviewSupervisorIds; delete body.reviewMode;
     } else {
         body.employeeId = supervisorState.employeeId;
         if (operation !== 'leave/withdraw') {

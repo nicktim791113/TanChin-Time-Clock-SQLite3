@@ -154,7 +154,8 @@ test('supervisor sidebar separates permissions and forms; compact action row ret
     vm.runInContext("supervisorState.routes={employees:[{id:'E1',name:'Employee',supervisorId:'S1',revision:'r'}]};supervisorState.assignments={employees:[{id:'E1',name:'Employee',supervisorIds:['S1']}]}", context);
     let html = vm.runInContext('renderSupervisorAssignments()', context);
     assert.ok(html.includes('主管指定子導覽')); assert.ok(html.includes('data-view="review"')); assert.ok(html.includes('data-view="assignments"'));
-    assert.ok(html.includes('data-picker="reviewEmployeeIds"')); assert.ok(html.includes('data-picker="reviewSupervisorId" data-single="true"'));
+    assert.ok(html.includes('data-picker="reviewEmployeeIds"')); assert.ok(html.includes('data-picker="reviewSupervisorIds" data-single="false"'));
+    assert.ok(html.includes('name="reviewMode"')); assert.ok(html.includes('data-sp-required'));
     assert.ok(!html.includes('data-sp-form="assignments/batch"')); assert.ok(!html.includes('name="department"'));
     vm.runInContext("supervisorState.managementView='assignments'", context); html = vm.runInContext('renderSupervisorAssignments()', context);
     const row = html.slice(html.indexOf('<div class="sp-assignment-submit-row">'), html.indexOf('</div><label class="sp-confirm" data-sp-clear-confirm'));

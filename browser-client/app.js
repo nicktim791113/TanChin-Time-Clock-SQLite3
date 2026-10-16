@@ -1189,10 +1189,10 @@ function getAdminMonitoredEmployees(dashboard = state.dashboard) {
 function getAdminMonitorScopeLabel(dashboard = state.dashboard) {
     const scope = state.adminDashboardScope || createDefaultAdminDashboardScope();
     const count = getAdminMonitoredEmployees(dashboard).length;
-    if (scope.mode === "active") return `監測在職員工 ${count} 人`;
-    if (scope.mode === "department") return `監測部門「${scope.department || "未選擇"}」${count} 人`;
-    if (scope.mode === "manual") return `手動監測 ${count} 人`;
-    return `監測全部員工 ${count} 人`;
+    if (scope.mode === "active") return `統計在職員工 ${count} 人`;
+    if (scope.mode === "department") return `統計部門「${scope.department || "未選擇"}」${count} 人`;
+    if (scope.mode === "manual") return `手動統計 ${count} 人`;
+    return `統計全部員工 ${count} 人`;
 }
 
 function getScopedAttendanceSummary(dashboard = state.dashboard) {
@@ -1376,7 +1376,7 @@ function renderAdminInsightScopeControls(dashboard = state.dashboard) {
         <section class="insight-section">
             <div class="insight-section-header">
                 <div>
-                    <h3>監測人員範圍</h3>
+                    <h3>出勤統計範圍</h3>
                     <p class="helper-text">${escapeHtml(getAdminMonitorScopeLabel(dashboard))}</p>
                 </div>
             </div>
@@ -1399,7 +1399,7 @@ function renderAdminInsightScopeControls(dashboard = state.dashboard) {
                 </label>
                 <div class="status-box">
                     <strong>${escapeHtml(getAdminMonitoredEmployees(dashboard).length)}</strong>
-                    <span>目前納入今日出勤監測的人數</span>
+                    <span>納入今日打卡統計的人數</span>
                 </div>
             </div>
             ${scope.mode === "manual" ? `
@@ -8998,7 +8998,7 @@ function renderEmployeeLeaveRequestRows(requests = [], { showEmployee = false, r
                             <td>${escapeHtml(request.endText || "-")}</td>
                             <td>${escapeHtml(request.duration_hours ?? "-")}</td>
                             <td>${getLeaveStatusBadge(request)}</td>
-                            <td>${escapeHtml(request.approvalModeText || "-")}</td>
+                            <td>${escapeHtml(request.approvalModeText || "-")}${typeof renderRequestReviewProgress === 'function' ? renderRequestReviewProgress(request) : ''}</td>
                             <td class="multiline-cell">${escapeHtml(request.reason || "-")}</td>
                             <td class="actions ${reviewMode ? "has-review-comment" : ""}">
                                 <div class="${reviewMode ? "review-action-stack" : "table-actions"}">
@@ -10633,7 +10633,7 @@ function renderOvertimeRequestRows(requests = [], { showEmployee = false, showAp
                             <td>${escapeHtml(request.endText || "-")}</td>
                             <td>${escapeHtml(request.duration_hours ?? "-")}</td>
                             <td>${getOvertimeStatusBadge(request)}</td>
-                            <td>${escapeHtml(request.approvalModeText || "-")}</td>
+                            <td>${escapeHtml(request.approvalModeText || "-")}${typeof renderRequestReviewProgress === 'function' ? renderRequestReviewProgress(request) : ''}</td>
                             <td class="multiline-cell">${escapeHtml(request.reason || "-")}</td>
                             <td class="actions ${reviewMode ? "has-review-comment" : ""}">
                                 <div class="${reviewMode ? "review-action-stack" : "table-actions"}">
@@ -11383,7 +11383,7 @@ renderAdminDashboard = function renderAdminDashboardPermissionAware(dashboard) {
 
     return `
         <div class="workspace-shell">
-            ${renderStatsGrid(statModel.summary, {
+            ${typeof renderDashboardMetricStrip === 'function' ? renderDashboardMetricStrip(dashboard) : renderStatsGrid(statModel.summary, {
                 employeeCount: "員工數量",
                 shiftCount: "班別數量",
                 todayPunchCount: "今日正常打卡",

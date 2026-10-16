@@ -114,6 +114,13 @@ function attachSupervisorRoutes(server, context) {
                 supervisor_decision: 'approved', supervisor_comment: `指定主管代申請並核准：${reason}`, supervisor_decided_at: now,
                 approval_mode: kind === 'leave' ? 'supervisor_proxy' : 'supervisor_proxy_auto_approved', created_at: now, updated_at: now,
                 ...(type ? { leave_type_id: type.id, daily_hours: body.dailyHours, explicit_duration_hours: body.durationHours || '' } : {}) }));
+            records.forEach((record) => {
+                const policy = db.getReviewSupervisors().policy(record.employee_id);
+                if (policy.supervisorIds.length > 1 || policy.mode === 'required') Object.assign(record, {
+                    status: 'pending_supervisor', supervisor_id: policy.supervisorId, supervisor_decision: null,
+                    supervisor_comment: null, supervisor_decided_at: null, approval_mode: 'supervisor_proxy', review_policy: policy
+                });
+            });
             store().transaction(() => {
                 const overlap = kind === 'leave' ? db.hasOverlappingLeaveRequest : db.hasOverlappingOvertimeRequest;
                 targets.forEach((target) => targetFor(request, target.id));
@@ -123,13 +130,13 @@ function attachSupervisorRoutes(server, context) {
                     (kind === 'leave' ? db.createLeaveRequest : db.createOvertimeRequest)(record);
                     const target = targets[index];
                     db.addAuditLog(auditEntry(request, { action: 'supervisor_proxy_create', target_type: `${kind}_request`, target_id: record.id,
-                        summary: `指定主管代 ${target.id} ${target.name} 申請${kind === 'leave' ? '請假，送管理部終審' : '加班並核准'}：${reason}`,
+                        summary: `指定主管代 ${target.id} ${target.name} 申請${kind === 'leave' ? '請假' : '加班'}（${record.status === 'pending_supervisor' ? '依多主管規則送審' : record.status === 'pending_admin' ? '送管理部終審' : '已核准'}）：${reason}`,
                         after_data: { ...record, batchId, batchSize: targets.length } }));
                 });
             });
             notify(request, kind === 'leave' ? 'leaveRequests' : 'overtimeRequests');
             response.json({ success: true, requestId: records[0].id, requestIds: records.map((row) => row.id), createdCount: records.length,
-                message: `${records.length} 位員工的${kind === 'leave' ? '代辦請假已送管理部終審' : '代辦加班已建立並核准'}。` });
+                message: `${records.length} 位員工的代辦${kind === 'leave' ? '請假' : '加班'}已依各人審核規則建立。` });
         }));
     }
     server.post('/api/browser/employee/supervisor/leave/withdraw', requireSession, requireRole('employee'), handle((request, response) => {

@@ -9,6 +9,8 @@ const { createBrowserPunchPermissionStore } = require('./browser-punch-permissio
 const { createRequestHistoryStore } = require('./request-history');
 const { createReviewSupervisorStore } = require('./review-supervisors');
 const { createLeaveEntitlementStore } = require('./leave-entitlements');
+const { createReviewWorkflow } = require('./review-workflow');
+const { createDashboardMetricStore } = require('./dashboard-metrics');
 let db = null;
 let meals = null;
 let supervisors = null;
@@ -16,6 +18,8 @@ let browserPunchPermissions = null;
 let requestHistory = null;
 let reviewSupervisors = null;
 let leaveEntitlements = null;
+let reviewWorkflow = null;
+let dashboardMetrics = null;
 let currentDbFilePath = '';
 
 function init(dbFilePath) {
@@ -474,6 +478,8 @@ function init(dbFilePath) {
   requestHistory = createRequestHistoryStore(db, (entry) => addAuditLog(entry));
   reviewSupervisors = createReviewSupervisorStore(db, (entry) => addAuditLog(entry));
   leaveEntitlements = createLeaveEntitlementStore(db, (entry) => addAuditLog(entry));
+  reviewWorkflow = createReviewWorkflow(db);
+  dashboardMetrics = createDashboardMetricStore(db, (entry) => addAuditLog(entry));
 }
 
 function close() {
@@ -486,6 +492,8 @@ function close() {
   requestHistory = null;
   reviewSupervisors = null;
   leaveEntitlements = null;
+  reviewWorkflow = null;
+  dashboardMetrics = null;
   currentDbFilePath = '';
 }
 
@@ -646,7 +654,11 @@ const saveEmployees = (employees) => {
         )
     `);
     db.transaction(() => {
-        leaveEntitlements?.removeEmployees(all('SELECT id FROM employees').map((row) => row.id).filter((id) => !employees.some((e) => String(e.id ?? '').trim() === id)));
+        const removedIds = all('SELECT id FROM employees').map((row) => row.id).filter((id) => !employees.some((e) => String(e.id ?? '').trim() === id));
+        leaveEntitlements?.removeEmployees(removedIds);
+        reviewSupervisors?.removeEmployees(removedIds);
+        reviewWorkflow?.removeEmployees(removedIds);
+        dashboardMetrics?.removeEmployees(removedIds);
         run('DELETE FROM employees');
         for (const emp of employees) insert.run(normalizeEmployeeForStorage(emp));
         run('DELETE FROM web_credentials WHERE employee_id NOT IN (SELECT id FROM employees)');
@@ -658,6 +670,9 @@ const saveEmployees = (employees) => {
 const loadEmployees = () => all('SELECT * FROM employees ORDER BY id');
 const deleteAllEmployees = () => db.transaction(() => {
     leaveEntitlements?.removeEmployees(all('SELECT id FROM employees').map((row) => row.id));
+    reviewSupervisors?.removeEmployees(all('SELECT id FROM employees').map((row) => row.id));
+    reviewWorkflow?.removeEmployees(all('SELECT id FROM employees').map((row) => row.id));
+    dashboardMetrics?.removeEmployees(all('SELECT id FROM employees').map((row) => row.id));
     run('DELETE FROM web_credentials');
     run('DELETE FROM supervisor_assignments');
     run('DELETE FROM employee_review_supervisors');
@@ -980,6 +995,7 @@ const createLeaveRequest = (request) => {
     };
     db.transaction(() => {
         insertRequest.run(requestForDb);
+        if (request.status === 'pending_supervisor') reviewWorkflow.snapshot('leave', request, request.review_policy);
         leaveEntitlements.replaceCharges(request.id, charges);
         insertStep.run(
             request.id,
@@ -1031,8 +1047,9 @@ const buildLeaveRequestWhere = (filters = {}) => {
         params.push(String(filters.leaveTypeId));
     }
     if (filters.supervisorId) {
-        clauses.push('supervisor_id = ?');
-        params.push(String(filters.supervisorId));
+        const review = reviewWorkflow.filter('leave', String(filters.supervisorId));
+        clauses.push(review.sql);
+        params.push(...review.params);
     }
     if (filters.status) {
         if (Array.isArray(filters.status)) {
@@ -1101,18 +1118,20 @@ const hasOverlappingLeaveRequest = (employeeId, startAt, endAt, excludeId = '') 
     return rows.some((row) => row.id !== excludeId);
 };
 
-const updateLeaveRequestSupervisorDecision = ({ requestId, decision, comment, decidedAt }) => {
-    const nextStatus = decision === 'approved' ? 'pending_admin' : 'rejected';
+const updateLeaveRequestSupervisorDecision = ({ requestId, decision, comment, decidedAt, reviewerId }) => {
     db.transaction(() => {
+        if (reviewerId) decision = reviewWorkflow.vote('leave', getLeaveRequestById(requestId), reviewerId, decision, comment, decidedAt);
+        else if (reviewWorkflow.state('leave', requestId)) throw new Error('多主管案件必須記錄實際審核人。');
+        const nextStatus = decision === 'approved' ? 'pending_admin' : decision === 'pending' ? 'pending_supervisor' : 'rejected';
         run(
             `UPDATE leave_requests
              SET status = ?, supervisor_decision = ?, supervisor_comment = ?,
                  supervisor_decided_at = ?, updated_at = ?
              WHERE id = ?`,
             nextStatus,
-            decision,
+            decision === 'pending' ? null : decision,
             comment || '',
-            decidedAt,
+            decision === 'pending' ? null : decidedAt,
             decidedAt,
             requestId
         );
@@ -1122,14 +1141,14 @@ const updateLeaveRequestSupervisorDecision = ({ requestId, decision, comment, de
              WHERE request_id = ? AND reviewer_role = 'supervisor'`,
             decision,
             comment || '',
-            decidedAt,
+            decision === 'pending' ? null : decidedAt,
             requestId
         );
         run(
             `UPDATE leave_approval_steps
              SET status = ?
              WHERE request_id = ? AND reviewer_role = 'admin'`,
-            decision === 'approved' ? 'pending' : 'cancelled',
+            decision === 'approved' ? 'pending' : decision === 'pending' ? 'waiting' : 'cancelled',
             requestId
         );
     })();
@@ -1307,6 +1326,7 @@ const createOvertimeRequest = (request) => {
             isAutoApproved ? (request.supervisor_decided_at || request.created_at) : null,
             request.created_at
         );
+        if (request.status === 'pending_supervisor') reviewWorkflow.snapshot('overtime', request, request.review_policy);
     })();
 };
 
@@ -1341,8 +1361,9 @@ const buildOvertimeRequestWhere = (filters = {}) => {
         params.push(String(filters.employeeOrApplicantId), String(filters.employeeOrApplicantId));
     }
     if (filters.supervisorId) {
-        clauses.push('supervisor_id = ?');
-        params.push(String(filters.supervisorId));
+        const review = reviewWorkflow.filter('overtime', String(filters.supervisorId));
+        clauses.push(review.sql);
+        params.push(...review.params);
     }
     if (filters.status) {
         if (Array.isArray(filters.status)) {
@@ -1411,18 +1432,20 @@ const hasOverlappingOvertimeRequest = (employeeId, startAt, endAt, excludeId = '
     return rows.some((row) => row.id !== excludeId);
 };
 
-const updateOvertimeRequestSupervisorDecision = ({ requestId, decision, comment, decidedAt }) => {
-    const nextStatus = decision === 'approved' ? 'approved' : 'rejected';
+const updateOvertimeRequestSupervisorDecision = ({ requestId, decision, comment, decidedAt, reviewerId }) => {
     db.transaction(() => {
+        if (reviewerId) decision = reviewWorkflow.vote('overtime', getOvertimeRequestById(requestId), reviewerId, decision, comment, decidedAt);
+        else if (reviewWorkflow.state('overtime', requestId)) throw new Error('多主管案件必須記錄實際審核人。');
+        const nextStatus = decision === 'pending' ? 'pending_supervisor' : decision === 'approved' ? 'approved' : 'rejected';
         run(
             `UPDATE overtime_requests
              SET status = ?, supervisor_decision = ?, supervisor_comment = ?,
                  supervisor_decided_at = ?, updated_at = ?
              WHERE id = ?`,
             nextStatus,
-            decision,
+            decision === 'pending' ? null : decision,
             comment || '',
-            decidedAt,
+            decision === 'pending' ? null : decidedAt,
             decidedAt,
             requestId
         );
@@ -1432,7 +1455,7 @@ const updateOvertimeRequestSupervisorDecision = ({ requestId, decision, comment,
              WHERE request_id = ? AND reviewer_role = 'supervisor'`,
             decision,
             comment || '',
-            decidedAt,
+            decision === 'pending' ? null : decidedAt,
             requestId
         );
     })();
@@ -2175,6 +2198,8 @@ module.exports = {
   getRequestHistory: () => requestHistory,
   getReviewSupervisors: () => reviewSupervisors,
   getLeaveEntitlements: () => leaveEntitlements,
+  getReviewWorkflow: () => reviewWorkflow,
+  getDashboardMetrics: () => dashboardMetrics,
   getMeals: () => meals,
   init, close,
   getDatabasePath, backupDatabase, validateBackupDatabaseFile, replaceDatabaseFromBackup,

@@ -23,7 +23,9 @@
 .sp-workspace .workspace-subnav-content { grid-template-columns: minmax(0, 1fr); }
 .sp-assignment-submit-row, .sp-review-submit-row { display: grid; gap: 12px; align-items: end; min-width: 0; }
 .sp-assignment-submit-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.7fr) max-content; }
-.sp-review-submit-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) max-content; }
+.sp-review-submit-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.6fr) max-content; }
+.sp-policy-label { display: block; margin-top: 6px; }
+.sp-workspace [hidden] { display: none !important; }
 .sp-assignment-submit-row .field, .sp-review-submit-row .field { min-width: 0; }
 .sp-assignment-submit-row .sp-confirm, .sp-review-submit-row .sp-confirm { align-self: center; overflow-wrap: anywhere; }
 .sp-assignment-submit-row input:not([type="checkbox"]), .sp-assignment-submit-row select, .sp-review-submit-row input:not([type="checkbox"]) { width: 100%; min-width: 0; box-sizing: border-box; }
