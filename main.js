@@ -54,7 +54,7 @@ function getDbSyncType(operation, args) {
   if (operation === 'setSetting' && args[0] === 'systemPassword') return 'systemPassword';
   if (operation === 'setSetting' && args[0] === 'attendanceExportCustomFields') return 'attendanceExportSettings';
   if (operation === 'setSetting' && args[0] === 'automationExportDirectory') return 'automationExportDirectory';
-  if (operation === 'setSetting' && (args[0] === 'databaseBackupDirectory' || args[0] === 'databaseBackupRetentionCount')) return 'databaseBackup';
+  if (operation === 'setSetting' && ['databaseBackupDirectory', 'databaseBackupSecondaryDirectory', 'databaseBackupRetentionCount'].includes(args[0])) return 'databaseBackup';
   if (operation === 'setSetting' && (args[0] === 'externalApiEnabled' || args[0] === 'externalApiKey')) return 'externalApiSettings';
   return null;
 }
@@ -83,6 +83,7 @@ const DESKTOP_AUDIT_TRACKED_SETTINGS = new Set([
   'attendanceExportCustomFields',
   'automationExportDirectory',
   'databaseBackupDirectory',
+  'databaseBackupSecondaryDirectory',
   'databaseBackupRetentionCount',
   'externalApiEnabled',
   'externalApiKey'
@@ -143,6 +144,7 @@ function getDesktopSettingLabel(key) {
   if (key === 'attendanceExportCustomFields') return '考勤匯出欄位設定';
   if (key === 'automationExportDirectory') return '自動化匯出資料夾';
   if (key === 'databaseBackupDirectory') return '完整資料庫備份資料夾';
+  if (key === 'databaseBackupSecondaryDirectory') return '完整資料庫第二備份資料夾';
   if (key === 'databaseBackupRetentionCount') return '完整資料庫備份保留數';
   if (key === 'externalApiEnabled') return '外部 API 保護開關';
   if (key === 'externalApiKey') return '外部 API 金鑰';
@@ -726,13 +728,13 @@ function getDatabaseBackupDirectorySettings() {
     const fallbackDirectory = databaseBackup.getDefaultDatabaseBackupDirectory(app.getPath('userData'));
     const configuredDirectory = String(dbModule.getSetting('databaseBackupDirectory') || '').trim();
     const defaultDirectory = configuredDirectory
-        ? databaseBackup.normalizeBackupDirectoryPath(configuredDirectory, fallbackDirectory)
+        ? databaseBackup.validateDirectoryPath(configuredDirectory, fallbackDirectory)
         : '';
     const retentionCount = databaseBackup.normalizeRetentionCount(
-        dbModule.getSetting('databaseBackupRetentionCount'),
+        dbModule.getSetting('databaseBackupRetentionCount') ?? databaseBackup.DEFAULT_DATABASE_BACKUP_RETENTION_COUNT,
         databaseBackup.DEFAULT_DATABASE_BACKUP_RETENTION_COUNT
     );
-    const effectiveDirectory = defaultDirectory || databaseBackup.normalizeBackupDirectoryPath('', fallbackDirectory);
+    const effectiveDirectory = defaultDirectory || fallbackDirectory;
     return {
         defaultDirectory,
         fallbackDirectory,
@@ -902,7 +904,7 @@ async function executeAutomationTask(task) {
                 status = 'error';
             } else {
                 result = await createDatabaseBackupFromTask(task);
-                message = `任務成功：backup/database_full 完整資料庫備份已建立：${result.filePath}`;
+                message = `任務成功：backup/database_full 完整資料庫備份已建立：${result.filePath}${result.retentionWarning ? `；${result.retentionWarning}` : ''}`;
                 notificationType = 'databaseBackup';
                 status = 'success';
             }

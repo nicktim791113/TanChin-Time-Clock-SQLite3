@@ -506,6 +506,7 @@ function getAutomationExportConfig(datasets = getDatasets()) {
 function getDatabaseBackupConfig(datasets = getDatasets()) {
     return datasets?.databaseBackup || {
         defaultDirectory: "",
+        secondaryDirectory: "\\\\Ts5600d494\\oms\\TanChin-Time-Clock-SQLite3 DB備份資料",
         fallbackDirectory: "",
         effectiveDirectory: "",
         usingFallback: true,
@@ -3031,6 +3032,7 @@ function stopClock() {
 }
 
 function renderDashboard(dashboard) {
+    syncDatabaseBackupUiSession(dashboard.role);
     state.dashboard = dashboard;
     syncHeroHeader(dashboard);
     ui.dashboardTitle.textContent = dashboard.role === "developer"
@@ -3601,6 +3603,7 @@ async function handleEmployeePunch() {
 }
 
 async function handleLogout(isSilent = false) {
+    resetDatabaseBackupUi();
     try {
         if (state.token && !isSilent) {
             await requestJson("/api/browser/logout", {
@@ -11827,11 +11830,129 @@ renderDeveloperAutomationSection = function renderDeveloperAutomationSectionData
     `;
 };
 
+// Keep retry state in memory for this login; send the login token only in the Authorization header.
+const databaseBackupUi = { token: "", role: "", generation: 0, busy: false, destination: "primary", draft: null, download: null, message: "", messageType: "info", controller: null };
+function resetDatabaseBackupUi() {
+    databaseBackupUi.controller?.abort();
+    Object.assign(databaseBackupUi, { token: "", role: "", generation: databaseBackupUi.generation + 1, busy: false, destination: "primary", draft: null, download: null, message: "", messageType: "info", controller: null });
+}
+function syncDatabaseBackupUiSession(role = state.dashboard?.role || "") {
+    if (databaseBackupUi.token !== state.token || databaseBackupUi.role !== role) {
+        resetDatabaseBackupUi();
+        databaseBackupUi.token = state.token;
+        databaseBackupUi.role = role;
+    }
+}
+function databaseBackupOperationIsCurrent(operation) {
+    return operation.token === state.token && operation.generation === databaseBackupUi.generation && state.dashboard?.role === "developer";
+}
+function rememberDatabaseBackupDraft(form) {
+    if (!form) return;
+    databaseBackupUi.draft = { defaultDirectory: form.elements.defaultDirectory.value, secondaryDirectory: form.elements.secondaryDirectory.value, retentionCount: form.elements.retentionCount.value };
+}
+function databaseBackupSettingsAreDirty(form) {
+    const config = getDatabaseBackupConfig();
+    return form.elements.defaultDirectory.value.trim() !== (config.defaultDirectory || "")
+        || form.elements.secondaryDirectory.value.trim() !== (config.secondaryDirectory || "")
+        || Number(form.elements.retentionCount.value) !== Number(config.retentionCount || 30);
+}
+function renderDatabaseBackupOperation() {
+    const pending = databaseBackupUi.download;
+    return `<div class="database-backup-operation" data-backup-operation>
+        <div class="field"><label for="database-backup-destination">本次主機端存放位置</label>
+            <select id="database-backup-destination" ${databaseBackupUi.busy ? "disabled" : ""}>
+                <option value="primary" ${databaseBackupUi.destination === "primary" ? "selected" : ""}>位置 1 · 打卡鐘備份位置</option>
+                <option value="secondary" ${databaseBackupUi.destination === "secondary" ? "selected" : ""}>位置 2 · 指定備份位置</option>
+            </select>
+        </div>
+        <p class="helper-text">每次只在所選位置建立一份備份，再將完整 ZIP 下載到目前操作的電腦。選擇位置 2 不會更改排程預設位置。</p>
+        <div class="form-toolbar">
+            <button class="secondary-btn" type="button" data-action="run-database-backup-now" ${databaseBackupUi.busy ? "disabled" : ""}>${databaseBackupUi.busy ? "備份／下載處理中…" : "立即完整備份並下載"}</button>
+            ${pending ? `<button class="outline-btn" type="button" data-action="retry-database-backup-download" ${databaseBackupUi.busy ? "disabled" : ""}>再次下載這份備份</button>` : ""}
+        </div>
+        <div class="inline-message ${escapeHtml(databaseBackupUi.messageType)}" data-backup-message aria-live="polite">${escapeHtml(databaseBackupUi.message)}</div>
+        ${pending ? `<p class="helper-text">本次 ZIP：<span class="mono-text">${escapeHtml(pending.fileName)}</span>。連結有效至 ${escapeHtml(new Date(pending.expiresAt).toLocaleString("zh-TW"))}，登出後不可使用。</p>` : ""}
+    </div>`;
+}
+function updateDatabaseBackupOperation(message, type = "info") {
+    if (message !== undefined) { databaseBackupUi.message = message; databaseBackupUi.messageType = type; }
+    const operationPanel = document.querySelector("[data-backup-operation]");
+    if (operationPanel) operationPanel.replaceWith(document.createRange().createContextualFragment(renderDatabaseBackupOperation()));
+    const form = document.getElementById("database-backup-settings-form");
+    if (form) form.querySelectorAll("input,button").forEach((node) => { node.disabled = databaseBackupUi.busy; });
+}
+async function downloadDatabaseBackup(operation) {
+    const pending = databaseBackupUi.download;
+    if (!pending || !databaseBackupOperationIsCurrent(operation)) return;
+    if (new Date(pending.expiresAt).getTime() <= Date.now()) {
+        databaseBackupUi.download = null;
+        throw new Error("備份已完成，但下載連結已到期。請重新執行完整備份取得新的下載檔。");
+    }
+    databaseBackupUi.controller = new AbortController();
+    const response = await fetch(`/api/browser/developer/database-backup/download/${encodeURIComponent(pending.token)}`, {
+        headers: { Authorization: `Bearer ${operation.token}` }, signal: databaseBackupUi.controller.signal, cache: "no-store"
+    });
+    if (!databaseBackupOperationIsCurrent(operation)) return;
+    if (response.status === 401) { await handleLogout(true); return; }
+    if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        if ([404, 410].includes(response.status)) databaseBackupUi.download = null;
+        throw new Error(result.error || result.message || "下載失敗，請再次下載這份備份。");
+    }
+    const blob = await response.blob();
+    if (!databaseBackupOperationIsCurrent(operation)) return;
+    if (!blob.size) throw new Error("下載檔為空，請再次下載這份備份。");
+    const url = URL.createObjectURL(blob), anchor = document.createElement("a");
+    anchor.href = url; anchor.download = pending.fileName; anchor.hidden = true;
+    document.body.appendChild(anchor); anchor.click(); anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    updateDatabaseBackupOperation(`主機端備份已完成，已交由瀏覽器下載 ${pending.fileName}。請查看這台電腦的下載清單；還原前請完整解壓縮 ZIP。${pending.retentionWarning ? ` 保留份數提醒：${pending.retentionWarning}` : ""}${pending.warnings ? ` ${pending.warnings}` : ""}`, pending.retentionWarning || pending.warnings ? "info" : "success");
+}
+async function runDatabaseBackupDownload(retry = false) {
+    syncDatabaseBackupUiSession();
+    if (databaseBackupUi.busy) return;
+    const form = document.getElementById("database-backup-settings-form");
+    if (!retry && form && databaseBackupSettingsAreDirty(form)) {
+        rememberDatabaseBackupDraft(form);
+        updateDatabaseBackupOperation("備份設定尚未儲存。請先按「儲存備份設定」，再依已儲存的路徑建立備份。", "error");
+        return;
+    }
+    const operation = { token: state.token, generation: databaseBackupUi.generation };
+    databaseBackupUi.busy = true;
+    if (!retry) databaseBackupUi.download = null;
+    updateDatabaseBackupOperation(retry ? "正在下載已建立的備份，不會重新建立備份。" : "正在選定位置建立完整備份，完成後會開始下載。", "info");
+    let backupCreated = retry;
+    try {
+        if (!retry) {
+            const result = await requestJson("/api/browser/developer/database-backup/run", { method: "POST", auth: true, body: { destination: databaseBackupUi.destination, download: true } });
+            if (!databaseBackupOperationIsCurrent(operation)) return;
+            backupCreated = true;
+            databaseBackupUi.download = result.data?.download || null;
+            if (databaseBackupUi.download) {
+                databaseBackupUi.download.retentionWarning = result.data?.retentionWarning || "";
+                databaseBackupUi.download.warnings = Array.isArray(result.warnings) ? result.warnings.join("；") : "";
+            }
+            if (result.dashboard) renderDashboard(result.dashboard);
+            if (!databaseBackupUi.download) throw new Error("主機端備份已完成，但沒有可用的下載連結。請核對主機端備份清單或重新執行。");
+            updateDatabaseBackupOperation("主機端備份已完成，正在下載完整 ZIP。", "info");
+        }
+        await downloadDatabaseBackup(operation);
+    } catch (error) {
+        if (databaseBackupOperationIsCurrent(operation)) {
+            const prefix = backupCreated ? "主機端備份已完成；瀏覽器下載未完成。" : "備份作業未完成。";
+            updateDatabaseBackupOperation(`${prefix}${error.message}${databaseBackupUi.download ? " 可按「再次下載這份備份」，不會重建備份。" : ""}`, "error");
+        }
+    } finally {
+        if (databaseBackupOperationIsCurrent(operation)) { databaseBackupUi.busy = false; databaseBackupUi.controller = null; updateDatabaseBackupOperation(); }
+    }
+}
+
 renderDeveloperExportSection = function renderDeveloperExportSectionDatabaseBackupOverride(datasets) {
     const exportConfig = getAttendanceExportConfig(datasets);
     const customTemplate = exportConfig.templates.find((template) => template.id === "custom");
     const automationExportConfig = getAutomationExportConfig(datasets);
     const databaseBackupConfig = getDatabaseBackupConfig(datasets);
+    const databaseBackupDraft = databaseBackupUi.draft || databaseBackupConfig;
     const auditArchiveConfig = getAuditArchiveConfig(datasets);
     const recentArchives = auditArchiveConfig.recentArchives || [];
 
@@ -11877,39 +11998,48 @@ renderDeveloperExportSection = function renderDeveloperExportSectionDatabaseBack
                 <div class="list-toolbar">
                     <div>
                         <h3>完整資料庫備份與還原</h3>
-                        <p class="helper-text">備份會產生 SQLite 資料庫檔與 manifest；還原前會先建立緊急備份，避免誤還原後無法退回。</p>
+                        <p class="helper-text">先選主機端的存放位置，再下載到操作電腦。ZIP 包含 SQLite 資料庫、manifest 與可用的密碼金鑰附檔；還原前先完整解壓縮。</p>
                     </div>
                     <div class="badge-row">
                         ${renderBadge(`保留 ${databaseBackupConfig.retentionCount || 30} 份`, "success")}
                     </div>
                 </div>
                 ${buildKeyValueGrid([
-                    { label: "預設備份資料夾", value: databaseBackupConfig.defaultDirectory || "(未設定)", mono: true },
-                    { label: "目前有效備份位置", value: databaseBackupConfig.effectiveDirectory || "-", mono: true },
-                    { label: "系統備援位置", value: databaseBackupConfig.fallbackDirectory || "-", mono: true },
-                    { label: "最近一般備份", value: `${databaseBackupConfig.recentBackups?.length || 0} 筆` },
-                    { label: "最近緊急備份", value: `${databaseBackupConfig.recentEmergencyBackups?.length || 0} 筆` }
+                    { label: "位置 1 · 已儲存路徑", value: databaseBackupConfig.effectiveDirectory || databaseBackupConfig.fallbackDirectory || "系統預設 DatabaseBackups", mono: true },
+                    { label: "位置 2 · 已儲存路徑", value: databaseBackupConfig.secondaryDirectory || "(未設定)", mono: true },
+                    { label: "ZIP 下載位置", value: "目前操作電腦的瀏覽器下載資料夾，或瀏覽器詢問的位置。" },
+                    { label: "排程備份", value: "維持任務指定路徑；未指定時使用位置 1。" }
                 ])}
                 <form id="database-backup-settings-form" class="stack-form">
                     <div class="field-grid">
                         <label class="field">
-                            <span>預設備份資料夾</span>
-                            <input name="defaultDirectory" id="database-backup-directory" type="text" value="${escapeHtml(databaseBackupConfig.defaultDirectory || "")}" placeholder="留空時使用系統備援位置">
+                            <span>位置 1 · 打卡鐘備份資料夾</span>
+                            <input name="defaultDirectory" id="database-backup-directory" type="text" value="${escapeHtml(databaseBackupDraft.defaultDirectory || "")}" placeholder="留空時使用主機 DatabaseBackups" ${databaseBackupUi.busy ? "disabled" : ""}>
+                            <small class="helper-text">保留目前打卡鐘備份位置；未指定路徑的排程也使用此位置。</small>
+                        </label>
+                        <label class="field">
+                            <span>位置 2 · 指定備份資料夾</span>
+                            <input name="secondaryDirectory" id="database-backup-secondary-directory" type="text" value="${escapeHtml(databaseBackupDraft.secondaryDirectory || "")}" placeholder="主機可存取的本機或網路共用路徑" ${databaseBackupUi.busy ? "disabled" : ""}>
+                            <small class="helper-text">可自由修改。網路共用路徑由打卡鐘主機連線與寫入。</small>
                         </label>
                         <label class="field">
                             <span>保留份數</span>
-                            <input name="retentionCount" type="number" min="3" max="3650" step="1" value="${escapeHtml(String(databaseBackupConfig.retentionCount || 30))}">
+                            <input name="retentionCount" type="number" min="3" max="3650" step="1" value="${escapeHtml(String(databaseBackupDraft.retentionCount || 30))}" ${databaseBackupUi.busy ? "disabled" : ""}>
+                            <small class="helper-text">兩個位置分別依此份數保留；只清理本次寫入位置。</small>
                         </label>
                     </div>
                     <div class="form-toolbar">
-                        <button class="primary-btn" type="submit">儲存備份設定</button>
-                        <button class="outline-btn" type="button" data-action="pick-database-backup-directory">選擇資料夾</button>
-                        <button class="outline-btn" type="button" data-action="clear-database-backup-directory">清空路徑</button>
-                        <button class="secondary-btn" type="button" data-action="run-database-backup-now">立即完整備份</button>
+                        <button class="primary-btn" type="submit" ${databaseBackupUi.busy ? "disabled" : ""}>儲存備份設定</button>
+                        <button class="outline-btn" type="button" data-action="pick-database-backup-directory" data-directory-field="defaultDirectory" ${databaseBackupUi.busy ? "disabled" : ""}>在主機選位置 1</button>
+                        <button class="outline-btn" type="button" data-action="pick-database-backup-directory" data-directory-field="secondaryDirectory" ${databaseBackupUi.busy ? "disabled" : ""}>在主機選位置 2</button>
+                        <button class="outline-btn" type="button" data-action="clear-database-backup-directory" ${databaseBackupUi.busy ? "disabled" : ""}>位置 1 使用系統預設</button>
                     </div>
                     <div class="inline-message" data-form-message-for="database-backup-settings-form" aria-live="polite"></div>
                 </form>
+                <p class="helper-text">「在主機選位置」會在打卡鐘電腦開啟資料夾對話框，不會開啟 TC039 的檔案選擇器。遠端操作可直接輸入路徑後儲存。</p>
+                ${renderDatabaseBackupOperation()}
                 <form id="database-restore-form" class="stack-form danger-zone">
+                    <p class="helper-text">還原會取代目前連線主機的資料庫。要在 TC039 測試，請先完整解壓 ZIP、將配套檔案保留在同一資料夾，並確認正在操作 TC039 的本機網址。</p>
                     <div class="field-grid">
                         <label class="field">
                             <span>還原備份檔</span>
@@ -11926,8 +12056,9 @@ renderDeveloperExportSection = function renderDeveloperExportSectionDatabaseBack
                     </div>
                     <div class="inline-message" data-form-message-for="database-restore-form" aria-live="polite"></div>
                 </form>
-                <h4>最近完整備份</h4>
-                ${renderDatabaseBackupItems(databaseBackupConfig.recentBackups || [])}
+                <h4>位置 1 最近完整備份</h4>
+                <p class="helper-text">此清單只列位置 1；位置 2 的備份請至指定資料夾查看，不會因網路共用離線而阻擋本頁。</p>
+                ${databaseBackupConfig.recentBackupsError ? `<p class="inline-message error" role="status">${escapeHtml(databaseBackupConfig.recentBackupsError)}</p>` : renderDatabaseBackupItems(databaseBackupConfig.recentBackups || [])}
                 <h4>最近還原前緊急備份</h4>
                 ${renderDatabaseBackupItems(databaseBackupConfig.recentEmergencyBackups || [], "目前沒有還原前緊急備份。")}
             </article>
@@ -12042,32 +12173,32 @@ handleDashboardClick = async function handleDashboardClickDatabaseBackupOverride
     try {
         if (action === "pick-database-backup-directory") {
             const form = document.getElementById("database-backup-settings-form");
-            if (!form) return;
+            if (!form || databaseBackupUi.busy) return;
+            const field = actionTarget.dataset.directoryField === "secondaryDirectory" ? "secondaryDirectory" : "defaultDirectory";
             const result = await requestJson("/api/browser/developer/database-backup-directory/select", {
                 method: "POST",
-                body: { defaultPath: form.elements.defaultDirectory?.value?.trim() || "" },
+                body: { defaultPath: form.elements[field]?.value?.trim() || "" },
                 auth: true
             });
-            form.elements.defaultDirectory.value = result.data?.path || "";
-            setFormMessage("database-backup-settings-form", result.message || "已選擇備份資料夾。", "info");
+            if (result.data?.path) form.elements[field].value = result.data.path;
+            rememberDatabaseBackupDraft(form);
+            setFormMessage("database-backup-settings-form", "已選擇主機端資料夾，請按「儲存備份設定」後再執行備份。", "info");
             return;
         }
         if (action === "clear-database-backup-directory") {
             const form = document.getElementById("database-backup-settings-form");
-            if (!form) return;
+            if (!form || databaseBackupUi.busy) return;
             form.elements.defaultDirectory.value = "";
+            rememberDatabaseBackupDraft(form);
             setFormMessage("database-backup-settings-form", "已清空備份資料夾，儲存後會使用系統備援位置。", "info");
             return;
         }
         if (action === "run-database-backup-now") {
-            const result = await requestJson("/api/browser/developer/database-backup/run", {
-                method: "POST",
-                auth: true,
-                body: {}
-            });
-            if (result.dashboard) renderDashboard(result.dashboard);
-            setMessage(ui.dashboardMessage, result.message || "完整資料庫備份已建立。", "success");
-            setFormMessage("database-backup-settings-form", result.message || "完整資料庫備份已建立。", "success");
+            await runDatabaseBackupDownload();
+            return;
+        }
+        if (action === "retry-database-backup-download") {
+            await runDatabaseBackupDownload(true);
             return;
         }
         if (action === "pick-database-restore-file") {
@@ -12105,7 +12236,9 @@ handleDashboardSubmit = async function handleDashboardSubmitDatabaseBackupOverri
 
     event.preventDefault();
     if (!form) return;
+    if (formId === "database-backup-settings-form" && databaseBackupUi.busy) return;
     setFormMessage(formId, "");
+    const operation = { token: state.token, generation: databaseBackupUi.generation };
 
     try {
         const values = Object.fromEntries(new FormData(form).entries());
@@ -12115,6 +12248,7 @@ handleDashboardSubmit = async function handleDashboardSubmitDatabaseBackupOverri
         const body = formId === "database-backup-settings-form"
             ? {
                 defaultDirectory: values.defaultDirectory?.trim() || "",
+                secondaryDirectory: values.secondaryDirectory?.trim() || "",
                 retentionCount: Number(values.retentionCount) || 30
             }
             : {
@@ -12126,13 +12260,22 @@ handleDashboardSubmit = async function handleDashboardSubmitDatabaseBackupOverri
             auth: true,
             body
         });
+        if (!databaseBackupOperationIsCurrent(operation)) return;
+        if (formId === "database-backup-settings-form") databaseBackupUi.draft = null;
         if (result.dashboard) renderDashboard(result.dashboard);
+        else if (formId === "database-backup-settings-form" && result.data && state.dashboard?.datasets) {
+            state.dashboard.datasets.databaseBackup = result.data;
+            renderDashboard(state.dashboard);
+        }
         else await reloadDashboard(result.message || "資料庫備份設定已更新。");
-        setMessage(ui.dashboardMessage, result.message || "作業已完成。", "success");
-        setFormMessage(formId, result.message || "作業已完成。", "success");
+        const message = [result.message || "作業已完成。", ...(Array.isArray(result.warnings) ? result.warnings : [])].join(" ");
+        setMessage(ui.dashboardMessage, message, result.warnings?.length ? "info" : "success");
+        setFormMessage(formId, message, result.warnings?.length ? "info" : "success");
     } catch (error) {
-        setMessage(ui.dashboardMessage, error.message, "error");
-        setFormMessage(formId, error.message, "error");
+        if (databaseBackupOperationIsCurrent(operation)) {
+            setMessage(ui.dashboardMessage, error.message, "error");
+            setFormMessage(formId, error.message, "error");
+        }
     }
 };
 
@@ -12849,6 +12992,12 @@ function initialize() {
     ui.logoutBtn.addEventListener("click", () => handleLogout());
     ui.dashboardContent.addEventListener("click", handleDashboardClick);
     ui.dashboardContent.addEventListener("change", handleDashboardChange);
+    ui.dashboardContent.addEventListener("change", (event) => {
+        if (event.target.id === "database-backup-destination" && !databaseBackupUi.busy) {
+            databaseBackupUi.destination = event.target.value === "secondary" ? "secondary" : "primary";
+        }
+        if (event.target.closest("#database-backup-settings-form")) rememberDatabaseBackupDraft(event.target.closest("form"));
+    });
     ui.dashboardContent.addEventListener("dragstart", handleWorkspaceNavOrderDragStart);
     ui.dashboardContent.addEventListener("dragover", handleWorkspaceNavOrderDragOver);
     ui.dashboardContent.addEventListener("drop", handleWorkspaceNavOrderDrop);
@@ -12858,6 +13007,7 @@ function initialize() {
     // Use capture so dynamically-rendered forms always reach the shared submit handler.
     ui.dashboardContent.addEventListener("submit", handleDashboardSubmit, true);
     ui.dashboardContent.addEventListener("input", (event) => {
+        if (event.target.closest("#database-backup-settings-form")) rememberDatabaseBackupDraft(event.target.closest("form"));
         if (event.target.id === "employee-card-capture-input") {
             handleEmployeeCardCaptureInput(event);
             return;

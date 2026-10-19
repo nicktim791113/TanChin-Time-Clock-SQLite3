@@ -1,6 +1,7 @@
 /* Contextual instructions use the controls actually rendered for the signed-in user.
  * Never copy field values, employee names, credentials, or record contents into help. */
 const workbenchHelpTopics = {
+    'export.databaseBackup': ['完整資料庫備份與還原', '將目前連線主機的資料庫備份到兩個已保存位置之一，並把完整 ZIP 下載到目前操作電腦。從 TC039 連到打卡鐘時，主機存檔與 TC039 下載是兩個步驟。', ['先核對上方「已儲存路徑」。位置 1 保留原打卡鐘備份位置；位置 2 可填指定本機或網路共用路徑，留空停用。修改路徑或保留份數後按儲存。', '在「本次主機端存放位置」選位置 1 或位置 2，再按「立即完整備份並下載」。選擇只影響本次，不更改排程；建立完成後瀏覽器下載 ZIP。', '下載失敗而主機備份成功時，按「再次下載這份備份」，不會重新建立備份。有效期結束或登出後需重新執行。', '要還原先完整解壓 ZIP，將資料庫、manifest 與密碼金鑰附檔保留同一資料夾，核對連線主機與來源，再選資料庫檔並輸入「還原資料庫」。系統先建立緊急備份。'], ['兩個位置都由打卡鐘主機存取；TC039 能開啟 NAS，不代表打卡鐘執行帳戶有寫入權限。無法寫入所選位置會明確失敗，不會默默改存另一位置。', '在主機選位置／選擇備份檔會在主機開啟對話框，不是操作電腦的檔案選擇器；遠端操作可直接輸入主機端路徑。', '瀏覽器可決定下載資料夾或詢問另存位置。畫面「交由瀏覽器下載」不代表已確認使用者磁碟存檔，請核對瀏覽器下載清單。', '最近完整備份只列位置 1；位置 2 請至指定資料夾查看。保留份數分別套用於各位置，執行時只清理本次位置；排程指定路徑不受本次選擇影響。', 'ZIP 含完整業務資料與可用的密碼金鑰，不可公開分享或上傳 Git。此操作不包含自訂背景／音效，亦不會自動建立安全測試環境。']],
     'people.form': ['新增／編輯員工', '維護員工主檔。新增與編輯使用同一表單；編輯時會帶入既有資料，儲存才會寫入。', ['先填工號、姓名、部門及班別，再核對卡號與任職資料。', '感應讀卡只填入卡號，不會產生打卡紀錄。完成後按儲存；取消編輯可回到新增狀態。', '聯絡、家庭、銀行與身分資料屬個人資料，僅填業務所需。'], ['改工號前先確認歷史與關聯資料；不要用刪除再新增代替一般資料修改。', 'CSV 匯出包含完整名冊，不受篩選影響；匯入按工號／卡號合併，不刪除未列出的員工。']],
     'people.departments': ['部門設定', '部門清單供員工主檔與篩選選用。主管審核另在「主管指定」維護。', ['填部門名稱與排序，確認啟用狀態後儲存。', '清單的編輯會帶入表單；停用或刪除前先確認仍使用該部門的人員。'], ['停用不等於刪除員工，也不會自動重新指派主管。']],
     'people.roster': ['員工名冊資料', '查找人員、選擇顯示欄位，或進入個別主檔編輯。', ['以搜尋文字、部門等條件縮小名單；清除篩選恢復全部。', '顯示筆數控制畫面高度；表頭欄位設定只改顯示，不刪除資料。', '按編輯進主檔；刪除須先核對工號。審核與代辦主管統一從上方「主管指定」進入。'], ['匯出 CSV 是完整名冊，不等於目前篩選結果。', '名冊人數與出勤統計範圍不同；統計範圍在指標明細內設定。']],
@@ -126,6 +127,27 @@ function workbenchControlLabel(node) {
 }
 function workbenchControlDescription(node, context) {
     const name = node.name, label = workbenchControlLabel(node), action = node.dataset.action || '', form = node.closest('form');
+    if (context.section === 'export' && context.sub === 'databaseBackup') {
+        const backupFields = {
+            defaultDirectory: '位置 1 的主機端資料夾。保留現有值；留空使用主機資料目錄下 DatabaseBackups。未指定輸出路徑的備份排程也使用位置 1。修改後須儲存。',
+            secondaryDirectory: '位置 2 的指定資料夾，初始為公司 NAS 路徑；由主機端讀寫，可改為其他本機／共用路徑。留空停用位置 2，修改後須儲存。',
+            retentionCount: '各位置分別保留的完整備份份數，範圍 3–3650；只清理當次實際寫入位置。',
+            sourceFilePath: '目前連線主機可存取的解壓後 .db／.sqlite／.sqlite3 檔案。manifest 與密碼金鑰附檔保留原檔名並放同一資料夾；不能直接選 ZIP。',
+            confirmText: '確認即將取代目前連線主機資料庫後，輸入「還原資料庫」。要在 TC039 測試須先確認網址連到 TC039。'
+        };
+        const backupActions = {
+            'pick-database-backup-directory': '在主機開啟資料夾選擇對話框，填入按鈕指定的位置欄位；尚須按儲存才生效。遠端瀏覽器不會開啟本機選擇器。',
+            'clear-database-backup-directory': '清空位置 1 欄位，按儲存後使用主機 DatabaseBackups；不刪除任何備份。',
+            'run-database-backup-now': '在本次選定位置建立完整備份並下載 ZIP 到目前操作電腦。未存的路徑或份數會先要求儲存；執行中禁止連點。',
+            'retry-database-backup-download': '用同一份已建立備份重新下載 ZIP，不新增備份；僅目前登入可用且有有效期，過期需重新備份。',
+            'pick-database-restore-file': '在目前連線主機開啟檔案對話框，選解壓後的資料庫檔，不是 TC039 瀏覽器上傳檔案。'
+        };
+        if (backupFields[name]) return backupFields[name];
+        if (backupActions[action]) return backupActions[action];
+        if (node.id === 'database-backup-destination') return '只決定這次備份要寫入位置 1 或位置 2，不會同時寫入兩處，也不變更排程設定；完成後另下載到操作電腦。';
+        if (node.matches('button[type="submit"]') && form?.id === 'database-backup-settings-form') return '保存兩個主機端路徑與共同保留份數；不會立即備份或測試 NAS 連線。執行備份時才檢查所選位置可否寫入。';
+        if (node.matches('button[type="submit"]') && form?.id === 'database-restore-form') return '核對來源、連線主機與確認文字後取代主機資料庫；系統會先建立還原前緊急備份，還原不是下載。';
+    }
     if (context.section === 'annual') {
         const annualActions = {
             'open': '開啟年資特休的制度、年資核對、試算及結算；已修改的人工額度表單會先提示確認。',

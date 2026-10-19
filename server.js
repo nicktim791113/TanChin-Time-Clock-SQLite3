@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const { app, dialog } = require('electron');
 const dbModule = require('./database');
 const databaseBackup = require('./database-backup');
+const { attachDatabaseBackupRoutes } = require('./database-backup-routes');
 const { createBrowserAccounts, RESET_PERMISSION, REVEAL_PERMISSION } = require('./browser-accounts');
 const { attachMealRoutes } = require('./meal-routes');
 const { attachRequestCalendarRoutes } = require('./request-calendar');
@@ -442,8 +443,9 @@ API_ROUTE_CATALOG.push(
 
 API_ROUTE_CATALOG.push(
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/database-backup-directory/select', auth: '開發人員', description: '開啟完整資料庫備份資料夾選擇器' },
-  { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/database-backup-settings/save', auth: '開發人員', description: '儲存完整資料庫備份設定' },
-  { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/database-backup/run', auth: '開發人員', description: '立即建立完整資料庫備份' },
+  { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/database-backup-settings/save', auth: '開發人員', description: '儲存兩個完整資料庫備份位置與保留份數' },
+  { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/database-backup/run', auth: '開發人員', description: '在本次選定位置建立完整資料庫備份，可取得 ZIP 下載憑證' },
+  { category: '開發人員 API', method: 'GET', path: '/api/browser/developer/database-backup/download/:token', auth: '原開發人員登入工作階段', description: '下載 15 分鐘內建立的完整資料庫 ZIP' },
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/database-restore-file/select', auth: '開發人員', description: '選擇完整資料庫備份檔' },
   { category: '開發人員 API', method: 'POST', path: '/api/browser/developer/database-restore/run', auth: '開發人員', description: '以備份檔還原資料庫' }
 );
@@ -1046,7 +1048,7 @@ function getAutomationExportDirectoryInfo(task = {}) {
 function normalizeDatabaseBackupDirectoryPath(directoryPath) {
   const trimmed = String(directoryPath || '').trim();
   if (!trimmed) return '';
-  return databaseBackup.normalizeBackupDirectoryPath(
+  return databaseBackup.validateDirectoryPath(
     trimmed,
     databaseBackup.getDefaultDatabaseBackupDirectory(getUserDataPath())
   );
@@ -1074,23 +1076,37 @@ function mapDatabaseBackupFile(file) {
 function getDatabaseBackupSettings() {
   const fallbackDirectory = databaseBackup.getDefaultDatabaseBackupDirectory(getUserDataPath());
   const defaultDirectory = normalizeDatabaseBackupDirectoryPath(getSettingValue('databaseBackupDirectory', ''));
+  const locations = databaseBackup.resolveDatabaseBackupLocations({
+    primaryDirectory: defaultDirectory,
+    secondaryDirectory: dbModule.getSetting('databaseBackupSecondaryDirectory'),
+    userDataPath: getUserDataPath()
+  });
   const retentionCount = databaseBackup.normalizeRetentionCount(
     getSettingValue('databaseBackupRetentionCount', databaseBackup.DEFAULT_DATABASE_BACKUP_RETENTION_COUNT),
     databaseBackup.DEFAULT_DATABASE_BACKUP_RETENTION_COUNT
   );
-  const effectiveDirectory = defaultDirectory || databaseBackup.normalizeBackupDirectoryPath('', fallbackDirectory);
+  const effectiveDirectory = locations.primaryDirectory;
+  let recentBackups = [], recentEmergencyBackups = [], recentBackupsError = '';
+  try {
+    recentBackups = databaseBackup.listBackupFiles(effectiveDirectory, 'standard').slice(0, 20).map(mapDatabaseBackupFile);
+    recentEmergencyBackups = databaseBackup.listBackupFiles(effectiveDirectory, 'emergency').slice(0, 10).map(mapDatabaseBackupFile);
+  } catch {
+    recentBackupsError = '目前無法讀取打卡鐘備份位置的檔案清單，請確認該位置的連線與權限。';
+  }
   return {
     retentionCount,
     defaultDirectory,
+    secondaryDirectory: locations.secondaryDirectory,
     fallbackDirectory,
     effectiveDirectory,
     usingFallback: !defaultDirectory,
-    recentBackups: databaseBackup.listBackupFiles(effectiveDirectory, 'standard').slice(0, 20).map(mapDatabaseBackupFile),
-    recentEmergencyBackups: databaseBackup.listBackupFiles(effectiveDirectory, 'emergency').slice(0, 10).map(mapDatabaseBackupFile)
+    recentBackups,
+    recentEmergencyBackups,
+    recentBackupsError
   };
 }
 
-async function createDatabaseBackup({ reason = 'manual', actor = 'developer', directoryPath = '', retentionCount = null, metadata = {} } = {}) {
+async function createDatabaseBackup({ reason = 'manual', actor = 'developer', directoryPath = '', retentionCount = null, metadata = {}, downloadDirectory } = {}) {
   const settings = getDatabaseBackupSettings();
   return databaseBackup.createFullDatabaseBackup({
     dbModule,
@@ -1099,7 +1115,8 @@ async function createDatabaseBackup({ reason = 'manual', actor = 'developer', di
     retentionCount: retentionCount || settings.retentionCount,
     reason,
     actor,
-    metadata
+    metadata,
+    downloadDirectory
   });
 }
 
@@ -4577,7 +4594,7 @@ async function executeAutomationTask(task) {
           taskFrequency: task.frequency
         }
       });
-      message = `完整資料庫備份已建立：${backupResult.filePath}`;
+      message = `完整資料庫備份已建立：${backupResult.filePath}${backupResult.retentionWarning ? `；${backupResult.retentionWarning}` : ''}`;
       status = 'success';
       notificationType = 'databaseBackup';
     }
@@ -7099,78 +7116,6 @@ function attachBrowserRoutes(server) {
     }
   });
 
-  server.post('/api/browser/developer/database-backup-settings/save', requireBrowserSession, requireBrowserRole('developer'), (request, response) => {
-    try {
-      const previousSettings = getDatabaseBackupSettings();
-      const directory = normalizeDatabaseBackupDirectoryPath(request.body?.defaultDirectory);
-      const retentionCount = databaseBackup.normalizeRetentionCount(request.body?.retentionCount);
-      dbModule.setSetting('databaseBackupDirectory', directory);
-      dbModule.setSetting('databaseBackupRetentionCount', retentionCount);
-      writeBrowserAuditLog(request, {
-        action: 'update',
-        target_type: 'database_backup_setting',
-        target_id: 'databaseBackupSettings',
-        summary: '更新完整資料庫備份設定',
-        before_data: {
-          directory: previousSettings.defaultDirectory,
-          retentionCount: previousSettings.retentionCount
-        },
-        after_data: {
-          directory,
-          retentionCount
-        }
-      });
-      notifyDesktop('databaseBackup', getBrowserSyncMeta(request));
-      response.json({
-        success: true,
-        message: '完整資料庫備份設定已儲存。',
-        data: getDatabaseBackupSettings(),
-        dashboard: buildDashboardForSession(request.browserSession)
-      });
-    } catch (error) {
-      response.status(400).json({ success: false, error: error.message });
-    }
-  });
-
-  server.post('/api/browser/developer/database-backup/run', requireBrowserSession, requireBrowserRole('developer'), async (request, response) => {
-    try {
-      const settings = getDatabaseBackupSettings();
-      const result = await createDatabaseBackup({
-        reason: 'manual',
-        actor: request.browserSession.employeeId || request.browserSession.role || 'developer',
-        directoryPath: request.body?.directoryPath || settings.effectiveDirectory,
-        retentionCount: settings.retentionCount,
-        metadata: {
-          triggeredFrom: 'browser_developer_workspace'
-        }
-      });
-      const message = `完整資料庫備份已建立：${result.filePath}`;
-      dbModule.addAutomationLog({ timestamp: Date.now(), message, status: 'success' });
-      writeBrowserAuditLog(request, {
-        action: 'backup',
-        target_type: 'database',
-        target_id: 'app_data.db',
-        summary: message,
-        after_data: {
-          filePath: result.filePath,
-          manifestPath: result.manifestPath,
-          sizeBytes: result.sizeBytes,
-          sha256: result.sha256
-        }
-      });
-      notifyDesktop('databaseBackup', getBrowserSyncMeta(request));
-      notifyDesktop('automationLog', getBrowserSyncMeta(request));
-      response.json({
-        success: true,
-        message,
-        data: result,
-        dashboard: buildDashboardForSession(request.browserSession)
-      });
-    } catch (error) {
-      response.status(500).json({ success: false, error: error.message });
-    }
-  });
-
   server.post('/api/browser/developer/database-restore-file/select', requireBrowserSession, requireBrowserRole('developer'), async (request, response) => {
     try {
       const pickerResult = await openDatabaseBackupFilePicker(request.body?.defaultPath);
@@ -7658,6 +7603,16 @@ function createServerApp() {
 
   attachExternalApiRoutes(server);
   attachBrowserRoutes(server);
+  const backupRoutes = attachDatabaseBackupRoutes(server, {
+    db: dbModule, requireSession: requireBrowserSession, requireRole: requireBrowserRole,
+    getSettings: getDatabaseBackupSettings, createBackup: createDatabaseBackup,
+    auditEntry: buildBrowserAuditLogEntry, buildDashboard: buildDashboardForSession,
+    getTempDirectory: () => app.getPath('temp'),
+    notify: (request, types) => {
+      for (const type of [...types, 'auditLogs']) notifyDesktop(type, getBrowserSyncMeta(request));
+    }
+  });
+  server.locals.disposeDatabaseBackupRoutes = backupRoutes.dispose;
   attachRequestHistoryRoutes(server, {
     db: dbModule, requireSession: requireBrowserSession, requirePermission: requireAdminPermission,
     auditEntry: buildBrowserAuditLogEntry,
@@ -7713,6 +7668,8 @@ function startServer(mainWindow) {
     console.log(`[信使驛站] 傳送門已在頻道 ${PORT} 開啟，等待遠方的訊息...`);
   });
   serverInstance.on('error', handleServerListenError);
+  serverInstance.once('close', server.locals.disposeDatabaseBackupRoutes);
+  app.once('will-quit', server.locals.disposeDatabaseBackupRoutes);
 
   scheduleAuditArchiveJob();
   return serverInstance;
