@@ -20,6 +20,7 @@ function setup() {
     vm.runInContext(section('const paperEmployeePickerHeights', 'function getAdminPaperRequest('), context);
     vm.runInContext(section('const originalHandleDashboardClickWithPaperEmployeePicker', 'function renderAdminPaperLeaveForm('), context);
     vm.runInContext(section('function renderBrowserPunchPermissions(', 'function renderAdminSecuritySection('), context);
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../browser-client/leave-days.js'), 'utf8'), context);
     vm.runInContext(supervisor, context);
     vm.runInContext("supervisorState.managementView = 'assignments'", context);
     return context;

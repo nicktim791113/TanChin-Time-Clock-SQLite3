@@ -48,6 +48,7 @@ function rcEntries(kind, detail) {
         <dl class="rc-entry-meta"><div><dt>開始</dt><dd>${rcEscape(row.startText)}</dd></div><div><dt>結束</dt><dd>${rcEscape(row.endText)}</dd></div><div><dt>整筆時數</dt><dd>${rcEscape(row.duration_hours)} 小時</dd></div><div><dt>流程</dt><dd>${rcEscape(row.approvalModeText)}</dd></div>
         ${kind === 'overtime' ? `<div><dt>申請人</dt><dd>${rcEscape(row.applicantId)} ${rcEscape(row.applicantName)}</dd></div>` : ''}<div><dt>部門</dt><dd>${rcEscape(row.employeeDepartment || '-')}</dd></div></dl>
         <p class="rc-reason">${rcEscape(row.reason || '未填原因')}</p>
+        ${kind === 'leave' ? renderLeaveDaysSummary(row) : ''}
         ${typeof renderRequestReviewProgress === 'function' ? renderRequestReviewProgress(row) : ''}
         ${row.approval_mode === 'admin_paper_approved' ? `<details class="rc-paper"><summary>紙本核准資料</summary><p>單號：${rcEscape(row.paperNo || '-')} · 核准者：${rcEscape(row.paperApprovedBy || '-')}</p><p>${rcEscape(row.paperComment || '')}</p></details>` : ''}
         <div class="rc-entry-actions">${rcActions(kind, row)}</div>
@@ -199,7 +200,7 @@ handleDashboardClick = async function handleRequestCalendarClick(event) {
             activateWorkspaceSubsection('admin', kind, 'paper'); renderDashboard(state.dashboard);
         } else { state.employeeWorkspacePanel = `${kind}-request`; renderDashboard(state.dashboard); }
         const form = document.getElementById(rcAdmin() ? `admin-paper-${kind}-form` : `employee-${kind}-form`);
-        if (form) { form.elements.startDate.value = current.date; form.elements.endDate.value = current.date; form.elements.startDate.focus(); }
+        if (form) { form.elements.startDate.value = current.date; form.elements.endDate.value = current.date; if (kind === 'leave') syncLeaveDaysEditor(form, { reset: true }); form.elements.startDate.focus(); }
         return;
     }
     if (action === 'rc-view') {

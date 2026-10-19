@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { getLeaveDateSegments, leaveOverlapsRange } = require('./leave-date-selection');
 const DAY = 86400000, OFFSET = 8 * 3600000;
 const METRIC_GROUPS = [
     { key: 'people', label: '人員與考勤', items: ['employeeCount', 'todayPunchCount', 'todayAbnormalPunchCount'], kind: 'people' },
@@ -52,10 +53,9 @@ function metricSources(db, can, now) {
         return [...new Map([...nearby, ...pending].map((row) => [row.id, row])).values()];
     };
     const leaves = requests('leave', 'admin.leave.review'), overtime = requests('overtime', 'admin.overtime.view');
-    const charges = new Map(leaves.filter((row) => row.status === 'approved').map((row) => [row.id, db.getLeaveEntitlements().charges(row.id)]));
     const onDay = (kind, row, date) => {
-        const at = Date.parse(`${date}T00:00:00+08:00`), dates = kind === 'leave' ? charges.get(row.id) || [] : [];
-        return row.start_at < at + DAY && row.end_at > at && (!dates.length || dates.some((c) => c.date === date && c.hours > 0));
+        const at = Date.parse(`${date}T00:00:00+08:00`);
+        return kind === 'leave' ? leaveOverlapsRange(row, at, at + DAY) : row.start_at < at + DAY && row.end_at > at;
     };
     const meals = can('admin.meals.view') ? { today: db.getMeals().dayState(today, now), tomorrow: db.getMeals().dayState(dateText(start + DAY), now) } : null;
     return { today, start, leaves, overtime, meals, onDay };
@@ -120,13 +120,16 @@ function attachDashboardMetricRoutes(server, { db, requireSession, requireAdmin,
         const keyword = String(request.query.keyword || '').trim().toLocaleLowerCase(), department = String(request.query.department || '').trim();
         if (keyword.length > 100 || department.length > 100) fail('篩選條件過長。');
         rows = rows.filter((row) => { const person = identity(row); return (!department || person.department === department) && (!keyword || `${person.id} ${person.name} ${person.department}`.toLocaleLowerCase().includes(keyword)); });
+        const dayHours = (row) => Math.round(getLeaveDateSegments(row).filter((segment) => segment.date === metric.date).reduce((sum, segment) => sum + segment.hours, 0) * 100) / 100;
+        const isLeaveDay = kind === 'leave' && metric.key.includes('Day:');
         const summary = { people: new Set(rows.map((row) => row.employee_id)).size, requests: rows.length,
             requestHours: kind === 'meal' ? null : Math.round(rows.reduce((sum, row) => sum + (Number(row.duration_hours) || 0), 0) * 100) / 100,
+            ...(isLeaveDay ? { dayHours: Math.round(rows.reduce((sum, row) => sum + dayHours(row), 0) * 100) / 100 } : {}),
             departments: [...new Set(rows.map((row) => identity(row).department).filter(Boolean))].length };
         const page = request.query.page == null ? 1 : Number(request.query.page);
         if (!Number.isSafeInteger(page) || page < 1) fail('頁碼不正確。');
         const totalPages = Math.max(1, Math.ceil(rows.length / 50)), current = Math.min(page, totalPages);
-        response.json({ success: true, detail: { metric, kind, page: current, totalPages, totalRecords: rows.length, unfilteredRecords, summary, departments, filters: { keyword, department }, records: rows.slice((current - 1) * 50, current * 50).map((r) => kind === 'meal' ? ({ employeeId: r.employee_id, employeeName: r.name, employeeDepartment: r.department, eating: r.eating, submittedEating: r.submittedEating }) : formatRecord(kind, r)) } });
+        response.json({ success: true, detail: { metric, kind, page: current, totalPages, totalRecords: rows.length, unfilteredRecords, summary, departments, filters: { keyword, department }, records: rows.slice((current - 1) * 50, current * 50).map((r) => kind === 'meal' ? ({ employeeId: r.employee_id, employeeName: r.name, employeeDepartment: r.department, eating: r.eating, submittedEating: r.submittedEating }) : ({ ...formatRecord(kind, r), ...(isLeaveDay ? { dayHours: dayHours(r) } : {}) })) } });
     }));
 }
 module.exports = { DEFAULT_CARDS, METRIC_GROUPS, createDashboardMetricStore, buildDashboardMetrics, attachDashboardMetricRoutes };

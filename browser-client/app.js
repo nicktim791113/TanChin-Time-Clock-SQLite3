@@ -8918,7 +8918,7 @@ function renderEmployeeLeaveRequestRows(requests = [], { showEmployee = false, r
                             <td>${escapeHtml(request.leaveTypeName || "-")}</td>
                             <td>${escapeHtml(request.startText || "-")}</td>
                             <td>${escapeHtml(request.endText || "-")}</td>
-                            <td>${escapeHtml(request.duration_hours ?? "-")}</td>
+                            <td>${escapeHtml(request.duration_hours ?? "-")}${typeof renderLeaveDaysSummary === "function" ? renderLeaveDaysSummary(request) : ""}</td>
                             <td>${getLeaveStatusBadge(request)}</td>
                             <td>${escapeHtml(request.approvalModeText || "-")}${typeof renderRequestReviewProgress === 'function' ? renderRequestReviewProgress(request) : ''}</td>
                             <td class="multiline-cell">${escapeHtml(request.reason || "-")}</td>
@@ -9296,11 +9296,10 @@ function getAdminPaperRequest(kind, requestId) {
 }
 
 function getPaperFormDateTime(timestamp) {
-    const date = new Date(Number(timestamp));
+    const date = new Date(Number(timestamp) + 8 * 3600000);
     if (!Number.isFinite(date.getTime())) return { date: "", time: "" };
-    const hours = String(date.getHours()).padStart(2, "0");
-    const minutes = String(date.getMinutes()).padStart(2, "0");
-    return { date: formatDateInputValue(date), time: `${hours}:${minutes}` };
+    const text = date.toISOString();
+    return { date: text.slice(0, 10), time: text.slice(11, 16) };
 }
 
 function setPaperFormValue(form, name, value) {
@@ -9338,6 +9337,7 @@ function resetAdminPaperCorrection(form) {
     }
     if (selectVisible) selectVisible.disabled = false;
     setFormMessage(form.id, "");
+    if (kind === "leave") syncLeaveDaysEditor(form, { reset: true });
 }
 
 function beginAdminPaperCorrection(kind, requestId) {
@@ -9377,6 +9377,7 @@ function beginAdminPaperCorrection(kind, requestId) {
     setPaperFormValue(form, "endTime", end.time);
     setPaperFormValue(form, "durationHours", request.duration_hours ?? "");
     setPaperFormValue(form, "dailyHours", (request.dailyHours || []).map((row) => `${row.date}=${row.hours}`).join("\n"));
+    if (kind === "leave") syncLeaveDaysEditor(form, { request });
     setPaperFormValue(form, "reason", request.reason || "");
     setPaperFormValue(form, "paperNo", request.paperNo || "");
     setPaperFormValue(form, "approvedBy", request.paperApprovedBy || "");
@@ -9488,9 +9489,9 @@ function renderAdminPaperLeaveForm(datasets = {}) {
                     </label>
                     <label class="field paper-span-4">
                         <span>請假時數</span>
-                        <input name="durationHours" type="number" min="0.01" step="0.01" placeholder="實際請假時數">
+                        <input name="durationHours" type="number" readonly aria-label="請假總時數（逐日自動加總）" placeholder="由勾選日期自動加總">
                     </label>
-                    <label class="field paper-span-8"><span>每日實際時數（跨日額度請假）</span><textarea name="dailyHours" rows="2" placeholder="2026-10-15=8" title="每個請假日期一列，YYYY-MM-DD=小時；排除午休及非工作日，加總須等於整筆時數。"></textarea></label>
+                    ${renderLeaveDaysEditor({ batch: true })}
                     <label class="field paper-span-4">
                         <span>紙本單號</span>
                         <input name="paperNo" type="text" placeholder="選填">
@@ -9805,14 +9806,14 @@ function renderEmployeeLeaveApplicationPanel(dashboard) {
                     </label>
                     <label class="field">
                         <span>請假時數</span>
-                        <input name="durationHours" type="number" min="0.01" step="0.01" placeholder="實際請假時數">
+                        <input name="durationHours" type="number" readonly aria-label="請假總時數（逐日自動加總）" placeholder="由勾選日期自動加總">
                     </label>
                     <label class="field request-reason">
                         <span>請假原因</span>
                         <textarea name="reason" rows="2" placeholder="請簡述請假原因"></textarea>
                     </label>
                 </div>
-                <label class="field"><span>每日實際時數（跨日額度請假）</span><textarea name="dailyHours" rows="2" placeholder="2026-10-15=8" title="每個請假日期一列，YYYY-MM-DD=小時；排除午休及非工作日，加總須等於整筆時數。"></textarea></label>
+                ${renderLeaveDaysEditor()}
                 <div class="form-toolbar dense-toolbar">
                     <button class="primary-btn" type="submit">送出請假申請</button>
                     <p class="helper-text">送出後會依照主管審核與管理部終審流程更新狀態。</p>
@@ -10359,6 +10360,7 @@ handleDashboardSubmit = async function handleDashboardSubmitLeaveOverride(event)
                     endTime: values.endTime,
                     durationHours: values.durationHours,
                     dailyHours: values.dailyHours,
+                    ...collectLeaveDays(form),
                     reason: values.reason?.trim() || ""
                 }
             });
@@ -10391,6 +10393,7 @@ handleDashboardSubmit = async function handleDashboardSubmitLeaveOverride(event)
                     endTime: values.endTime,
                     durationHours: values.durationHours,
                     dailyHours: values.dailyHours,
+                    ...collectLeaveDays(form),
                     reason: values.reason?.trim() || "",
                     paperNo: values.paperNo?.trim() || "",
                     approvedBy: values.approvedBy?.trim() || "",

@@ -147,6 +147,7 @@ test('calendar action rendering retains paper permissions, escapes text and reje
         postRenderSetup() {}, handleDashboardClick() {}, handleRealtimeSyncMessage() {}, handleLogout() {},
         workspaceSubnavConfigs: { admin: { leave: { groups: [{ items: [{ id: 'records' }] }] }, overtime: { groups: [{ items: [{ id: 'records' }] }] } } }
     });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../browser-client/leave-days.js'), 'utf8'), context);
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../browser-client/request-calendar.js'), 'utf8'), context);
     const row = { id: 'paper', approval_mode: 'admin_paper_approved', status: 'approved', reason: '<script>bad</script>', calendarActions: {} };
     context.row = row;
@@ -159,6 +160,12 @@ test('calendar action rendering retains paper permissions, escapes text and reje
     const html = vm.runInContext("rcEntries('leave', { records: [row] })", context);
     assert.ok(!html.includes('<script>'));
     assert.ok(html.includes('&lt;script&gt;'));
+    Object.assign(row, { date_selection_mode: 'explicit_dates', start_at: at('2026-10-16T08:00:00'), end_at: at('2026-10-19T17:00:00'),
+        dailyHours: [{ date: '2026-10-16', hours: 8 }, { date: '2026-10-19', hours: 4 }] });
+    const selectedHtml = vm.runInContext("rcEntries('leave', { records: [row] })", context);
+    assert.match(selectedHtml, /實際請假 2 日/);
+    assert.match(selectedHtml, /排除 2 日/);
+    assert.match(selectedHtml, /不請假：2026-10-17、2026-10-18/);
     state.dashboard.role = 'employee'; row.calendarActions = { withdraw: true };
     assert.match(vm.runInContext("rcActions('leave', row)", context), /leave-withdraw/);
     context.document.getElementById = () => null;

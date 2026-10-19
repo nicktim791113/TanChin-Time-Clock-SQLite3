@@ -10,7 +10,8 @@ const { startFixture } = require('./fixtures/browser-server');
 test('seven Taipei dates count unique approved people, actual leave days, midnight boundaries and current versus submitted meals', () => {
     const at = (s) => Date.parse(s + '+08:00'), now = at('2027-01-01T00:01:00');
     const leaves = [
-        { id: 'gap', employee_id: 'E1', status: 'approved', start_at: at('2026-12-30T09:00:00'), end_at: at('2027-01-02T00:00:00') },
+        { id: 'gap', employee_id: 'E1', status: 'approved', start_at: at('2026-12-30T09:00:00'), end_at: at('2027-01-02T00:00:00'),
+            date_selection_mode: 'explicit_dates', daily_hours: [{ date: '2026-12-30', hours: 8 }, { date: '2027-01-01', hours: 8 }], duration_hours: 16 },
         { id: 'same', employee_id: 'E1', status: 'approved', start_at: at('2027-01-01T10:00:00'), end_at: at('2027-01-01T11:00:00') },
         { id: 'second', employee_id: 'E2', status: 'approved', start_at: at('2027-01-01T10:00:00'), end_at: at('2027-01-01T11:00:00') },
         { id: 'pending', employee_id: 'E3', status: 'pending_admin', start_at: at('2027-01-01T10:00:00'), end_at: at('2027-01-01T11:00:00') }
@@ -37,6 +38,16 @@ test('seven Taipei dates count unique approved people, actual leave days, midnig
     const limited = buildDashboardMetrics(db, (p) => p === 'admin.leave.balances.view', {}, now);
     assert.equal(limited.catalog.find((c) => c.key === 'leaveDay:0').value, null);
     assert.equal(limited.roster.length, 1);
+});
+
+test('legacy cross-day leave keeps its full range even with old first-day accounting charges', () => {
+    const start = Date.parse('2026-10-16T08:00:00+08:00'), end = Date.parse('2026-10-19T17:00:00+08:00');
+    const row = { id: 'legacy', employee_id: 'E1', status: 'approved', start_at: start, end_at: end, duration_hours: 16,
+        date_selection_mode: 'legacy_range', daily_hours: [{ date: '2026-10-16', hours: 16 }] };
+    const db = { queryLeaveRequests: () => [row], queryOvertimeRequests: () => [], loadEmployees: () => [],
+        getLeaveEntitlements: () => ({ charges: () => row.daily_hours }) };
+    const metrics = buildDashboardMetrics(db, (permission) => permission === 'admin.leave.review', {}, Date.parse('2026-10-17T12:00:00+08:00'));
+    assert.equal(metrics.catalog.find((entry) => entry.key === 'leaveDay:0').value, 1);
 });
 
 test('eight fixed groups and density persist per account, enforce revision and roll back audit failure', () => {

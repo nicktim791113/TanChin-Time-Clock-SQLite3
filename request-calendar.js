@@ -2,6 +2,7 @@ const DAY_MS = 86400000;
 const TAIPEI_OFFSET = 8 * 3600000;
 const PAGE_SIZE = 50;
 const REQUEST_STATUSES = ['pending_supervisor', 'pending_admin', 'approved', 'rejected', 'withdrawn', 'cancelled'];
+const { getLeaveDateSegments, leaveOverlapsRange } = require('./leave-date-selection');
 
 function invalid(message) {
     return Object.assign(new Error(message), { status: 400 });
@@ -25,14 +26,12 @@ function buildCalendar(month, records, now = Date.now()) {
     const people = days.map(() => new Set());
     let totalCount = 0;
     for (const row of records) {
-        const start = Math.max(Number(row.start_at), range.start);
-        const end = Math.min(Number(row.end_at), range.end);
-        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+        const indexes = new Set(getLeaveDateSegments(row)
+            .filter((segment) => segment.startAt < range.end && segment.endAt > range.start)
+            .map((segment) => Math.floor((Math.max(segment.startAt, range.start) - range.start) / DAY_MS)));
+        if (!indexes.size) continue;
         totalCount += 1;
-        const first = Math.floor((start - range.start) / DAY_MS);
-        // End timestamps are exclusive: midnight belongs only to the preceding day.
-        const last = Math.floor((end - 1 - range.start) / DAY_MS);
-        for (let index = first; index <= last; index += 1) {
+        for (const index of indexes) {
             const day = days[index];
             day.totalCount += 1;
             if (row.status === 'approved') {
@@ -77,7 +76,7 @@ function attachRequestCalendarRoutes(server, context) {
                         }
                         const lookup = buildLookup(kind);
                         const query = kind === 'leave' ? db.queryLeaveRequests : db.queryOvertimeRequests;
-                        const scopedRows = query(filters).filter((row) => Number(row.end_at) > Number(row.start_at));
+                        const scopedRows = query(filters).filter((row) => leaveOverlapsRange(row, range.start, range.end));
                         const employeeFor = (row) => lookup.employeeMap.get(row.employee_id) || {};
                         const rows = scopedRows.filter((row) => (
                             (!input.employeeId || row.employee_id === input.employeeId) &&
@@ -95,7 +94,7 @@ function attachRequestCalendarRoutes(server, context) {
                         let detailRows = rows;
                         if (input.date) {
                             const start = Date.parse(`${input.date}T00:00:00+08:00`);
-                            detailRows = rows.filter((row) => row.start_at < start + DAY_MS && row.end_at > start);
+                            detailRows = rows.filter((row) => leaveOverlapsRange(row, start, start + DAY_MS));
                         }
                         const totalPages = Math.max(1, Math.ceil(detailRows.length / PAGE_SIZE));
                         const currentPage = Math.min(page, totalPages);

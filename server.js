@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const { app, dialog } = require('electron');
 const dbModule = require('./database');
 const databaseBackup = require('./database-backup');
+const { normalizeLeaveDateSelection, getLeaveDateSegments } = require('./leave-date-selection');
 const { attachDatabaseBackupRoutes } = require('./database-backup-routes');
 const { createBrowserAccounts, RESET_PERMISSION, REVEAL_PERMISSION } = require('./browser-accounts');
 const { attachMealRoutes } = require('./meal-routes');
@@ -1386,6 +1387,10 @@ function formatAttendanceDateTime(timestamp) {
   return `${formatLocalDate(date)} ${formatLocalTime(date)}`;
 }
 
+function formatTaipeiDateTime(timestamp) {
+  return new Date(Number(timestamp) + 8 * 3600000).toISOString().slice(0, 19).replace('T', ' ');
+}
+
 function buildPunchAttendanceRecord(record, employeeMap) {
   const employee = employeeMap.get(record.id) || {};
   const formatted = formatPunchRecord(record);
@@ -1470,6 +1475,18 @@ function allocateLeaveSegmentDurations(segments, approvedHours) {
   });
 }
 
+function getActualLeaveAttendanceSegments(request) {
+  return getLeaveDateSegments(request).map((segment) => ({
+    dayStartAt: new Date(`${segment.date}T00:00:00+08:00`).getTime(),
+    dateText: segment.date,
+    segmentStartAt: segment.startAt,
+    segmentEndAt: segment.endAt,
+    rawHours: (segment.endAt - segment.startAt) / 3_600_000,
+    durationHours: segment.hours,
+    explicitDates: request.date_selection_mode === 'explicit_dates'
+  }));
+}
+
 function buildApprovedLeaveAttendanceRecords({ employees, employeeMap, employeeId = '', rangeStartMs = null, rangeEndMs = null } = {}) {
   const leaveTypes = dbModule.loadLeaveTypes();
   const typeMap = new Map(leaveTypes.map((type) => [type.id, type]));
@@ -1486,11 +1503,10 @@ function buildApprovedLeaveAttendanceRecords({ employees, employeeMap, employeeI
   return dbModule.queryLeaveRequests(query).flatMap((request) => {
     const employee = employeeMap.get(request.employee_id) || {};
     const leaveTypeName = typeMap.get(request.leave_type_id)?.name || request.leave_type_id;
-    const segments = splitLeaveRequestIntoAttendanceSegments(request);
-    const segmentDurations = allocateLeaveSegmentDurations(segments, request.duration_hours);
+    const segments = getActualLeaveAttendanceSegments(request);
 
     return segments
-      .map((segment, index) => ({ segment, durationHours: segmentDurations[index] }))
+      .map((segment) => ({ segment, durationHours: segment.durationHours }))
       .filter(({ segment }) => (rangeStartMs === null || segment.segmentEndAt > rangeStartMs) &&
         (rangeEndMs === null || segment.segmentStartAt <= rangeEndMs))
       .map(({ segment, durationHours }) => ({
@@ -1500,8 +1516,8 @@ function buildApprovedLeaveAttendanceRecords({ employees, employeeMap, employeeI
         jobTitle: employee.job_title || '',
         shift: LEAVE_RECORD_KIND_TEXT,
         timestamp: segment.segmentStartAt,
-        dateText: formatLocalDate(new Date(segment.dayStartAt)),
-        timeText: formatLocalTime(new Date(segment.segmentStartAt)),
+        dateText: segment.dateText,
+        timeText: formatTaipeiDateTime(segment.segmentStartAt).slice(11),
         type: 'leave',
         typeText: `請假：${leaveTypeName}`,
         status: 'approved_leave',
@@ -1512,8 +1528,8 @@ function buildApprovedLeaveAttendanceRecords({ employees, employeeMap, employeeI
         recordKindText: LEAVE_RECORD_KIND_TEXT,
         leaveRequestId: request.id,
         leaveTypeName,
-        leaveStartText: formatAttendanceDateTime(segment.segmentStartAt),
-        leaveEndText: formatAttendanceDateTime(segment.segmentEndAt),
+        leaveStartText: formatTaipeiDateTime(segment.segmentStartAt),
+        leaveEndText: formatTaipeiDateTime(segment.segmentEndAt),
         leaveDurationHours: durationHours,
         leaveRequestDurationHours: roundAttendanceHours(request.duration_hours),
         durationHours
@@ -1750,8 +1766,9 @@ function buildAdminAttendanceReport(input = {}, options = {}) {
     throw error;
   }
 
-  const rangeStart = new Date(`${startDate}T00:00:00`);
-  const rangeEnd = new Date(`${endDate}T23:59:59.999`);
+  const parsedRange = parseAdminRequestDateRange({ startDate, endDate });
+  const rangeStart = new Date(parsedRange.startAt);
+  const rangeEnd = new Date(parsedRange.endAt);
   if (Number.isNaN(rangeStart.getTime()) || Number.isNaN(rangeEnd.getTime())) {
     const error = new Error('日期格式不正確，請重新選擇。');
     error.statusCode = 400;
@@ -1877,6 +1894,27 @@ function calculateLeaveDurationHours(startAt, endAt, submittedHours) {
   return Math.max(0, Math.round(((Number(endAt) - Number(startAt)) / 36_000) / 100));
 }
 
+function resolveSubmittedLeaveSelection(body, startAt, endAt, original = null) {
+  const mode = body?.dateSelectionMode ?? original?.date_selection_mode ?? 'legacy_range';
+  if (original?.date_selection_mode === 'explicit_dates' && mode !== 'explicit_dates') {
+    throw createHttpError('逐日請假不能改回連續日期模式，請重新核對勾選日期與每日時數。', 400);
+  }
+  if (mode === 'explicit_dates') {
+    const selected = normalizeLeaveDateSelection({
+      start_at: startAt, end_at: endAt, date_selection_mode: mode,
+      daily_hours: body?.dailyHours ?? original?.daily_hours
+    });
+    return { ...selected, explicit_duration_hours: selected.duration_hours };
+  }
+  if (mode !== 'legacy_range') throw createHttpError('不支援的請假日期選擇模式。', 400);
+  return {
+    date_selection_mode: 'legacy_range',
+    duration_hours: calculateLeaveDurationHours(startAt, endAt, body?.durationHours),
+    explicit_duration_hours: body?.durationHours || '',
+    daily_hours: body?.dailyHours
+  };
+}
+
 function getLeaveSupervisorForEmployee(employee, routes = dbModule.getReviewSupervisors().rows()) {
   const route = routes.find((item) => item.employee_id === employee?.id && item.supervisor_id !== employee.id);
   return route?.supervisor_id || '';
@@ -1909,6 +1947,7 @@ function formatLeaveRequestForDashboard(request, lookup = buildLeaveLookup()) {
     proxyReason: request.proxy_reason || '',
     leaveTypeId: request.leave_type_id,
     leaveTypeName: type.name || request.leave_type_id,
+    dateSelectionMode: request.date_selection_mode || 'legacy_range',
     dailyHours: dbModule.getLeaveEntitlements().charges(request.id),
     supervisorId: request.supervisor_id || '',
     supervisorName: supervisor.name || '',
@@ -1922,8 +1961,8 @@ function formatLeaveRequestForDashboard(request, lookup = buildLeaveLookup()) {
     correctedFromRequestId: request.corrected_from_request_id == null
       ? (paperDetails.correctedFromRequestId || '')
       : String(request.corrected_from_request_id),
-    startText: formatDateTimeText(request.start_at),
-    endText: formatDateTimeText(request.end_at),
+    startText: formatTaipeiDateTime(request.start_at),
+    endText: formatTaipeiDateTime(request.end_at),
     createdText: formatDateTimeText(request.created_at),
     supervisorDecidedText: formatDateTimeText(request.supervisor_decided_at),
     adminDecidedText: formatDateTimeText(request.admin_decided_at)
@@ -1952,13 +1991,13 @@ function getEmployeeLeaveState(employee) {
 function isLeaveFullDaySegment(segment, durationHours) {
   const approvedHours = Number(durationHours) || 0;
   const rawHours = Number(segment?.rawHours) || 0;
-  return approvedHours >= 7.5 || rawHours >= 7.5;
+  return approvedHours >= 7.5 || (!segment?.explicitDates && rawHours >= 7.5);
 }
 
 function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rangeStartMs = null, rangeEndMs = null } = {}) {
   const now = Date.now();
-  const effectiveEndMs = Number.isFinite(Number(rangeEndMs)) ? Number(rangeEndMs) : now;
-  const effectiveStartMs = Number.isFinite(Number(rangeStartMs))
+  const effectiveEndMs = rangeEndMs != null && Number.isFinite(Number(rangeEndMs)) ? Number(rangeEndMs) : now;
+  const effectiveStartMs = rangeStartMs != null && Number.isFinite(Number(rangeStartMs))
     ? Number(rangeStartMs)
     : effectiveEndMs - (60 * 24 * 60 * 60 * 1000);
   const employeeMap = new Map(employees.map((employee) => [employee.id, employee]));
@@ -1979,10 +2018,12 @@ function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rang
   approvedRequests.forEach((request) => {
     const employee = employeeMap.get(request.employee_id) || {};
     const leaveTypeName = typeMap.get(request.leave_type_id)?.name || request.leave_type_id;
-    const segments = splitLeaveRequestIntoAttendanceSegments(request, effectiveStartMs, effectiveEndMs);
-    const durations = allocateLeaveSegmentDurations(segments, request.duration_hours);
+    // Allocate the full request first, then filter dates; a narrow report must
+    // never redistribute the entire request's hours onto the remaining dates.
+    const segments = getActualLeaveAttendanceSegments(request).filter((segment) =>
+      segment.segmentEndAt > effectiveStartMs && segment.segmentStartAt <= effectiveEndMs);
 
-    segments.forEach((segment, index) => {
+    segments.forEach((segment) => {
       if (segment.segmentStartAt > now) return;
       const dayEndAt = segment.dayStartAt + (24 * 60 * 60 * 1000) - 1;
       const sameDayPunches = punchRecords.filter((record) =>
@@ -1992,13 +2033,13 @@ function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rang
       );
       const punchesInsideLeave = sameDayPunches.filter((record) =>
         record.timestamp >= segment.segmentStartAt &&
-        record.timestamp <= segment.segmentEndAt
+        record.timestamp < segment.segmentEndAt
       );
       const punchesOutsideLeave = sameDayPunches.filter((record) =>
         record.timestamp < segment.segmentStartAt ||
-        record.timestamp > segment.segmentEndAt
+        record.timestamp >= segment.segmentEndAt
       );
-      const durationHours = durations[index] || roundAttendanceHours(segment.rawHours);
+      const durationHours = segment.durationHours;
 
       punchesInsideLeave.forEach((record) => {
         const formatted = formatPunchRecord(record);
@@ -2015,9 +2056,9 @@ function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rang
           startAt: segment.segmentStartAt,
           endAt: segment.segmentEndAt,
           punchAt: record.timestamp,
-          startText: formatDateTimeText(segment.segmentStartAt),
-          endText: formatDateTimeText(segment.segmentEndAt),
-          punchText: `${formatted.dateText} ${formatted.timeText} ${formatted.typeText}`,
+          startText: formatTaipeiDateTime(segment.segmentStartAt),
+          endText: formatTaipeiDateTime(segment.segmentEndAt),
+          punchText: `${formatTaipeiDateTime(record.timestamp)} ${formatted.typeText}`,
           durationHours,
           detail: `核准請假區間內出現${formatted.typeText}打卡，需確認是否銷假、誤打或審核資料需修正。`
         });
@@ -2038,8 +2079,8 @@ function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rang
           startAt: segment.segmentStartAt,
           endAt: segment.segmentEndAt,
           punchAt: punchesOutsideLeave[0]?.timestamp || '',
-          startText: formatDateTimeText(segment.segmentStartAt),
-          endText: formatDateTimeText(segment.segmentEndAt),
+          startText: formatTaipeiDateTime(segment.segmentStartAt),
+          endText: formatTaipeiDateTime(segment.segmentEndAt),
           punchText: `${punchesOutsideLeave.length} 筆打卡`,
           durationHours,
           detail: '這筆請假接近全天或全天，但同一天仍有請假區間外打卡，建議人工確認實際出勤與請假是否一致。'
@@ -2060,8 +2101,8 @@ function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rang
           startAt: segment.segmentStartAt,
           endAt: segment.segmentEndAt,
           punchAt: '',
-          startText: formatDateTimeText(segment.segmentStartAt),
-          endText: formatDateTimeText(segment.segmentEndAt),
+          startText: formatTaipeiDateTime(segment.segmentStartAt),
+          endText: formatTaipeiDateTime(segment.segmentEndAt),
           punchText: '-',
           durationHours,
           detail: '這筆核准請假不是全天區間，但當天沒有任何上班或下班打卡，需確認是否另有出勤、補登或請假時數需調整。'
@@ -2179,14 +2220,14 @@ function parseAdminRequestDateRange(input = {}) {
   }
   const isStrictCalendarDate = (value) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-    const parsed = new Date(`${value}T00:00:00`);
-    return Number.isFinite(parsed.getTime()) && formatLocalDate(parsed) === value;
+    const parsed = new Date(`${value}T00:00:00+08:00`);
+    return Number.isFinite(parsed.getTime()) && new Date(parsed.getTime() + 8 * 3600000).toISOString().slice(0, 10) === value;
   };
   if (!isStrictCalendarDate(startDate) || !isStrictCalendarDate(endDate)) {
     throw createHttpError('日期格式或日曆日期不正確，請重新選擇。', 400);
   }
-  const startAt = new Date(`${startDate}T00:00:00`).getTime();
-  const endAt = new Date(`${endDate}T23:59:59.999`).getTime();
+  const startAt = new Date(`${startDate}T00:00:00+08:00`).getTime();
+  const endAt = new Date(`${endDate}T23:59:59.999+08:00`).getTime();
   if (startAt > endAt) {
     throw createHttpError('開始日期不能晚於結束日期。', 400);
   }
@@ -2347,8 +2388,8 @@ function parseExternalApiDate(value, endOfDay = false) {
   const text = String(value).trim();
   if (!text) return null;
   if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
-    const date = new Date(`${text}T${endOfDay ? '23:59:59.999' : '00:00:00'}`);
-    return Number.isNaN(date.getTime()) ? null : date.getTime();
+    const date = new Date(`${text}T${endOfDay ? '23:59:59.999' : '00:00:00'}+08:00`);
+    return Number.isFinite(date.getTime()) && new Date(date.getTime() + 8 * 3600000).toISOString().slice(0, 10) === text ? date.getTime() : null;
   }
   const numeric = Number(text);
   if (Number.isFinite(numeric) && numeric > 0) return numeric;
@@ -5255,9 +5296,10 @@ function attachBrowserRoutes(server) {
       const endAt = parseLeaveDateTime(request.body?.endDate, request.body?.endTime, '18:00');
       if (endAt <= startAt) throw createHttpError('請假結束時間必須晚於開始時間。', 400);
 
-      const durationHours = calculateLeaveDurationHours(startAt, endAt, request.body?.durationHours);
+      const selection = resolveSubmittedLeaveSelection(request.body, startAt, endAt);
+      const durationHours = selection.duration_hours;
       if (durationHours <= 0) throw createHttpError('請輸入有效的請假時數。', 400);
-      if (dbModule.hasOverlappingLeaveRequest(employee.id, startAt, endAt)) {
+      if (dbModule.hasOverlappingLeaveRequest(employee.id, startAt, endAt, '', selection)) {
         throw createHttpError('這段時間已經有待審或已核准的請假申請。', 409);
       }
 
@@ -5277,9 +5319,7 @@ function attachBrowserRoutes(server) {
         leave_type_id: leaveType.id,
         start_at: startAt,
         end_at: endAt,
-        duration_hours: durationHours,
-        explicit_duration_hours: request.body?.durationHours || '',
-        daily_hours: request.body?.dailyHours,
+        ...selection,
         reason: String(request.body?.reason || '').trim(),
         status: 'pending_supervisor',
         supervisor_id: supervisorId,
@@ -6112,9 +6152,10 @@ function attachBrowserRoutes(server) {
       const endAt = parseLeaveDateTime(request.body?.endDate, request.body?.endTime, '18:00');
       if (endAt <= startAt) throw createHttpError('請假結束時間必須晚於開始時間。', 400);
 
-      const durationHours = calculateLeaveDurationHours(startAt, endAt, request.body?.durationHours);
+      const selection = resolveSubmittedLeaveSelection(request.body, startAt, endAt);
+      const durationHours = selection.duration_hours;
       if (durationHours <= 0) throw createHttpError('請輸入有效的請假時數。', 400);
-      const overlappingEmployees = selectedEmployees.filter((employee) => dbModule.hasOverlappingLeaveRequest(employee.id, startAt, endAt));
+      const overlappingEmployees = selectedEmployees.filter((employee) => dbModule.hasOverlappingLeaveRequest(employee.id, startAt, endAt, '', selection));
       if (overlappingEmployees.length) {
         const names = overlappingEmployees.map((employee) => `${employee.id} ${employee.name || ''}`.trim()).join('、');
         throw createHttpError(`下列員工在此時段已有待審或已核准的請假申請：${names}`, 409);
@@ -6137,9 +6178,7 @@ function attachBrowserRoutes(server) {
           leave_type_id: leaveType.id,
           start_at: startAt,
           end_at: endAt,
-          duration_hours: durationHours,
-          explicit_duration_hours: request.body?.durationHours || '',
-          daily_hours: request.body?.dailyHours,
+          ...selection,
           reason: String(request.body?.reason || '').trim(),
           status: 'approved',
           supervisor_id: supervisorId,
@@ -6212,9 +6251,10 @@ function attachBrowserRoutes(server) {
       const startAt = parseLeaveDateTime(request.body?.startDate, request.body?.startTime, '09:00');
       const endAt = parseLeaveDateTime(request.body?.endDate, request.body?.endTime, '18:00');
       if (endAt <= startAt) throw createHttpError('請假結束時間必須晚於開始時間。', 400);
-      const durationHours = calculateLeaveDurationHours(startAt, endAt, request.body?.durationHours);
+      const selection = resolveSubmittedLeaveSelection(request.body, startAt, endAt, original);
+      const durationHours = selection.duration_hours;
       if (durationHours <= 0) throw createHttpError('請輸入有效的請假時數。', 400);
-      if (dbModule.hasOverlappingLeaveRequest(employee.id, startAt, endAt, original.id)) {
+      if (dbModule.hasOverlappingLeaveRequest(employee.id, startAt, endAt, original.id, selection)) {
         throw createHttpError(`${employee.id} ${employee.name || ''} 在此時段已有其他待審或已核准的請假申請。`, 409);
       }
 
@@ -6232,9 +6272,7 @@ function attachBrowserRoutes(server) {
         leave_type_id: leaveType.id,
         start_at: startAt,
         end_at: endAt,
-        duration_hours: durationHours,
-        explicit_duration_hours: request.body?.durationHours || '',
-        daily_hours: request.body?.dailyHours,
+        ...selection,
         reason: String(request.body?.reason || '').trim(),
         supervisor_id: original.supervisor_id || getLeaveSupervisorForEmployee(employee) || '',
         supervisor_decision: 'approved',

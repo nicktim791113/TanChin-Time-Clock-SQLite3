@@ -120,8 +120,8 @@ function spRequestForm() {
         <div class="request-period-grid">${spField('開始日期', 'startDate', 'date', date)}${spField('開始時間', 'startTime', 'time', leave ? '09:00' : '18:00')}
         ${spField('結束日期', 'endDate', 'date', date)}${spField('結束時間', 'endTime', 'time', leave ? '18:00' : '20:00')}</div>
         <div class="sp-form-grid">${leave ? `<label class="field"><span>假別</span><select name="leaveTypeId" required>${supervisorState.data.leaveTypes.map((t) => `<option value="${spEscape(t.id)}">${spEscape(t.name)}</option>`).join('')}</select></label>` : ''}
-        ${spField('每人整筆時數', 'durationHours', 'number', leave ? '8' : '2', 'min="0.01" step="0.01"')}</div>
-        ${leave ? '<label class="field"><span>每日實際時數（跨日額度請假）</span><textarea name="dailyHours" rows="2" placeholder="2026-10-15=8" title="每個請假日期一列，YYYY-MM-DD=小時；排除午休及非工作日，加總須等於整筆時數。"></textarea></label>' : ''}
+        ${spField('每人整筆時數', 'durationHours', 'number', leave ? '' : '2', leave ? 'readonly placeholder="由勾選日期自動加總"' : 'min="0.01" step="0.01"')}</div>
+        ${leave ? renderLeaveDaysEditor({ batch: true }) : ''}
         ${spField('申請事由', 'reason', 'text', '', 'maxlength="2000"')}${spField('代辦原因', 'proxyReason', 'text', '', 'maxlength="500"')}
         <label class="sp-confirm"><input type="checkbox" name="confirmApproval" required>確認替所有勾選員工代申請相同內容；多主管設定依各人審核規則送審，原單主管代辦流程保留</label>
         <div class="inline-actions"><button class="primary-btn" type="submit" ${supervisorState.busy ? 'disabled' : ''}>送出代申請</button>${spButton('reset-form', '重設表單')}</div>
@@ -144,6 +144,7 @@ function spRequestDetail() {
         <div class="sp-records">${detail.records.map((row) => `<article class="sp-record"><div class="sp-toolbar"><strong>${spEscape(row.leaveTypeName || '加班')} · ${spEscape(row.statusText)}</strong>
             ${row.canProxyWithdraw ? spButton('withdraw', '代撤回', `data-id="${spEscape(row.id)}"`) : ''}</div>
             <p>${spEscape(row.startText)} 至 ${spEscape(row.endText)} · ${spEscape(row.duration_hours)} 小時</p><p>${spEscape(row.reason)}</p>
+            ${supervisorState.kind === 'leave' ? renderLeaveDaysSummary(row) : ''}
             <p>${spEscape(row.approvalModeText)}${row.applicantId || row.applicant_id ? ` · 申請人：${spEscape(row.applicantName || row.applicantId || row.applicant_id)}` : ''}</p>
             ${row.proxyReason || row.proxy_reason ? `<p>代辦原因：${spEscape(row.proxyReason || row.proxy_reason)}</p>` : ''}
             ${supervisorState.form === `withdraw:${row.id}` && row.canProxyWithdraw ? `<form data-sp-form="leave/withdraw" class="sp-form">
@@ -173,6 +174,7 @@ function spPaint() {
     if (root) {
         root.outerHTML = spManagement() ? renderSupervisorAssignments() : renderSupervisorWorkspace();
         setupPaperEmployeePickerSizes();
+        setupLeaveDaysEditors();
     }
 }
 function spSyncAssignmentClear(form, reset = false) {
@@ -371,7 +373,10 @@ handleDashboardSubmit = async function handleSupervisorSubmit(event) {
         else if (operation === 'leave/withdraw') body.updatedAt = Number(body.updatedAt);
         else body.confirmApproval = fields.has('confirmApproval');
     }
-    try { await spSave(operation === 'meals' ? 'meals/choice' : operation, body); } catch (error) { spMessage(error.message); }
+    try {
+        if (operation === 'leave') Object.assign(body, collectLeaveDays(form));
+        await spSave(operation === 'meals' ? 'meals/choice' : operation, body);
+    } catch (error) { spMessage(error.message); }
 };
 const spPreviousSync = handleRealtimeSyncMessage;
 handleRealtimeSyncMessage = async function handleSupervisorSync(payload) {

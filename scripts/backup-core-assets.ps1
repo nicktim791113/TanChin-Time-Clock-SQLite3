@@ -132,6 +132,7 @@ $projectFiles = @(
     "review-workflow.js",
     "dashboard-metrics.js",
     "leave-entitlements.js",
+    "leave-date-selection.js",
     "leave-entitlement-routes.js",
     "annual-leave-calculator.js",
     "annual-leave-store.js",

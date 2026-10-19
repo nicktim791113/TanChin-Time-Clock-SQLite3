@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const { monthRange, buildCalendar } = require('./request-calendar');
 const { proxyReason, requirePersonalSupervisor } = require('./supervisor-management');
+const { normalizeLeaveDateSelection, leaveOverlapsRange } = require('./leave-date-selection');
 
 function fail(message, status = 400) { throw Object.assign(new Error(message), { status }); }
 function requestPeriod(body, kind) {
@@ -12,6 +13,11 @@ function requestPeriod(body, kind) {
     const start = parse(body.startDate, body.startTime || (kind === 'leave' ? '09:00' : '18:00'));
     const end = parse(body.endDate, body.endTime || (kind === 'leave' ? '18:00' : '20:00'));
     if (end <= start) fail('結束時間必須晚於開始時間。');
+    if (kind === 'leave' && body.dateSelectionMode === 'explicit_dates') {
+        return { start_at: start, end_at: end, ...normalizeLeaveDateSelection({ start_at: start, end_at: end,
+            date_selection_mode: body.dateSelectionMode, daily_hours: body.dailyHours }) };
+    }
+    if (kind === 'leave' && body.dateSelectionMode != null && body.dateSelectionMode !== 'legacy_range') fail('請假日期選取模式不正確。');
     const hours = body.durationHours == null || body.durationHours === '' ? (end - start) / 3600000 : Number(body.durationHours);
     if (!Number.isFinite(hours) || Math.round(hours * 100) <= 0) fail('請輸入有效時數。');
     return { start_at: start, end_at: end, duration_hours: Math.round(hours * 100) / 100 };
@@ -74,10 +80,10 @@ function attachSupervisorRoutes(server, context) {
         const page = request.query.page == null ? 1 : Number(request.query.page);
         if (!Number.isSafeInteger(page) || page < 1) fail('無效頁碼。');
         const rows = (kind === 'leave' ? db.queryLeaveRequests : db.queryOvertimeRequests)({ employeeId,
-            overlapStartAt: range.start, overlapEndAt: range.end - 1, limit: null });
+            overlapStartAt: range.start, overlapEndAt: range.end - 1, limit: null }).filter((row) => leaveOverlapsRange(row, range.start, range.end));
         const calendar = buildCalendar(range.month, rows);
         const start = request.query.date ? Date.parse(`${request.query.date}T00:00:00+08:00`) : null;
-        const details = start == null ? rows : rows.filter((row) => row.start_at < start + 86400000 && row.end_at > start);
+        const details = start == null ? rows : rows.filter((row) => leaveOverlapsRange(row, start, start + 86400000));
         const totalPages = Math.max(1, Math.ceil(details.length / 50));
         const current = Math.min(page, totalPages);
         const lookup = buildLookup(kind);
@@ -113,7 +119,8 @@ function attachSupervisorRoutes(server, context) {
                 status: kind === 'leave' ? 'pending_admin' : 'approved', supervisor_id: actorId,
                 supervisor_decision: 'approved', supervisor_comment: `指定主管代申請並核准：${reason}`, supervisor_decided_at: now,
                 approval_mode: kind === 'leave' ? 'supervisor_proxy' : 'supervisor_proxy_auto_approved', created_at: now, updated_at: now,
-                ...(type ? { leave_type_id: type.id, daily_hours: body.dailyHours, explicit_duration_hours: body.durationHours || '' } : {}) }));
+                ...(type ? { leave_type_id: type.id, daily_hours: period.daily_hours ?? body.dailyHours,
+                    explicit_duration_hours: period.date_selection_mode === 'explicit_dates' ? period.duration_hours : body.durationHours || '' } : {}) }));
             records.forEach((record) => {
                 const policy = db.getReviewSupervisors().policy(record.employee_id);
                 if (policy.supervisorIds.length > 1 || policy.mode === 'required') Object.assign(record, {
@@ -124,7 +131,7 @@ function attachSupervisorRoutes(server, context) {
             store().transaction(() => {
                 const overlap = kind === 'leave' ? db.hasOverlappingLeaveRequest : db.hasOverlappingOvertimeRequest;
                 targets.forEach((target) => targetFor(request, target.id));
-                const conflicts = targets.filter((target) => overlap(target.id, period.start_at, period.end_at));
+                const conflicts = targets.filter((target) => overlap(target.id, period.start_at, period.end_at, '', kind === 'leave' ? period : undefined));
                 if (conflicts.length) fail(`${conflicts.map((e) => `${e.id} ${e.name}`).join('、')} 這段時間已有待審或已核准的申請；整批未建立。`, 409);
                 records.forEach((record, index) => {
                     (kind === 'leave' ? db.createLeaveRequest : db.createOvertimeRequest)(record);

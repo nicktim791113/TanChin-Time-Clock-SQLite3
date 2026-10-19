@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { getLeaveDateSegments } = require('./leave-date-selection');
 
 const DEFAULT_SCHEDULE = { weekdays: [], cutoff: '09:00', leaveStart: '08:00', leaveEnd: '17:00' };
 function fail(message, status = 400) { const error = new Error(message); error.status = status; throw error; }
@@ -88,7 +89,16 @@ function createMealStore(sql, addAuditLog) {
         const submitted = new Map((order?.snapshot.rows || []).map((row) => [row.employee_id, row]));
         const memberMap = new Map(members.map((row) => [row.employee_id, row]));
         const ids = new Set([...members.filter((m) => m.participating).map((m) => m.employee_id), ...choiceMap.keys(), ...submitted.keys()]);
-        const leaves = all("SELECT employee_id, start_at, end_at FROM leave_requests WHERE status = 'approved' AND start_at < ? AND end_at > ?", at(date, '23:59') + 60000, at(date, '00:00'));
+        const leaves = all("SELECT * FROM leave_requests WHERE status = 'approved' AND start_at < ? AND end_at > ?", at(date, '23:59') + 60000, at(date, '00:00'));
+        const fullDayLeaveEmployees = new Set(leaves.filter((leave) => {
+            if (leave.date_selection_mode === 'explicit_dates') {
+                leave.daily_hours = all('SELECT date, units FROM leave_entitlement_charges WHERE request_id = ? ORDER BY date', leave.id)
+                    .map((row) => ({ date: row.date, hours: row.units / 100 }));
+            }
+            return getLeaveDateSegments(leave).some((segment) => segment.date === date &&
+                (leave.date_selection_mode !== 'explicit_dates' || segment.hours >= 7.5) &&
+                segment.startAt <= at(date, schedule.leaveStart) && segment.endAt >= at(date, schedule.leaveEnd));
+        }).map((leave) => leave.employee_id));
         const rows = [...ids].sort().map((id) => {
             const employee = employeeMap.get(id);
             const member = memberMap.get(id);
@@ -96,7 +106,7 @@ function createMealStore(sql, addAuditLog) {
             // Effective-dated membership and schedule retain history; closed supplier lists are immutable snapshots.
             const eligible = Boolean(member?.participating);
             const eating = Boolean(serving && eligible && (choice ? choice.eating : true));
-            const fullDayLeave = leaves.some((leave) => leave.employee_id === id && leave.start_at <= at(date, schedule.leaveStart) && leave.end_at >= at(date, schedule.leaveEnd));
+            const fullDayLeave = fullDayLeaveEmployees.has(id);
             return { employee_id: id, name: (date < today ? choice?.name || member?.name : employee?.name) || submitted.get(id)?.name || member?.name || id,
                 department: (date < today ? choice?.department || member?.department : employee?.department) || submitted.get(id)?.department || '',
                 eligible, eating, formerEmployee: !employee, choice: choice ? (choice.eating ? 'eat' : 'skip') : 'default',
