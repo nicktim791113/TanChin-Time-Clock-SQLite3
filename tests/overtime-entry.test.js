@@ -76,17 +76,22 @@ test('overtime self, proxy and review entry points enforce independent scopes an
         assert.ok(own.every((r) => r.status === 'pending_supervisor' && r.supervisor_id === 'D001' && r.applicant_role === 'self' && r.approval_mode === 'self_request'));
         assert.equal((await self(period('21'), card.token)).status, 409);
     });
-    await t.test('proxy is the only route for others: personal password, explicit current grant, reason and confirmation', async () => {
-        assert.equal((await proxy(proxyBody('24'), card.token)).status, 403);
+    await t.test('proxy is the only route for others: own card or password, explicit current grant, reason and confirmation', async () => {
         assert.equal((await proxy(proxyBody('24'), other.token)).status, 403);
         assert.equal((await proxy({ ...proxyBody('24'), proxyReason: '' }, manager.token)).status, 400);
         assert.equal((await proxy({ ...proxyBody('24'), confirmApproval: false }, manager.token)).status, 400);
-        const saved = await proxy(proxyBody('24'), manager.token);
+        const saved = await proxy(proxyBody('24'), card.token);
         assert.equal(saved.status, 200);
         assert.equal(db.getOvertimeRequestById(saved.requestId).status, 'approved');
+        assert.equal(db.getOvertimeRequestById(saved.requestId).applicant_id, 'A001');
+        const beforeDuplicate = db.queryOvertimeRequests({ employeeId: 'E001', limit: null }).length;
+        assert.equal((await proxy(proxyBody('24'), manager.token)).status, 409);
+        assert.equal(db.queryOvertimeRequests({ employeeId: 'E001', limit: null }).length, beforeDuplicate);
+        assert.equal((await proxy(proxyBody('27'), manager.token)).status, 200);
         assert.equal((await proxy(proxyBody('23'), manager.token)).status, 409);
         grant([]);
         assert.equal((await proxy(proxyBody('25'), manager.token)).status, 403);
+        assert.equal((await proxy(proxyBody('25'), card.token)).status, 403);
         assert.equal((await self({ ...period('25'), employeeId: 'E001' }, manager.token)).status, 403);
     });
     await t.test('review-only roster is read-only, permission scoped and never silently grants leave/meal proxy access', async () => {

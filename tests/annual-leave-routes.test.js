@@ -53,6 +53,7 @@ async function fixture() {
         db: { getAnnualLeave: () => store, getSupervisors: () => ({ isAssigned: (supervisor, employee) => delegated.has(`${supervisor}:${employee}`) }) },
         requireSession: (req, res, next) => { const token = String(req.headers.authorization || '').replace(/^Bearer /, ''); if (!sessions.has(token)) return res.status(401).json({ success: false }); req.browserSession = sessions.get(token); next(); },
         hasPermission: (session, code) => session.permissions.includes(code),
+        validateBoundDevice: (session) => { if (session.revokedDevice) throw Object.assign(new Error('綁定裝置已解除。'), { statusCode: 403 }); },
         auditEntry: (req, entry) => ({ ...entry, actor_id: req.browserSession.employeeId }),
         notify: () => { notifications++; }
     });
@@ -117,7 +118,7 @@ test('annual leave routes enforce separate permissions, server-owned actor conte
     assert.equal((await request('', undefined, 'impersonated')).permissions.grant, false);
 });
 
-test('annual leave employee reads require self or explicit personal-password delegation and exports exclude service evidence', async (t) => {
+test('annual leave employee reads require self or explicit personal delegation and exports exclude service evidence', async (t) => {
     const f = await fixture(); t.after(f.close);
     const { request } = f;
     assert.deepEqual((await request('/employee/annual-leave?year=2026', undefined, 'employee')).employees.map((row) => row.employeeId), ['E001']);
@@ -125,7 +126,10 @@ test('annual leave employee reads require self or explicit personal-password del
     assert.equal((await request('/employee/annual-leave?employeeId=E001', undefined, 'view')).status, 403);
     assert.deepEqual((await request('/employee/annual-leave?employeeId=E001&year=2026', undefined, 'manager')).employees.map((row) => row.employeeId), ['E001']);
     assert.deepEqual(f.calls.at(-1).ids, ['E001']);
-    for (const token of ['card-manager', 'impersonated-manager']) assert.equal((await request('/employee/annual-leave?employeeId=E001', undefined, token)).status, 403);
+    assert.equal((await request('/employee/annual-leave?employeeId=E001', undefined, 'card-manager')).status, 200);
+    assert.equal((await request('/employee/annual-leave?employeeId=E001', undefined, 'impersonated-manager')).status, 403);
+    f.sessions.get('card-manager').revokedDevice = true;
+    assert.equal((await request('/employee/annual-leave?employeeId=E001', undefined, 'card-manager')).status, 403);
     f.delegated.delete('manager:E001');
     assert.equal((await request('/employee/annual-leave?employeeId=E001', undefined, 'manager')).status, 403);
     assert.equal((await request('/employee/annual-leave?employeeIds=E001&employeeIds=OTHER', undefined, 'employee')).status, 400);

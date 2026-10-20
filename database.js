@@ -108,6 +108,7 @@ function init(dbFilePath) {
       credential_json TEXT NOT NULL,
       revision TEXT NOT NULL,
       must_change_password INTEGER NOT NULL DEFAULT 1,
+      privileged_access_enabled INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL,
       updated_by TEXT
     );
@@ -311,6 +312,11 @@ function init(dbFilePath) {
   // --- 魔法加固區：自動升級寶庫結構 ---
   try {
     db.transaction(() => {
+        const credentialColumns = db.prepare('PRAGMA table_info(web_credentials)').all();
+        // Existing credentials retain their previously authorized workspaces during upgrade.
+        if (!credentialColumns.some((column) => column.name === 'privileged_access_enabled')) {
+            run('ALTER TABLE web_credentials ADD COLUMN privileged_access_enabled INTEGER NOT NULL DEFAULT 1');
+        }
         const leaveTypeColumns = db.prepare('PRAGMA table_info(leave_types)').all();
         if (!leaveTypeColumns.some((column) => column.name === 'pay_mode')) run('ALTER TABLE leave_types ADD COLUMN pay_mode TEXT');
         run("UPDATE leave_types SET pay_mode = CASE WHEN paid = 1 THEN 'full' ELSE 'unpaid' END WHERE pay_mode IS NULL");
@@ -708,11 +714,35 @@ function getWebCredentialKeyIds() {
 
 function saveWebCredential(record, auditEntry) {
     db.transaction(() => {
+        const previous = getWebCredential(record.employee_id);
+        const privilegedAccessEnabled = record.privileged_access_enabled ?? previous?.privileged_access_enabled ?? false;
         run(`INSERT OR REPLACE INTO web_credentials
-            (employee_id, credential_json, revision, must_change_password, updated_at, updated_by)
-            VALUES (?, ?, ?, ?, ?, ?)`, record.employee_id, JSON.stringify(record.credential), record.revision,
-            record.must_change_password ? 1 : 0, Date.now(), record.updated_by);
+            (employee_id, credential_json, revision, must_change_password, privileged_access_enabled, updated_at, updated_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`, record.employee_id, JSON.stringify(record.credential), record.revision,
+            record.must_change_password ? 1 : 0, privilegedAccessEnabled ? 1 : 0, Date.now(), record.updated_by);
         addAuditLog(auditEntry);
+    })();
+}
+
+function initializeWebCredential(record, auditEntry) {
+    return db.transaction(() => {
+        if (getWebCredential(record.employee_id)) return false;
+        run(`INSERT INTO web_credentials
+            (employee_id, credential_json, revision, must_change_password, privileged_access_enabled, updated_at, updated_by)
+            VALUES (?, ?, ?, 0, 0, ?, ?)`, record.employee_id, JSON.stringify(record.credential), record.revision,
+            Date.now(), record.updated_by);
+        addAuditLog(auditEntry);
+        return true;
+    })();
+}
+
+function setWebCredentialPrivilegedAccess(employeeId, enabled, expectedRevision, revision, actorId, auditEntry) {
+    return db.transaction(() => {
+        const result = run(`UPDATE web_credentials SET privileged_access_enabled = ?, revision = ?, updated_at = ?, updated_by = ?
+            WHERE employee_id = ? AND revision = ?`, enabled ? 1 : 0, revision, Date.now(), actorId, employeeId, expectedRevision);
+        if (!result.changes) return false;
+        addAuditLog(auditEntry);
+        return true;
     })();
 }
 
@@ -2279,7 +2309,7 @@ module.exports = {
   init, close,
   getDatabasePath, backupDatabase, validateBackupDatabaseFile, replaceDatabaseFromBackup,
   saveEmployees, loadEmployees, deleteAllEmployees,
-  getWebCredential, getWebCredentialKeyIds, saveWebCredential,
+  getWebCredential, getWebCredentialKeyIds, saveWebCredential, initializeWebCredential, setWebCredentialPrivilegedAccess,
   loadDepartments, saveDepartments,
   addPunchRecord, loadPunchRecords,
   deletePunchRecordsByDateRange, deletePunchRecordsBySource,

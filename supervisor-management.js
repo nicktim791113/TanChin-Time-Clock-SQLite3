@@ -7,9 +7,9 @@ function proxyReason(value) {
     return reason;
 }
 function requirePersonalSupervisor(session) {
-    if (session?.role !== 'employee' || session.authMethod !== 'web_password' || session.impersonation?.active ||
+    if (session?.role !== 'employee' || !['card', 'web_password'].includes(session.authMethod) || session.impersonation?.active ||
         (session.realEmployeeId && session.realEmployeeId !== session.employeeId)) {
-        fail('主管代辦須使用主管本人的個人網頁密碼登入員工工作台。', 403);
+        fail('主管代辦須使用主管本人的卡號或個人網頁密碼登入員工工作台。', 403);
     }
 }
 function createSupervisorStore(sql, addAuditLog) {

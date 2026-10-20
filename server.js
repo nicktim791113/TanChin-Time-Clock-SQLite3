@@ -202,7 +202,7 @@ const browserAccounts = createBrowserAccounts({
   getEmployee: getEmployeeById, getAccess: getAccountAccessForEmployee, hasPermission: hasAdminPermission,
   createSession: createBrowserSession, buildDashboard: buildDashboardForSession,
   getSystemAdminCredentials, normalizeDeviceInfo: normalizeClientDeviceInfo,
-  authorizeDevice: authorizeEmployeeDeviceForLogin, getIp: getRequestIpAddress,
+  authorizeDevice: authorizeEmployeeDeviceForLogin, validateBoundDevice: validateBoundEmployeeDevice, getIp: getRequestIpAddress,
   auditEntry: buildBrowserAuditLogEntry, displaySettings: getBrowserDisplaySettings,
   recordDeviceDiagnostic: writeDeviceLoginDiagnostic
 });
@@ -342,7 +342,9 @@ const API_ROUTE_CATALOG = [
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/health', auth: '公開', description: '查詢 Express 服務健康狀態摘要' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/login', auth: '公開', description: '瀏覽器入口登入，取得 Session Token' },
   { category: '網頁個人帳號', method: 'POST', path: '/api/browser/workspace', auth: '個人網頁密碼登入', description: '選擇或切換本人已授權的工作台，輪替登入 Token' },
+  { category: '網頁個人帳號', method: 'POST', path: '/api/browser/account/password/initialize', auth: '本人卡號登入與卡號再次驗證', description: '尚未設定密碼的員工首次自行設定；不啟用管理者或開發者權限' },
   { category: '網頁個人帳號', method: 'POST', path: '/api/browser/account/password', auth: '本人登入與目前個人網頁密碼', description: '修改本人個人網頁密碼並使原登入失效' },
+  { category: '網頁個人帳號', method: 'POST', path: '/api/browser/accounts/privileged-access', auth: '系統管理者或開發者與操作者再次驗證', description: '另行啟用或停用已指派的管理者／開發者工作台登入資格，並留下稽核' },
   { category: '網頁個人帳號', method: 'POST', path: '/api/browser/accounts/password/reset', auth: '密碼管理權限與操作者再次驗證', description: '設定或重設臨時網頁密碼，下次登入須修改' },
   { category: '網頁個人帳號', method: 'POST', path: '/api/browser/accounts/password/reveal', auth: '密碼查看權限與操作者再次驗證', description: '查回目前有效的個人網頁密碼並留下稽核' },
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/dashboard', auth: 'Session', description: '取得目前登入角色的儀表板資料' },
@@ -373,7 +375,7 @@ const API_ROUTE_CATALOG = [
   { category: '特休權利 API', method: 'POST', path: '/api/browser/annual-leave/correction-preview', auth: '額度調整權限', description: '預覽可追溯的特休權利差額修正，不覆寫原流水' },
   { category: '特休權利 API', method: 'POST', path: '/api/browser/annual-leave/correction-confirm', auth: '額度調整權限', description: '確認修正及稽核同一交易；給假權限不能代替調整權限' },
   { category: '特休權利 API', method: 'GET', path: '/api/browser/annual-leave/export', auth: '額度查看或獨立特休權限', description: '依年度匯出 JSON/CSV 額度核對資料，不含年資證據與無關個資' },
-  { category: '特休權利 API', method: 'GET', path: '/api/browser/employee/annual-leave', auth: '本人或明確代辦授權主管', description: '僅查看本人或一位授權員工已入帳特休快照；主管需個人網頁密碼' },
+  { category: '特休權利 API', method: 'GET', path: '/api/browser/employee/annual-leave', auth: '本人或明確代辦授權主管', description: '僅查看本人或一位授權員工已入帳特休快照；主管可用本人卡號或個人網頁密碼登入' },
 
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/employees/save', auth: '管理者', description: '整批覆寫員工資料' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/employee/save', auth: '管理者', description: '新增或更新單一員工' },
@@ -473,9 +475,9 @@ API_ROUTE_CATALOG.push(
 API_ROUTE_CATALOG.push(
   ...['GET', 'POST'].map((method) => ({ category: '主管代辦 API', method, path: '/api/browser/supervisors/assignments',
     auth: '系統管理者或主管指定管理權限', description: method === 'GET' ? '查看明確指定代辦主管' : '儲存多選代辦主管與稽核' })),
-  { category: '主管代辦 API', method: 'GET', path: '/api/browser/employee/supervisor', auth: '本人網頁密碼與明確主管指定', description: '指定員工的請假／加班日曆及午餐資料' },
-  ...[['leave', '代請假並送管理部終審'], ['overtime', '代申請加班並核准'], ['leave/withdraw', '代撤回尚未終審請假'], ['meals/choice', '截止前代登午餐例外']].map(([route, description]) => ({
-    category: '主管代辦 API', method: 'POST', path: `/api/browser/employee/supervisor/${route}`, auth: '本人網頁密碼與明確主管指定', description }))
+  { category: '主管代辦 API', method: 'GET', path: '/api/browser/employee/supervisor', auth: '本人卡號或網頁密碼與明確主管指定', description: '指定員工的請假／加班日曆及午餐資料' },
+  ...[['leave', '依員工審核規則代請假，保留管理部終審'], ['overtime', '依員工審核規則代申請加班'], ['leave/withdraw', '代撤回尚未終審請假'], ['meals/choice', '截止前代登午餐例外']].map(([route, description]) => ({
+    category: '主管代辦 API', method: 'POST', path: `/api/browser/employee/supervisor/${route}`, auth: '本人卡號或網頁密碼與明確主管指定', description }))
 );
 
 function ensureDirectory(directoryPath) {
@@ -3166,7 +3168,7 @@ function buildEmployeeDashboard(employee, session = null) {
       canUse: reviewCount > 0 || dbModule.getReviewSupervisors().rows().some((row) => row.supervisor_id === employee.id) },
     meals: dbModule.getMeals().calendar({ employeeId: employee.id }),
     supervisorProxy: { count: dbModule.getSupervisors().assignedEmployees(employee.id).length,
-      canUse: session?.authMethod === 'web_password' && !session?.impersonation?.active },
+      canUse: ['card', 'web_password'].includes(session?.authMethod) && !session?.impersonation?.active },
     recentRecords
   };
 }
@@ -3676,6 +3678,15 @@ function authorizeEmployeeDeviceForLogin(employee, request, deviceInfo = {}) {
     boundDeviceCount: employeeDevices.length + 1,
     newlyBound: true
   };
+}
+
+// Sensitive employee actions must not continue on a removed binding or create a replacement binding.
+function validateBoundEmployeeDevice(session) {
+  if (!getBrowserSecuritySettings().deviceBindingEnabled) return;
+  const employeeId = session?.realEmployeeId || session?.employeeId;
+  if (!session?.deviceId || !dbModule.getEmployeeDevice(employeeId, session.deviceId)) {
+    throw createHttpError(withSupportCode('P215', '此登入的綁定裝置已不存在，請重新登入。'), 403);
+  }
 }
 
 function validateEmployeeSessionDevice(session, request) {
@@ -7701,12 +7712,14 @@ function createServerApp() {
     notify: (request) => { notifyDesktop('requestHistorySettings', getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); }
   });
   attachLeaveEntitlementRoutes(server, {
+    validateBoundDevice: validateBoundEmployeeDevice,
     db: dbModule, requireSession: requireBrowserSession, requirePermission: requireAdminPermission,
     hasPermission: hasAdminPermission,
     auditEntry: buildBrowserAuditLogEntry,
     notify: (request) => { notifyDesktop('leaveEntitlements', getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); }
   });
   attachAnnualLeaveRoutes(server, {
+    validateBoundDevice: validateBoundEmployeeDevice,
     db: dbModule, requireSession: requireBrowserSession, hasPermission: hasAdminPermission,
     auditEntry: buildBrowserAuditLogEntry,
     notify: (request) => { notifyDesktop('leaveEntitlements', getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); }
@@ -7729,6 +7742,7 @@ function createServerApp() {
   });
   attachSupervisorRoutes(server, {
     db: dbModule, requireSession: requireBrowserSession, requireRole: requireBrowserRole,
+    validateBoundDevice: validateBoundEmployeeDevice,
     requirePermission: requireAdminPermission, auditEntry: buildBrowserAuditLogEntry,
     buildLookup: (kind) => kind === 'leave' ? buildLeaveLookup() : buildOvertimeLookup(),
     formatRecord: (kind, row, lookup) => kind === 'leave' ? formatLeaveRequestForDashboard(row, lookup) : formatOvertimeRequestForDashboard(row, lookup),

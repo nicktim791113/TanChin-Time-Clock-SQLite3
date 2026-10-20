@@ -23,7 +23,7 @@ function requestPeriod(body, kind) {
     return { start_at: start, end_at: end, duration_hours: Math.round(hours * 100) / 100 };
 }
 function attachSupervisorRoutes(server, context) {
-    const { db, requireSession, requireRole, requirePermission, auditEntry, notify, buildLookup, formatRecord } = context;
+    const { db, requireSession, requireRole, requirePermission, auditEntry, notify, buildLookup, formatRecord, validateBoundDevice } = context;
     const store = () => db.getSupervisors();
     const handle = (callback) => (request, response) => {
         try { callback(request, response); }
@@ -55,8 +55,12 @@ function attachSupervisorRoutes(server, context) {
         notify(request, 'supervisorAssignments');
         response.json({ success: true, ...result, message: `${result.updatedCount} 位員工的指定代辦主管已批量儲存。`, assignments: store().assignmentsState() });
     }));
-    function targetFor(request, employeeId) {
+    function requireSupervisor(request) {
         requirePersonalSupervisor(request.browserSession);
+        validateBoundDevice(request.browserSession);
+    }
+    function targetFor(request, employeeId) {
+        requireSupervisor(request);
         const target = store().assignedEmployees(request.browserSession.employeeId).find((e) => e.id === employeeId);
         if (!target) fail('只能代辦目前明確指定給自己的員工，主管授權可能已變更。', 403);
         return target;
@@ -68,7 +72,7 @@ function attachSupervisorRoutes(server, context) {
         return ids.map((id) => targetFor(request, id));
     }
     server.get('/api/browser/employee/supervisor', requireSession, requireRole('employee'), handle((request, response) => {
-        requirePersonalSupervisor(request.browserSession);
+        requireSupervisor(request);
         const range = monthRange(request.query.month);
         const employees = store().assignedEmployees(request.browserSession.employeeId);
         const employeeId = request.query.employeeId || employees[0]?.id;
@@ -148,7 +152,7 @@ function attachSupervisorRoutes(server, context) {
     }
     server.post('/api/browser/employee/supervisor/leave/withdraw', requireSession, requireRole('employee'), handle((request, response) => {
         const body = request.body || {};
-        requirePersonalSupervisor(request.browserSession);
+        requireSupervisor(request);
         const reason = proxyReason(body.reason);
         store().transaction(() => {
             const row = db.getLeaveRequestById(body.requestId);

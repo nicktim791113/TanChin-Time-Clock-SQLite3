@@ -14,7 +14,8 @@ const { taipeiDate } = require('../meal-management');
 test('supervisor helpers validate personal identity and Taipei periods', () => {
     const session = { role: 'employee', employeeId: 'S1', authMethod: 'web_password' };
     assert.doesNotThrow(() => requirePersonalSupervisor(session));
-    for (const change of [{ authMethod: 'card' }, { role: 'admin' }, { realEmployeeId: 'OTHER' }, { impersonation: { active: true } }]) {
+    assert.doesNotThrow(() => requirePersonalSupervisor({ ...session, authMethod: 'card' }));
+    for (const change of [{ authMethod: 'unknown' }, { authMethod: undefined }, { role: 'admin' }, { realEmployeeId: 'OTHER' }, { impersonation: { active: true } }]) {
         assert.throws(() => requirePersonalSupervisor({ ...session, ...change }), /本人/);
     }
     const body = { startDate: '2026-10-05', startTime: '08:00', endDate: '2026-10-05', endTime: '17:00', durationHours: 8 };
@@ -45,7 +46,9 @@ test('explicit supervisor APIs enforce multiple supervisors, scope, final review
     }
     const system = await request('/login', { employeeId: 'system-admin', secret: 'system-admin-test', role: 'system_admin' });
     const supervisor = await login('A001', 'A001-test-password');
-    const second = await login('A002', 'A002-test-password');
+    const second = await login('A002', 'delegated-card');
+    assert.equal(second.dashboard.webAccount.authMethod, 'card');
+    assert.equal(second.dashboard.supervisorProxy.canUse, true);
     const admin = await login('A001', 'A001-test-password', 'admin');
     const restrictedAdmin = await login('A002', 'A002-test-password', 'admin');
     const card = await login('A001', 'manager-card');
@@ -81,7 +84,7 @@ test('explicit supervisor APIs enforce multiple supervisors, scope, final review
             assert.equal(JSON.stringify(result.proxy).includes('employee-card'), false);
         }
         assert.equal((await getProxy(second.token, 'D001')).status, 403);
-        assert.equal((await getProxy(card.token)).status, 403);
+        assert.equal((await getProxy(card.token)).status, 200);
         assert.equal((await getProxy(employee.token)).status, 403);
         assert.equal((await assign(['A001', 'A002'], admin.token)).status, 200);
     });
@@ -200,6 +203,76 @@ test('explicit supervisor APIs enforce multiple supervisors, scope, final review
         db.saveEmployees(current);
         assert.equal(db.getSupervisors().assignedEmployees('A001').length, 0);
     });
+});
+
+test('card proxy preserves any/required reviews, bound-device revocation, delegated reads and impersonation boundaries', async (t) => {
+    const fixture = await startFixture(), { db, url } = fixture;
+    t.after(() => fixture.close());
+    db.setSetting('browserSecuritySettings', { deviceBindingEnabled: true, maxDevicesPerEmployee: 4, gpsRequiredOnPunch: false });
+    const request = async (route, body, token) => {
+        const response = await fetch(url + '/api/browser' + route, { method: body ? 'POST' : 'GET',
+            headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined });
+        return { status: response.status, ...await response.json() };
+    };
+    const assignments = db.getSupervisors(), review = db.getReviewSupervisors();
+    const audit = (entry) => ({ ...entry, actor_id: '__test__' });
+    const assign = (ids) => assignments.saveAssignments({ employeeId: 'E001', supervisorIds: ids, reason: 'Card proxy fixture',
+        revision: assignments.assignmentsState().employees.find((row) => row.id === 'E001').revision }, audit);
+    assign(['A001']);
+    const card = await request('/login', { role: 'account', employeeId: 'A001', secret: 'manager-card', deviceInfo: { deviceId: 'card-proxy-device' } });
+    assert.equal(card.status, 200);
+    assert.equal(card.dashboard.webAccount.authMethod, 'card');
+    const reads = ['/employee/supervisor?month=2027-03&employeeId=E001', '/employee/leave/balances?employeeId=E001&year=2027', '/employee/annual-leave?employeeId=E001&year=2027'];
+    for (const route of reads) assert.equal((await request(route, null, card.token)).status, 200);
+    for (const route of reads) assert.equal((await request(route.replace('E001', 'D001'), null, card.token)).status, 403);
+    const period = { employeeId: 'E001', startDate: '2027-03-01', endDate: '2027-03-01', startTime: '18:00', endTime: '20:00', durationHours: 2,
+        leaveTypeId: db.loadLeaveTypes().find((row) => row.enabled).id, proxyReason: 'Authorized card proxy assistance', confirmApproval: true };
+    let lastLeave;
+    for (const mode of ['any', 'required']) {
+        review.saveBatch({ employeeIds: ['E001'], supervisorIds: ['A001', 'A002'], mode, requiredSupervisorIds: mode === 'required' ? ['A001', 'A002'] : [],
+            confirmReview: true, reason: 'Keep configured review rules', revisions: { E001: review.state().employees.find((row) => row.id === 'E001').revision } }, audit);
+        for (const kind of ['leave', 'overtime']) {
+            const date = mode === 'any' ? '2027-03-01' : '2027-03-02';
+            const result = await request(`/employee/supervisor/${kind}`, { ...period, startDate: date, endDate: date }, card.token);
+            assert.equal(result.status, 200, JSON.stringify(result));
+            const row = (kind === 'leave' ? db.getLeaveRequestById : db.getOvertimeRequestById)(result.requestId);
+            if (kind === 'leave') lastLeave = row;
+            assert.equal(row.status, 'pending_supervisor');
+            assert.equal(row.applicant_id, 'A001');
+            const policy = db.getReviewWorkflow().state(kind, row.id);
+            assert.equal(policy.mode, mode);
+            assert.deepEqual(policy.reviewers.map((item) => [item.id, item.required, item.decision]), [
+                ['A001', Number(mode === 'required'), 'pending'], ['A002', Number(mode === 'required'), 'pending']
+            ]);
+            const log = db.queryAuditLogs({ limit: 100 }).find((item) => item.target_id === row.id && item.action === 'supervisor_proxy_create');
+            assert.equal(log.actor_id, 'A001');
+            assert.equal(log.after_data.proxy_reason, period.proxyReason);
+        }
+    }
+    assign([]);
+    for (const route of reads) assert.equal((await request(route, null, card.token)).status, 403);
+    assert.equal((await request('/employee/supervisor/leave', period, card.token)).status, 403);
+    assign(['A001']);
+    db.deleteEmployeeDevice('A001', 'card-proxy-device');
+    const before = db.countLeaveRequests({ employeeId: 'E001' });
+    for (const route of reads) assert.equal((await request(route, null, card.token)).status, 403);
+    for (const kind of ['leave', 'overtime']) assert.equal((await request(`/employee/supervisor/${kind}`, period, card.token)).status, 403);
+    assert.equal((await request('/employee/supervisor/leave/withdraw', { requestId: lastLeave.id, updatedAt: lastLeave.updated_at, reason: 'Blocked after device removal' }, card.token)).status, 403);
+    assert.equal((await request('/employee/supervisor/meals/choice', { employeeId: 'E001', date: '2027-03-01', eating: false, reason: 'Blocked after device removal' }, card.token)).status, 403);
+    assert.equal(db.countLeaveRequests({ employeeId: 'E001' }), before);
+    assert.equal(db.getLeaveRequestById(lastLeave.id).status, 'pending_supervisor');
+    assert.equal(db.getEmployeeDevice('A001', 'card-proxy-device'), null);
+
+    db.setSetting('systemPassword', 'fixture-system-password');
+    db.setSetting('developerImpersonationEnabled', true);
+    const login = await request('/login', { role: 'account', employeeId: 'D001', secret: 'D001-test-password' });
+    const developer = await request('/workspace', { role: 'developer' }, login.token);
+    assert.equal(developer.status, 200);
+    const impersonated = await request('/developer/impersonation/start', { targetRole: 'employee', targetEmployeeId: 'A001', systemPassword: 'fixture-system-password' }, developer.token);
+    assert.equal(impersonated.status, 200);
+    assert.equal(impersonated.dashboard.supervisorProxy.canUse, false);
+    assert.equal((await request(reads[0], null, developer.token)).status, 403);
+    assert.equal((await request('/employee/supervisor/leave', period, developer.token)).status, 403);
 });
 
 test('supervisor UI escapes staff text, uses inline withdrawal and discards stale cross-account responses', async () => {

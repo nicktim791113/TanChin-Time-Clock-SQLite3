@@ -1,5 +1,5 @@
 const { requirePersonalSupervisor } = require('./supervisor-management');
-function attachLeaveEntitlementRoutes(server, { db, requireSession, requirePermission, hasPermission, auditEntry, notify }) {
+function attachLeaveEntitlementRoutes(server, { db, requireSession, requirePermission, hasPermission, auditEntry, notify, validateBoundDevice }) {
     const store = () => db.getLeaveEntitlements();
     const permit = (permission, write = false) => (request, response, next) => {
         if (request.browserSession.impersonation?.active && write) return response.status(403).json({ success: false, error: '身份模擬不能修改假別額度。' });
@@ -49,6 +49,7 @@ function attachLeaveEntitlementRoutes(server, { db, requireSession, requirePermi
         const requested = String(request.query.employeeId || session.employeeId);
         if (requested !== session.employeeId) {
             requirePersonalSupervisor(session);
+            validateBoundDevice(session);
             if (!db.getSupervisors().isAssigned(session.employeeId, requested)) return response.status(403).json({ success: false, error: '沒有該員工的代辦授權。' });
         }
         const balances = store().balances([requested], request.query.year).map(({ records, updated_by, revision, ...row }) => row);

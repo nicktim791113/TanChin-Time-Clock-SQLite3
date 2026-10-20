@@ -78,7 +78,7 @@ function exportSnapshot(state, year, employeeView) {
     };
 }
 
-function attachAnnualLeaveRoutes(server, { db, requireSession, hasPermission, auditEntry, notify }) {
+function attachAnnualLeaveRoutes(server, { db, requireSession, hasPermission, auditEntry, notify, validateBoundDevice }) {
     const store = () => db.getAnnualLeave();
     const permissions = (session) => {
         const systemAdmin = session.role === 'system_admin';
@@ -154,6 +154,7 @@ function attachAnnualLeaveRoutes(server, { db, requireSession, hasPermission, au
         const employeeId = String(request.query.employeeId || session.employeeId).trim();
         if (employeeId !== session.employeeId) {
             requirePersonalSupervisor(session);
+            validateBoundDevice(session);
             if (!db.getSupervisors().isAssigned(session.employeeId, employeeId)) fail('沒有該員工的代辦授權。', 403);
         }
         response.json({ success: true, ...store().employeeView([employeeId], readYear(request.query.year)) });

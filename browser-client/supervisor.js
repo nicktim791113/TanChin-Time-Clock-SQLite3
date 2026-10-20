@@ -160,7 +160,8 @@ function renderSupervisorWorkspace() {
     return `<section id="supervisor-workspace" class="sp-workspace" aria-label="主管代辦">
         <div class="sp-toolbar"><h3>主管代辦</h3>${spButton('refresh', '重新整理', '', !canUse)}</div>
         <div class="inline-message sp-message" aria-live="polite">${spEscape(supervisorState.error)}</div>
-        ${!canUse ? '<p>請以主管本人的個人網頁密碼重新登入。</p>' : !data ? '<p role="status">讀取代辦資料中…</p>' : !data.employees.length ? '<p>目前沒有獲指定的代辦員工。</p>' : `
+        <p class="muted">指定代辦主管可用本人卡號或個人網頁密碼登入，僅能代辦明確指定的員工；申請仍依審核規則處理，並保留操作者與代辦原因。</p>
+        ${!canUse ? '<p>請以主管本人的卡號或個人網頁密碼登入員工工作台；身份模擬不能代辦。</p>' : !data ? '<p role="status">讀取代辦資料中…</p>' : !data.employees.length ? '<p>目前沒有獲指定的代辦員工。</p>' : `
         ${renderAdminPaperEmployeePicker(data.employees, '查看紀錄員工', [], {
             name: 'viewEmployeeId', single: true, selectedIds: [supervisorState.employeeId], inputAttributes: 'data-sp-employee'
         })}

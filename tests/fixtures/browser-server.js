@@ -25,7 +25,7 @@ async function startFixture() {
     db.setSetting('browserSecuritySettings', { deviceBindingEnabled: true, maxDevicesPerEmployee: 1, gpsRequiredOnPunch: true, maxGpsAccuracyMeters: 300 });
     for (const id of ['A001', 'A002', 'D001']) {
         db.saveWebCredential({ employee_id: id, credential: await credentials.createCredential(databasePath, id, `${id}-test-password`),
-            revision: crypto.randomUUID(), must_change_password: false, updated_by: '__test__' },
+            revision: crypto.randomUUID(), must_change_password: false, privileged_access_enabled: true, updated_by: '__test__' },
             { action: 'test_seed', target_id: id, summary: 'Test fixture only' });
     }
     const originalLoad = Module._load;
