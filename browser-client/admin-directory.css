@@ -33,11 +33,24 @@
 .directory-dialog .directory-confirm-submit::before,.directory-dialog .directory-confirm-submit::after { display: none; }
 .directory-confirm-submit:disabled { opacity: .4; cursor: not-allowed; }
 .directory-manual-history { border-top: 1px solid #e2e8f0; padding-top: 20px; margin-top: 24px; }
+.directory-diagnostic-filters { grid-template-columns: minmax(220px, 2fr) minmax(140px, 1fr) auto; }
+.directory-diagnostic-list { display: grid; gap: 14px; max-height: 60vh; overflow: auto; padding: 2px 6px 8px 2px; }
+.directory-diagnostic { min-width: 0; border: 1px solid var(--border-color, #dbe3ec); border-radius: 12px; padding: 16px; background: var(--panel-bg, #fff); }
+.directory-diagnostic-heading { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; }
+.directory-diagnostic-heading > div { min-width: 0; overflow-wrap: anywhere; }
+.directory-diagnostic-reason { margin: 12px 0; font-size: .88rem; line-height: 1.6; overflow-wrap: anywhere; }
+.directory-diagnostic-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 18px; margin: 0; }
+.directory-diagnostic-fields dt { color: var(--muted-text, #687887); font-size: .76rem; }
+.directory-diagnostic-fields dd { margin: 4px 0 0; font-size: .86rem; overflow-wrap: anywhere; }
+.directory-user-agent { margin-top: 14px; border-top: 1px solid var(--border-color, #dbe3ec); padding-top: 10px; font-size: .8rem; }
+.directory-user-agent summary { cursor: pointer; color: var(--muted-text, #687887); }
+.directory-user-agent p { margin: 10px 0 0; overflow-wrap: anywhere; }
 .employee-filter-grid.directory-roster-filters { grid-template-columns: minmax(220px, 2fr) minmax(140px, 1fr) minmax(140px, 1fr) auto; align-items: end; }
 @media (max-width: 900px) {
  .directory-filter-row,.employee-filter-grid.directory-roster-filters { grid-template-columns: 1fr 1fr; }
  .directory-filter-row .directory-search { grid-column: 1 / -1; }
  .directory-filter-row button { justify-self: stretch; }
+ .directory-diagnostic-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 540px) {
  .directory-filter-row,.employee-filter-grid.directory-roster-filters { grid-template-columns: 1fr; }
@@ -46,4 +59,5 @@
  .directory-danger-zone { align-items: stretch; flex-direction: column; }
  .directory-dialog .form-toolbar { flex-wrap: wrap; }
  .directory-range { align-items: flex-start; flex-direction: column; gap: 5px; }
+ .directory-diagnostic-fields { grid-template-columns: 1fr; }
 }

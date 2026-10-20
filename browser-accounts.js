@@ -8,8 +8,17 @@ const fingerprint = (value) => crypto.createHash('sha256').update(String(value))
 
 function createBrowserAccounts(context) {
   const { db, sessions, eventClients, getEmployee, getAccess, hasPermission, createSession, buildDashboard,
-    getSystemAdminCredentials, normalizeDeviceInfo, authorizeDevice, getIp, auditEntry, displaySettings } = context;
+    getSystemAdminCredentials, normalizeDeviceInfo, authorizeDevice, getIp, auditEntry, displaySettings, recordDeviceDiagnostic } = context;
   const attempts = new Map();
+
+  function recordDiagnostic(request, stage, success, error) {
+    try {
+      recordDeviceDiagnostic?.(request, { stage, success, error, employee: request.deviceDiagnosticEmployee || null });
+    } catch {
+      // A diagnostic sink cannot interrupt or invalidate authentication.
+      console.warn('[安全診斷] 無法寫入裝置登入紀錄；原登入結果不變。');
+    }
+  }
 
   function throttle(request, accountId) {
     const now = Date.now();
@@ -77,12 +86,20 @@ function createBrowserAccounts(context) {
     const session = sessions.get(header.startsWith('Bearer ') ? header.slice(7) : '');
     if (!validSession(session)) {
       if (session) revoke(session.token);
+      if (request.path === '/api/browser/workspace') recordDiagnostic(request, 'workspace_switch', false,
+        Object.assign(httpError('登入已失效。', 401), { diagnosticCode: 'SESSION_INVALID' }));
       return response.status(401).json({ success: false, error: '登入已失效或權限已變更，請重新登入。' });
     }
     if (['workspace', 'password_change'].includes(session.role)) {
       const allowedPaths = ['/api/browser/dashboard', '/api/browser/logout', '/api/browser/account/password'];
       if (session.role === 'workspace') allowedPaths.push('/api/browser/workspace');
-      if (!allowedPaths.includes(request.path)) return response.status(403).json({ success: false, error: '請先修改臨時密碼或選擇工作台。' });
+      if (!allowedPaths.includes(request.path)) {
+        if (request.path === '/api/browser/workspace') {
+          request.deviceDiagnosticEmployee = getEmployee(session.realEmployeeId || session.employeeId);
+          recordDiagnostic(request, 'workspace_switch', false, httpError('工作台未開放。', 403));
+        }
+        return response.status(403).json({ success: false, error: '請先修改臨時密碼或選擇工作台。' });
+      }
     }
     request.browserSession = session;
     next();
@@ -130,6 +147,8 @@ function createBrowserAccounts(context) {
     return { enabled: authorization?.securitySettings?.deviceBindingEnabled ?? false,
       newlyBound: authorization?.newlyBound === true,
       deviceName: authorization?.deviceRecord?.device_name || device.deviceName || '',
+      maxDevicesPerEmployee: authorization?.securitySettings?.maxDevicesPerEmployee ?? 4,
+      boundDeviceCount: authorization?.boundDeviceCount ?? 0,
       issuedDeviceToken: authorization?.issuedDeviceToken || '' };
   }
 
@@ -138,11 +157,16 @@ function createBrowserAccounts(context) {
       deviceBrowserName: device.browserName, ipAddress: getIp(request), userAgent: request.headers['user-agent'] || null };
   }
 
-  function endpoint(handler) {
+  function endpoint(handler, diagnosticStage = '') {
     return async (request, response) => {
       response.setHeader('Cache-Control', 'no-store');
-      try { await handler(request, response); }
-      catch (error) { response.status(error.statusCode || 500).json({ success: false, error: error.message }); }
+      try {
+        await handler(request, response);
+        if (diagnosticStage) recordDiagnostic(request, diagnosticStage, true);
+      } catch (error) {
+        if (diagnosticStage) recordDiagnostic(request, diagnosticStage, false, error);
+        response.status(error.statusCode || 500).json({ success: false, error: error.message });
+      }
     };
   }
 
@@ -162,6 +186,7 @@ function createBrowserAccounts(context) {
       employee = getEmployee(id);
       if (!employee) throw httpError('工號與卡號或個人網頁密碼不正確。', 401);
       if (employee.card && String(employee.card).trim() === secret.trim()) {
+        request.deviceDiagnosticEmployee = employee;
         activeRole = 'employee';
         extra = { authMethod: 'card', cardSignature: fingerprint(employee.card) };
         authorization = authorizeDevice(employee, request, device);
@@ -169,6 +194,7 @@ function createBrowserAccounts(context) {
         const stored = db.getWebCredential(id);
         if (!await credentials.verifyPassword(stored?.credential, secret)) throw httpError('工號與卡號或個人網頁密碼不正確。', 401);
         if (db.getWebCredential(id)?.revision !== stored.revision) throw httpError('密碼已變更，請重新登入。', 401);
+        request.deviceDiagnosticEmployee = employee;
         activeRole = stored.must_change_password ? 'password_change' : 'workspace';
         if (!stored.must_change_password && getAccess(id).allowed_roles.length === 1) {
           activeRole = 'employee';
@@ -183,7 +209,7 @@ function createBrowserAccounts(context) {
     request.browserSession = sessions.get(token);
     db.addAuditLog(auditEntry(request, { action: 'login', target_type: 'session', target_id: id, summary: '網頁個人帳號登入。', after_data: { role: activeRole, auth_method: extra.authMethod } }));
     response.json({ success: true, token, dashboard: buildDashboard(request.browserSession), deviceBinding: deviceBinding(authorization, device) });
-  });
+  }, 'login');
 
   async function reauthenticate(request) {
     const session = request.browserSession;
@@ -201,6 +227,7 @@ function createBrowserAccounts(context) {
     server.post('/api/browser/login', login);
     server.post('/api/browser/workspace', requireSession, endpoint(async (request, response) => {
       const session = request.browserSession;
+      request.deviceDiagnosticEmployee = getEmployee(session.realEmployeeId || session.employeeId);
       const role = request.body?.role;
       if (session.authMethod !== 'web_password' || session.impersonation?.active || session.role === 'password_change'
         || !getAccess(session.employeeId).allowed_roles.includes(role)) throw httpError('這個登入方式或帳號沒有此工作台權限。', 403);
@@ -214,7 +241,7 @@ function createBrowserAccounts(context) {
       const dashboard = buildDashboard(sessions.get(token));
       revoke(session.token);
       response.json({ success: true, token, dashboard, deviceBinding: deviceBinding(authorization, device) });
-    }));
+    }, 'workspace_switch'));
 
     server.post('/api/browser/account/password', requireSession, endpoint(async (request, response) => {
       const session = request.browserSession;

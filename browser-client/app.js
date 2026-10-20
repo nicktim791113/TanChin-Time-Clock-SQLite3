@@ -7810,6 +7810,7 @@ const BROWSER_DEVICE_TOKEN_STORAGE_KEY = "tanchin.browser.device.token";
 const BROWSER_DEVICE_NAME_STORAGE_KEY = "tanchin.browser.device.name";
 
 auditTargetTypeLabels.employee_device = "綁定裝置";
+auditTargetTypeLabels.device_login = "裝置登入診斷";
 auditTargetTypeLabels.browser_security_setting = "遠端打卡安全設定";
 auditTargetTypeLabels.card_reader_test = "讀卡測試";
 
@@ -7944,11 +7945,11 @@ function renderEmployeeSecurityCard(security = {}) {
             </div>
             <div class="security-meta-grid">
                 <div><strong>目前裝置</strong><span>${escapeHtml(security.currentDeviceName || "尚未綁定")}</span></div>
-                <div><strong>綁定數量</strong><span>${escapeHtml(String(security.boundDeviceCount ?? 0))}</span></div>
+                <div><strong>綁定數量 / 上限</strong><span>${escapeHtml(String(security.boundDeviceCount ?? 0))} / ${escapeHtml(String(security.maxDevicesPerEmployee ?? 4))}</span></div>
                 <div><strong>最近使用</strong><span>${escapeHtml(security.currentDeviceLastSeenText || "-")}</span></div>
                 <div><strong>最近 GPS</strong><span>${escapeHtml(security.currentDeviceLastLocationText || "尚未記錄")}</span></div>
             </div>
-            <p class="helper-text">如果你換手機、清空瀏覽器資料，請通知管理者先清除舊的綁定裝置再重新登入。</p>
+            <p class="helper-text">裝置綁定依瀏覽器及網站來源儲存的身分辨識；換瀏覽器、改網址或清除網站資料可能產生新裝置。啟用綁定時，新裝置在上限內可自動綁定；達上限或原裝置憑證遺失時，請通知管理者查核。</p>
         </article>
     `;
 }
@@ -7988,9 +7989,11 @@ function renderRequestHistorySettings(data) {
 }
 
 function renderAdminSecuritySection(datasets) {
+    const canManageSecurity = state.dashboard?.role === 'system_admin' || hasCurrentAdminPermission('admin.security.manage');
     const security = datasets.security || {
         settings: {
             deviceBindingEnabled: true,
+            maxDevicesPerEmployee: 4,
             gpsRequiredOnPunch: true,
             maxGpsAccuracyMeters: 300
         },
@@ -8007,6 +8010,8 @@ function renderAdminSecuritySection(datasets) {
 
     const deviceItems = window.AdminDirectory.renderDevices(datasets);
     const recentPunchItems = window.AdminDirectory.renderRemote(datasets);
+    const configuredDeviceLimit = Number(security.settings.maxDevicesPerEmployee);
+    const maxDevicesPerEmployee = Number.isInteger(configuredDeviceLimit) && configuredDeviceLimit >= 1 && configuredDeviceLimit <= 4 ? configuredDeviceLimit : 4;
 
     return `
         <div class="workspace-stack">
@@ -8023,7 +8028,7 @@ function renderAdminSecuritySection(datasets) {
                         ${renderBadge(`風險打卡 ${security.summary.riskyPunchCount || 0} 筆`, security.summary.riskyPunchCount ? "warning" : "success")}
                     </div>
                 </div>
-                <p class="helper-text">第一次員工登入會自動綁定目前裝置；之後若換裝置，需由管理者先解除舊綁定。遠端打卡時會驗證 GPS，並將裝置、IP 與定位資料寫入稽核紀錄。</p>
+                <p class="helper-text">啟用裝置綁定時，每位員工可在設定上限內自動綁定新裝置；原裝置仍須持有有效憑證。可在裝置綁定清單查看 3 台以上人員，再以裝置登入診斷比對成功與失敗的來源。</p>
             </article>
 
             <article class="sub-panel">
@@ -8032,26 +8037,34 @@ function renderAdminSecuritySection(datasets) {
                     <div class="field-grid">
                         <label class="field">
                             <span>啟用裝置綁定</span>
-                            <select name="deviceBindingEnabled">
+                            <select name="deviceBindingEnabled" ${canManageSecurity ? '' : 'disabled'}>
                                 <option value="true" ${security.settings.deviceBindingEnabled ? "selected" : ""}>啟用</option>
                                 <option value="false" ${!security.settings.deviceBindingEnabled ? "selected" : ""}>停用</option>
                             </select>
                         </label>
                         <label class="field">
+                            <span>每人裝置上限</span>
+                            <select name="maxDevicesPerEmployee" ${canManageSecurity ? '' : 'disabled'}>
+                                ${[1, 2, 3, 4].map((count) => `<option value="${count}" ${count === maxDevicesPerEmployee ? 'selected' : ''}>${count} 台</option>`).join('')}
+                            </select>
+                        </label>
+                        <label class="field">
                             <span>打卡必須 GPS</span>
-                            <select name="gpsRequiredOnPunch">
+                            <select name="gpsRequiredOnPunch" ${canManageSecurity ? '' : 'disabled'}>
                                 <option value="true" ${security.settings.gpsRequiredOnPunch ? "selected" : ""}>必須</option>
                                 <option value="false" ${!security.settings.gpsRequiredOnPunch ? "selected" : ""}>選填</option>
                             </select>
                         </label>
                         <label class="field">
                             <span>允許 GPS 精度上限（公尺）</span>
-                            <input name="maxGpsAccuracyMeters" type="number" min="30" max="5000" step="10" value="${escapeHtml(String(security.settings.maxGpsAccuracyMeters || 300))}">
+                            <input name="maxGpsAccuracyMeters" type="number" min="30" max="5000" step="10" value="${escapeHtml(String(security.settings.maxGpsAccuracyMeters || 300))}" ${canManageSecurity ? '' : 'disabled'}>
                         </label>
                     </div>
-                    <div class="form-toolbar">
+                    <p class="helper-text">「一台裝置」是同一瀏覽器、使用者設定檔及網站來源所儲存的身分，不等於一台實體電腦。不同網址／連接埠、無痕模式或清除網站資料可能產生新的裝置 ID。達上限會擋下新裝置，不會自動刪除舊綁定；調低上限也不會解除既有裝置。</p>
+                    <p class="helper-text">原裝置 ID 缺少或使用無效憑證時仍會拒絕登入，增加上限無法繞過此檢查。停用綁定期間不新增綁定，已有綁定會保留；重新啟用後仍依憑證與上限驗證。</p>
+                    ${canManageSecurity ? `<div class="form-toolbar">
                         <button class="primary-btn" type="submit">儲存安全設定</button>
-                    </div>
+                    </div>` : '<p class="helper-text">目前僅有檢視權限；修改安全政策需要「安全設定管理」權限。</p>'}
                 </form>
             </article>
 
@@ -8076,6 +8089,10 @@ function renderAdminSecuritySection(datasets) {
             </article>
             <article class="sub-panel">${renderBrowserPunchPermissions(security.browserPunchPermissions)}</article>
             <article class="sub-panel">${renderRequestHistorySettings(security.requestHistorySettings)}</article>
+            <article class="table-card">
+                <h3>裝置登入診斷</h3>
+                ${window.AdminDirectory.renderDiagnostics(datasets)}
+            </article>
         </div>
     `;
 }
@@ -8263,9 +8280,20 @@ handleDashboardSubmit = async function handleDashboardSubmitSecurityOverride(eve
     event.preventDefault();
     if (!form) return;
 
+    if (state.dashboard?.role !== 'system_admin' && !hasCurrentAdminPermission('admin.security.manage')) {
+        setFormMessage(formId, '沒有修改安全設定的權限。', 'error');
+        return;
+    }
+
     const values = Object.fromEntries(new FormData(form).entries());
+    const maxDevicesPerEmployee = Number(values.maxDevicesPerEmployee);
+    if (!Number.isInteger(maxDevicesPerEmployee) || maxDevicesPerEmployee < 1 || maxDevicesPerEmployee > 4) {
+        setFormMessage(formId, '每人最多綁定裝置數須為 1 至 4 台。', 'error');
+        return;
+    }
     const body = {
         deviceBindingEnabled: values.deviceBindingEnabled === "true",
+        maxDevicesPerEmployee,
         gpsRequiredOnPunch: values.gpsRequiredOnPunch === "true",
         maxGpsAccuracyMeters: Number(values.maxGpsAccuracyMeters) || 300
     };
@@ -12337,7 +12365,8 @@ const workspaceSubnavConfigs = {
                         { id: "devices", label: "裝置綁定清單", panelIndex: 2 },
                         { id: "recent", label: "最近遠端打卡", panelIndex: 3 },
                         { id: "punchPermissions", label: "員工網頁打卡權限", panelIndex: 4 },
-                        { id: "requestHistory", label: "員工紀錄可見範圍", panelIndex: 5 }
+                        { id: "requestHistory", label: "員工紀錄可見範圍", panelIndex: 5 },
+                        { id: "deviceDiagnostics", label: "裝置登入診斷", panelIndex: 6 }
                     ]
                 }
             ]

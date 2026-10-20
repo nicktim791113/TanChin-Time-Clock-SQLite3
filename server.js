@@ -16,6 +16,7 @@ const { attachLeaveEntitlementRoutes } = require('./leave-entitlement-routes');
 const { attachAnnualLeaveRoutes, ANNUAL_LEAVE_PERMISSIONS } = require('./annual-leave-routes');
 const { buildDashboardMetrics, attachDashboardMetricRoutes } = require('./dashboard-metrics');
 const { recentTaipeiDateRange, groupBrowserPunches, confirmedDeviceClear } = require('./admin-security-data');
+const { buildDeviceLoginDiagnostic, mapDeviceLoginDiagnostic } = require('./browser-device-diagnostics');
 const { normalizeLeavePay } = require('./leave-type-pay');
 const {
   ATTENDANCE_EXPORT_FIELD_DEFINITIONS,
@@ -39,6 +40,7 @@ const DEFAULT_MAIN_TITLE = '震欣科技AI作息系統';
 const DEFAULT_SUBTITLE = '您的 AI 智慧好夥伴';
 const DEFAULT_BROWSER_SECURITY_SETTINGS = {
   deviceBindingEnabled: true,
+  maxDevicesPerEmployee: 4,
   gpsRequiredOnPunch: true,
   maxGpsAccuracyMeters: 300
 };
@@ -201,7 +203,8 @@ const browserAccounts = createBrowserAccounts({
   createSession: createBrowserSession, buildDashboard: buildDashboardForSession,
   getSystemAdminCredentials, normalizeDeviceInfo: normalizeClientDeviceInfo,
   authorizeDevice: authorizeEmployeeDeviceForLogin, getIp: getRequestIpAddress,
-  auditEntry: buildBrowserAuditLogEntry, displaySettings: getBrowserDisplaySettings
+  auditEntry: buildBrowserAuditLogEntry, displaySettings: getBrowserDisplaySettings,
+  recordDeviceDiagnostic: writeDeviceLoginDiagnostic
 });
 const DEFAULT_AUDIT_LOG_RETENTION_DAYS = 180;
 const AUDIT_ARCHIVE_BATCH_SIZE = 2000;
@@ -1174,8 +1177,10 @@ function normalizePositiveInteger(value, fallbackValue, { min = 1, max = 10000 }
 }
 
 function normalizeBrowserSecuritySettings(settings = {}) {
+  const maximum = ['number', 'string'].includes(typeof settings.maxDevicesPerEmployee) ? Number(settings.maxDevicesPerEmployee) : NaN;
   return {
     deviceBindingEnabled: normalizeBoolean(settings.deviceBindingEnabled ?? DEFAULT_BROWSER_SECURITY_SETTINGS.deviceBindingEnabled),
+    maxDevicesPerEmployee: Number.isInteger(maximum) && maximum >= 1 && maximum <= 4 ? maximum : 4,
     gpsRequiredOnPunch: normalizeBoolean(settings.gpsRequiredOnPunch ?? DEFAULT_BROWSER_SECURITY_SETTINGS.gpsRequiredOnPunch),
     maxGpsAccuracyMeters: normalizePositiveInteger(
       settings.maxGpsAccuracyMeters ?? DEFAULT_BROWSER_SECURITY_SETTINGS.maxGpsAccuracyMeters,
@@ -2806,11 +2811,18 @@ function buildOvertimeAlertsCsv(rows = []) {
   ]);
 }
 
-function getAdminSecurityDatasets() {
+function getAdminSecurityDatasets(includeDeviceLoginDiagnostics = false) {
   const employees = dbModule.loadEmployees();
   const employeeMap = new Map(employees.map((employee) => [employee.id, employee]));
   const employeeDevices = dbModule.loadEmployeeDevices().map((device) => mapEmployeeDeviceForDashboard(device, employeeMap));
   const recentBrowserPunchRange = recentTaipeiDateRange();
+  const deviceLoginDiagnostics = {
+    records: includeDeviceLoginDiagnostics ? dbModule.queryAuditLogs({ targetType: 'device_login',
+      startTimestamp: recentBrowserPunchRange.startAt, endTimestamp: recentBrowserPunchRange.endAt, limit: 200
+    }).map(mapDeviceLoginDiagnostic) : [],
+    range: recentBrowserPunchRange,
+    limit: 200
+  };
   const recentBrowserPunches = dbModule.loadPunchRecords()
     .filter((record) => record.source === 'browser' && record.timestamp >= recentBrowserPunchRange.startAt && record.timestamp < recentBrowserPunchRange.endAt)
     .map((record) => {
@@ -2852,6 +2864,7 @@ function getAdminSecurityDatasets() {
       riskyPunchCount: recentBrowserPunches.filter((item) => item.riskFlags.length > 0).length
     },
     employeeDevices,
+    deviceLoginDiagnostics,
     recentBrowserPunchRange,
     recentBrowserPunchEmployees: groupBrowserPunches(recentBrowserPunches),
     recentBrowserPunches
@@ -2868,6 +2881,7 @@ function buildEmployeeSecurityState(employee, session = null) {
     settings,
     browserPunchAllowed: dbModule.getBrowserPunchPermissions().allowed(employee.id),
     deviceBindingEnabled: settings.deviceBindingEnabled,
+    maxDevicesPerEmployee: settings.maxDevicesPerEmployee,
     gpsRequiredOnPunch: settings.gpsRequiredOnPunch,
     maxGpsAccuracyMeters: settings.maxGpsAccuracyMeters,
     boundDeviceCount: devices.length,
@@ -3064,7 +3078,7 @@ function getAdminDatasets(session = {}) {
       canView: canOvertimeView,
       canPaperCreate: canOvertimePaperCreate
     }) : null,
-    security: canSecurity ? { ...getAdminSecurityDatasets(), browserPunchPermissions: dbModule.getBrowserPunchPermissions().state(), requestHistorySettings: dbModule.getRequestHistory().state() } : null,
+    security: canSecurity ? { ...getAdminSecurityDatasets(hasAdminPermission(session, 'admin.security.view')), browserPunchPermissions: dbModule.getBrowserPunchPermissions().state(), requestHistorySettings: dbModule.getRequestHistory().state() } : null,
     accountAccess: null,
     meals: hasAdminPermission(session, 'admin.meals.view') ? dbModule.getMeals().calendar() : null,
     settings: {
@@ -3595,6 +3609,22 @@ function buildEmployeeDeviceRecord(employeeId, deviceInfo, request, existingDevi
   };
 }
 
+function writeDeviceLoginDiagnostic(request, { stage, success, error, employee = null } = {}) {
+  // Diagnostics must never turn a successful binding into a failed response that loses its token.
+  try {
+    const data = buildDeviceLoginDiagnostic({ request, employee, stage, success, error,
+      settings: getBrowserSecuritySettings(),
+      boundDeviceCount: employee ? dbModule.loadEmployeeDevices(employee.id).length : 0 });
+    dbModule.addAuditLog({ timestamp: Date.now(), actor_id: data.employeeId || null,
+      actor_name: data.employeeName || null, channel: 'browser', action: data.stage,
+      target_type: 'device_login', target_id: data.employeeId || null,
+      summary: success ? '裝置登入診斷：驗證成功。' : `裝置登入診斷：${data.failureCode}。`,
+      after_data: data, success: success === true, ip_address: data.ipAddress || null });
+  } catch {
+    console.warn('[安全診斷] 無法寫入裝置登入紀錄；原登入結果不變。');
+  }
+}
+
 function authorizeEmployeeDeviceForLogin(employee, request, deviceInfo = {}) {
   const securitySettings = getBrowserSecuritySettings();
   if (!securitySettings.deviceBindingEnabled) {
@@ -3602,6 +3632,7 @@ function authorizeEmployeeDeviceForLogin(employee, request, deviceInfo = {}) {
       securitySettings,
       deviceRecord: null,
       issuedDeviceToken: null,
+      boundDeviceCount: dbModule.loadEmployeeDevices(employee.id).length,
       newlyBound: false
     };
   }
@@ -3623,13 +3654,14 @@ function authorizeEmployeeDeviceForLogin(employee, request, deviceInfo = {}) {
       securitySettings,
       deviceRecord: updatedDevice,
       issuedDeviceToken: null,
+      boundDeviceCount: dbModule.loadEmployeeDevices(employee.id).length,
       newlyBound: false
     };
   }
 
   const employeeDevices = dbModule.loadEmployeeDevices(employee.id);
-  if (employeeDevices.length > 0) {
-    throw createHttpError(withSupportCode('P213', '此裝置尚未綁定，請使用已綁定裝置登入，或請管理者先清除舊裝置。'), 403);
+  if (employeeDevices.length >= securitySettings.maxDevicesPerEmployee) {
+    throw createHttpError(withSupportCode('P213', `此裝置尚未綁定，已達每人 ${securitySettings.maxDevicesPerEmployee} 台上限；請使用已綁定裝置，或請管理者確認舊裝置。`), 403);
   }
 
   const issuedDeviceToken = crypto.randomBytes(32).toString('hex');
@@ -3641,6 +3673,7 @@ function authorizeEmployeeDeviceForLogin(employee, request, deviceInfo = {}) {
     securitySettings,
     deviceRecord,
     issuedDeviceToken,
+    boundDeviceCount: employeeDevices.length + 1,
     newlyBound: true
   };
 }
@@ -5271,6 +5304,9 @@ function attachBrowserRoutes(server) {
       });
     } catch (error) {
       const errorMessage = formatGenericPunchFailure(error);
+      if (['P214', 'P215'].includes(extractSupportCode(errorMessage))) {
+        writeDeviceLoginDiagnostic(request, { stage: 'punch', success: false, error, employee });
+      }
       writePunchFailureAuditLog({
         request,
         employee,
@@ -5790,7 +5826,15 @@ function attachBrowserRoutes(server) {
   server.post('/api/browser/admin/security-settings/save', requireBrowserSession, requireAdminPermission('admin.security.manage'), (request, response) => {
     try {
       const previousSettings = getBrowserSecuritySettings();
-      const nextSettings = normalizeBrowserSecuritySettings(request.body || {});
+      const body = request.body || {};
+      if (Object.hasOwn(body, 'maxDevicesPerEmployee')) {
+        const value = body.maxDevicesPerEmployee;
+        if (!['number', 'string'].includes(typeof value) || !Number.isInteger(Number(value)) || Number(value) < 1 || Number(value) > 4) {
+          throw createHttpError('每人裝置綁定上限必須為 1 至 4 的整數。', 400);
+        }
+      }
+      const nextSettings = normalizeBrowserSecuritySettings({ ...body,
+        maxDevicesPerEmployee: body.maxDevicesPerEmployee ?? previousSettings.maxDevicesPerEmployee });
       dbModule.setSetting('browserSecuritySettings', nextSettings);
       writeBrowserAuditLog(request, {
         action: 'update',

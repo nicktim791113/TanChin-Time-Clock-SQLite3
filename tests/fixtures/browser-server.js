@@ -22,7 +22,7 @@ async function startFixture() {
         { employee_id: 'D001', allowed_roles: ['employee', 'admin', 'developer'], admin_preset: 'full_admin', admin_permissions: [] }
     ]);
     db.setSetting('systemAdminPassword', 'system-admin-test');
-    db.setSetting('browserSecuritySettings', { deviceBindingEnabled: true, gpsRequiredOnPunch: true, maxGpsAccuracyMeters: 300 });
+    db.setSetting('browserSecuritySettings', { deviceBindingEnabled: true, maxDevicesPerEmployee: 1, gpsRequiredOnPunch: true, maxGpsAccuracyMeters: 300 });
     for (const id of ['A001', 'A002', 'D001']) {
         db.saveWebCredential({ employee_id: id, credential: await credentials.createCredential(databasePath, id, `${id}-test-password`),
             revision: crypto.randomUUID(), must_change_password: false, updated_by: '__test__' },

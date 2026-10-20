@@ -123,6 +123,7 @@ $projectFiles = @(
     "preload.js",
     "server.js",
     "browser-accounts.js",
+    "browser-device-diagnostics.js",
     "web-credentials.js",
     "meal-management.js",
     "meal-routes.js",

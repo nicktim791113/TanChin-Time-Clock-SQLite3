@@ -2065,6 +2065,14 @@ function buildAuditLogWhere(filters = {}) {
     const clauses = [];
     const params = [];
 
+    // Numeric bounds let diagnostics use Taiwan calendar days on any server timezone.
+    for (const [key, operator] of [['startTimestamp', '>='], ['endTimestamp', '<']]) {
+        if (typeof filters[key] === 'number' && Number.isFinite(filters[key])) {
+            clauses.push(`timestamp ${operator} ?`);
+            params.push(filters[key]);
+        }
+    }
+
     const startDate = String(filters.startDate || '').trim();
     if (startDate) {
         const timestamp = new Date(`${startDate}T00:00:00`).getTime();

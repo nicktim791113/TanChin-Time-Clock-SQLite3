@@ -1,6 +1,7 @@
 (() => {
     'use strict';
-    const filters = { devices: { query: '', department: '', status: '' }, remote: { query: '', department: '', status: '' } };
+    const defaultFilter = (kind) => ({ query: '', department: '', status: kind === 'diagnostics' ? 'failure' : '' });
+    const filters = { devices: defaultFilter('devices'), remote: defaultFilter('remote'), diagnostics: defaultFilter('diagnostics') };
     let dialog;
     let dialogOrigin;
     let sessionGeneration = 0;
@@ -20,7 +21,7 @@
             previousDialog.replaceChildren();
             previousDialog.remove();
         }
-        for (const kind of ['devices', 'remote']) filters[kind] = { query: '', department: '', status: '' };
+        for (const kind of Object.keys(filters)) filters[kind] = defaultFilter(kind);
     }
     // Wait until all deferred modules have installed their render/logout wrappers,
     // including the workspace chooser which bypasses the base dashboard renderer.
@@ -41,7 +42,12 @@
     });
     const esc = (value) => escapeHtml(value == null ? '' : String(value));
     const canManage = () => state.dashboard?.role === 'system_admin' || hasCurrentAdminPermission('admin.security.manage');
+    const canViewDiagnostics = () => state.dashboard?.role === 'system_admin' || hasCurrentAdminPermission('admin.security.view');
     const security = () => getDatasets().security || {};
+    const deviceLimit = (settings = security().settings) => {
+        const value = Number(settings?.maxDevicesPerEmployee);
+        return Number.isInteger(value) && value >= 1 && value <= 4 ? value : 4;
+    };
     const formatTime = (value) => value ? new Date(value).toLocaleString('zh-TW', { hour12: false, timeZone: 'Asia/Taipei' }) : '尚無紀錄';
 
     function deviceGroups(datasets = getDatasets()) {
@@ -65,6 +71,7 @@
         if (filter.department && group.department !== filter.department) return false;
         if (kind === 'devices' && filter.status === 'bound' && !group.devices.length) return false;
         if (kind === 'devices' && filter.status === 'unbound' && group.devices.length) return false;
+        if (kind === 'devices' && filter.status === 'review' && group.devices.length < 3) return false;
         if (kind === 'remote' && filter.status === 'risky' && !group.riskyCount) return false;
         if (kind === 'remote' && filter.status === 'normal' && group.riskyCount) return false;
         const query = filter.query.trim().toLowerCase();
@@ -75,7 +82,7 @@
 
     function renderFilters(kind, groups) {
         const filter = filters[kind], departments = [...new Set(groups.map((group) => group.department).filter(Boolean))].sort();
-        const statuses = kind === 'devices' ? [['bound', '已綁定'], ['unbound', '尚未綁定']] : [['risky', '有風險提示'], ['normal', '無風險提示']];
+        const statuses = kind === 'devices' ? [['bound', '已綁定'], ['unbound', '尚未綁定'], ['review', '3 台以上待查看']] : [['risky', '有風險提示'], ['normal', '無風險提示']];
         return `<div class="directory-filter-row">
             <label class="field directory-search"><span>搜尋${kind === 'devices' ? '人員 / 裝置' : '人員'}</span>
                 <input data-directory-filter="query" value="${esc(filter.query)}" placeholder="${kind === 'devices' ? '工號、姓名、裝置名稱、裝置 ID 或 IP' : '工號、姓名或部門'}"></label>
@@ -89,11 +96,15 @@
         return `<strong>${esc(group.employeeName || '未命名員工')}</strong><div class="directory-muted">${esc(group.employeeId)}${group.employeeMissing ? ' · 原員工資料已刪除' : ''}</div>`;
     }
 
-    function renderDeviceResults(groups) {
+    function deviceCountBadges(count, limit) {
+        return `${renderBadge(count ? `${count} 台已綁定` : '尚未綁定', count >= 3 ? 'warning' : count ? 'success' : '')}${count >= 3 ? '<div class="directory-muted">3 台以上待查看</div>' : ''}${count >= limit ? `<div class="directory-muted">已達目前 ${limit} 台上限；啟用綁定時會擋下新裝置</div>` : ''}`;
+    }
+
+    function renderDeviceResults(groups, limit = deviceLimit()) {
         const rows = groups.filter((group) => matches(group, 'devices'));
         return `<p class="helper-text" role="status">顯示 ${rows.length} / ${groups.length} 人 · 篩選結果共 ${rows.reduce((sum, group) => sum + group.devices.length, 0)} 台裝置</p>
             ${rows.length ? `<div class="data-table-wrap directory-table-wrap"><table class="data-table directory-table"><thead><tr><th>人員</th><th>部門</th><th>綁定狀態</th><th>最近登入</th><th>操作</th></tr></thead><tbody>
-            ${rows.map((group) => `<tr><td>${employeeCell(group)}</td><td>${esc(group.department || '未指定')}</td><td>${renderBadge(group.devices.length ? `${group.devices.length} 台已綁定` : '尚未綁定', group.devices.length ? 'success' : '')}</td><td>${esc(formatTime(group.latestAt))}</td><td>${group.devices.length ? `<button class="mini-btn" type="button" data-directory-action="devices" data-employee-id="${esc(group.employeeId)}">檢視裝置</button>` : '<span class="directory-muted">無可解除裝置</span>'}</td></tr>`).join('')}</tbody></table></div>` : renderEmptyState('沒有符合篩選條件的人員。')}`;
+            ${rows.map((group) => `<tr><td>${employeeCell(group)}</td><td>${esc(group.department || '未指定')}</td><td>${deviceCountBadges(group.devices.length, limit)}</td><td>${esc(formatTime(group.latestAt))}</td><td>${group.devices.length ? `<button class="mini-btn" type="button" data-directory-action="devices" data-employee-id="${esc(group.employeeId)}">檢視裝置</button>` : '<span class="directory-muted">無可解除裝置</span>'}</td></tr>`).join('')}</tbody></table></div>` : renderEmptyState('沒有符合篩選條件的人員。')}`;
     }
 
     function renderRemoteResults(groups) {
@@ -105,7 +116,38 @@
 
     function renderDevices(datasets) {
         const groups = deviceGroups(datasets);
-        return `<section data-directory-kind="devices" aria-label="裝置綁定人員清單">${renderFilters('devices', groups)}<div data-directory-results>${renderDeviceResults(groups)}</div></section>`;
+        return `<section data-directory-kind="devices" aria-label="裝置綁定人員清單"><p class="helper-text">目前每人上限 ${deviceLimit(datasets.security?.settings)} 台。3 台以上會標記待查看，可先比對裝置登入診斷；系統不會自行解除任何綁定。裝置名稱及 IP 不能單獨證明是同一台實體電腦。</p>${renderFilters('devices', groups)}<div data-directory-results>${renderDeviceResults(groups, deviceLimit(datasets.security?.settings))}</div></section>`;
+    }
+
+    function diagnosticMatches(record) {
+        const filter = filters.diagnostics;
+        if (filter.status === 'failure' && record.success === true) return false;
+        if (filter.status === 'success' && record.success !== true) return false;
+        const query = filter.query.trim().toLowerCase();
+        return !query || [record.employeeId, record.employeeName, record.submittedAccount, record.department, record.deviceId, record.deviceName, record.failureCode, record.browserName, record.siteOrigin].join(' ').toLowerCase().includes(query);
+    }
+
+    function renderDiagnosticResults(data = {}) {
+        if (!canViewDiagnostics()) return renderEmptyState('目前沒有「安全設定檢視」權限，無法查看裝置登入診斷。');
+        const records = Array.isArray(data.records) ? data.records : [];
+        const rows = records.filter(diagnosticMatches);
+        const stageLabels = { login: '登入', workspace_switch: '切換工作台', punch: '打卡驗證' };
+        return `<p class="helper-text" role="status">顯示 ${rows.length} / ${records.length} 筆已載入紀錄 · 篩選僅套用於最近 14 日最新 ${esc(data.limit || 200)} 筆</p>
+            ${rows.length ? `<div class="directory-diagnostic-list">${rows.map((record) => `<article class="directory-diagnostic">
+                <div class="directory-diagnostic-heading"><div><strong>${record.employeeId ? `${esc(record.employeeId)} / ${esc(record.employeeName || '未提供姓名')}` : '未確認帳號'}</strong><div class="directory-muted">${esc(record.timestampText || '未提供時間')}${record.department ? ` · ${esc(record.department)}` : ''}</div>${!record.employeeId && record.submittedAccount ? `<div class="directory-muted">輸入帳號：${esc(record.submittedAccount)}（尚未驗證身分）</div>` : ''}</div><div class="badge-row">${renderBadge(record.success === true ? '成功' : '失敗', record.success === true ? 'success' : 'danger')}${renderBadge(Object.hasOwn(stageLabels, record.stage) ? stageLabels[record.stage] : record.stage || '未提供階段')}</div></div>
+                <p class="directory-diagnostic-reason"><strong>${esc(record.failureCode || (record.success === true ? '成功' : '未提供錯誤碼'))}</strong> · ${esc(record.reason || '未提供原因')}</p>
+                <dl class="directory-diagnostic-fields"><div><dt>裝置 ID / 名稱</dt><dd>${esc(record.deviceId || '未提供')}<div class="directory-muted">${esc(record.deviceName || '未提供名稱')}</div></dd></div><div><dt>瀏覽器 / 平台</dt><dd>${esc(record.browserName || '未提供瀏覽器')} / ${esc(record.platform || '未提供平台')}</dd></div><div><dt>來源網址</dt><dd>${esc(record.siteOrigin || '未提供')}</dd></div><div><dt>IP</dt><dd>${esc(record.ipAddress || '未提供')}</dd></div><div><dt>有無提供裝置憑證</dt><dd>${record.tokenPresent === true ? '有提供（不代表驗證有效）' : '未提供'}</dd></div><div><dt>當時綁定數 / 上限</dt><dd>${esc(record.boundDeviceCount ?? '未確認')} / ${esc(record.maxDevicesPerEmployee ?? '未確認')}</dd></div></dl>
+                <details class="directory-user-agent"><summary>瀏覽器完整資訊（User-Agent）</summary><p>${esc(record.userAgent || '未提供')}</p></details>
+            </article>`).join('')}</div>` : renderEmptyState(records.length ? '沒有符合條件的紀錄；可切換「全部」或「成功」比對來源。' : '尚無最近 14 日裝置診斷紀錄。新版啟用後才開始記錄，不會補記過去未留下的登入失敗。')}`;
+    }
+
+    function renderDiagnostics(datasets) {
+        if (!canViewDiagnostics()) return renderEmptyState('目前沒有「安全設定檢視」權限，無法查看裝置登入診斷。');
+        const data = datasets.security?.deviceLoginDiagnostics || {}, filter = filters.diagnostics;
+        return `<section data-directory-kind="diagnostics" aria-label="最近 14 日裝置登入診斷"><div class="directory-range"><strong>${data.range ? `${esc(data.range.startDate)} — ${esc(data.range.endDate)}` : '最近 14 日'}</strong><span>台北時間 · 今天及前 13 日 · 最新 ${esc(data.limit || 200)} 筆</span></div>
+            <p class="helper-text">預設顯示失敗；搜尋工號、姓名或裝置 ID，再切換「全部」比對成功與失敗的瀏覽器、來源網址及憑證有無。成功事件也會記錄，以便追查新裝置 ID 的來源；此頁不會解除綁定。</p>
+            <p class="helper-text">新版啟用前沒有留下的失敗不會補記；此清單只涵蓋伺服器收到並記錄的驗證，網路連線失敗可能沒有紀錄。「有提供憑證」只表示請求有攜帶憑證，不代表有效；名稱、IP 或相同瀏覽器資訊不能直接判定實體電腦相同。</p>
+            <div class="directory-filter-row directory-diagnostic-filters"><label class="field directory-search"><span>搜尋裝置診斷</span><input data-directory-filter="query" value="${esc(filter.query)}" placeholder="工號、姓名、裝置 ID、錯誤碼或來源網址"></label><label class="field"><span>診斷結果</span><select data-directory-filter="status"><option value="" ${filter.status === '' ? 'selected' : ''}>全部</option><option value="failure" ${filter.status === 'failure' ? 'selected' : ''}>失敗</option><option value="success" ${filter.status === 'success' ? 'selected' : ''}>成功</option></select></label><button class="outline-btn" type="button" data-directory-action="reset" data-kind="diagnostics">重設為失敗紀錄</button></div><div data-directory-results>${renderDiagnosticResults(data)}</div></section>`;
     }
 
     function renderRemote(datasets) {
@@ -145,7 +187,7 @@
     function showDevices(employeeId) {
         const group = deviceGroups().find((entry) => entry.employeeId === employeeId);
         if (!group) return;
-        openDialog(`${group.employeeId} / ${group.employeeName} 的綁定裝置`, `<p class="helper-text">共 ${group.devices.length} 台；解除只影響這位員工。解除後原裝置需重新登入及綁定，依目前遠端打卡規則驗證。</p>
+        openDialog(`${group.employeeId} / ${group.employeeName} 的綁定裝置`, `<p class="helper-text">共 ${group.devices.length} 台 / 上限 ${deviceLimit()} 台。${group.devices.length >= 3 ? '已達 3 台以上，請先比對裝置登入診斷。' : ''}${group.devices.length >= deviceLimit() ? '已達目前上限，啟用綁定時會擋下新裝置。' : ''}解除只影響這位員工，系統不會自動刪除綁定；解除後原裝置需重新登入及綁定，依目前遠端打卡規則驗證。</p><p class="helper-text">裝置是瀏覽器與網站來源儲存的身分；裝置名稱及 IP 不能單獨證明是同一台實體電腦。</p>
             <div class="directory-device-list">${group.devices.map((device) => `<article class="directory-device"><div class="list-toolbar"><h3>${esc(device.deviceDisplayName || device.device_name || device.device_id)}</h3>${canManage() ? `<button class="outline-btn" type="button" data-directory-action="remove-one" data-employee-id="${esc(employeeId)}" data-device-id="${esc(device.device_id)}">解除此裝置</button>` : ''}</div><dl><div><dt>裝置 ID</dt><dd>${esc(device.device_id)}</dd></div><div><dt>平台</dt><dd>${esc(device.platform || '未提供')}</dd></div><div><dt>綁定時間</dt><dd>${esc(formatTime(device.created_at))}</dd></div><div><dt>最近登入</dt><dd>${esc(formatTime(device.last_seen_at))}</dd></div><div><dt>最近 IP</dt><dd>${esc(device.last_ip || '未提供')}</dd></div><div><dt>最近 GPS</dt><dd>${esc(device.lastLocationText || '尚未記錄 GPS')}</dd></div><div><dt>GPS 記錄時間</dt><dd>${esc(formatTime(device.last_gps_at))}</dd></div></dl></article>`).join('')}</div>
             ${canManage() && group.devices.length ? `<div class="directory-danger-zone"><div><strong>解除此人全部裝置</strong><p class="helper-text">僅限 ${esc(employeeId)} 的 ${group.devices.length} 台；下一步會列出影響範圍並要求輸入工號。</p></div><button class="outline-btn" type="button" data-directory-action="remove-all" data-employee-id="${esc(employeeId)}">解除此人全部裝置</button></div>` : ''}`);
     }
@@ -182,7 +224,7 @@
         if (!section) return;
         const kind = section.dataset.directoryKind;
         filters[kind][control.dataset.directoryFilter] = control.value;
-        section.querySelector('[data-directory-results]').innerHTML = kind === 'devices' ? renderDeviceResults(deviceGroups()) : renderRemoteResults(security().recentBrowserPunchEmployees || []);
+        section.querySelector('[data-directory-results]').innerHTML = kind === 'devices' ? renderDeviceResults(deviceGroups()) : kind === 'diagnostics' ? renderDiagnosticResults(security().deviceLoginDiagnostics) : renderRemoteResults(security().recentBrowserPunchEmployees || []);
     }
 
     document.addEventListener('input', (event) => {
@@ -206,9 +248,9 @@
         if (action === 'remove-all') confirmRemoval(employeeId);
         if (action === 'reset') {
             const kind = button.dataset.kind;
-            filters[kind] = { query: '', department: '', status: '' };
+            filters[kind] = defaultFilter(kind);
             const section = button.closest('[data-directory-kind]');
-            section.outerHTML = kind === 'devices' ? renderDevices(getDatasets()) : renderRemote(getDatasets());
+            section.outerHTML = kind === 'devices' ? renderDevices(getDatasets()) : kind === 'diagnostics' ? renderDiagnostics(getDatasets()) : renderRemote(getDatasets());
         }
     });
     document.addEventListener('submit', async (event) => {
@@ -239,5 +281,5 @@
             form.dataset.busy = 'false'; updateConfirm(form);
         }
     });
-    window.AdminDirectory = { renderDevices, renderRemote, renderManual };
+    window.AdminDirectory = { renderDevices, renderRemote, renderManual, renderDiagnostics };
 })();
