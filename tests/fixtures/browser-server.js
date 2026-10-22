@@ -3,8 +3,37 @@ const os = require('node:os');
 const path = require('node:path');
 const Module = require('node:module');
 const crypto = require('node:crypto');
+const http = require('node:http');
 const db = require('../../database');
 const credentials = require('../../web-credentials');
+
+async function listenForFetch(server, initialPort = 0) {
+    // Windows can allocate port 0 from a range containing fetch-blocked ports
+    // (for example 6000 or 6667). Retry only that transport restriction; keep
+    // genuine startup/health failures visible, including their address/cause.
+    for (let attempt = 0; attempt < 16; attempt++) {
+        await new Promise((resolve, reject) => {
+            server.once('error', reject);
+            server.listen(attempt === 0 ? initialPort : 0, '127.0.0.1', () => {
+                server.off('error', reject);
+                resolve();
+            });
+        });
+        const url = `http://127.0.0.1:${server.address().port}`;
+        try {
+            const response = await fetch(`${url}/api/browser/health`);
+            await response.arrayBuffer();
+            if (!response.ok) throw new Error(`health returned HTTP ${response.status}`);
+            return url;
+        } catch (error) {
+            server.closeAllConnections();
+            await new Promise((resolve) => server.close(resolve));
+            if (error.cause?.message === 'bad port') continue;
+            throw new Error(`Browser fixture unavailable at ${url}: ${error.cause?.message || error.message}`, { cause: error });
+        }
+    }
+    throw new Error('Could not allocate a fetch-compatible browser fixture port.');
+}
 
 async function startFixture() {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tanchin-web-account-'));
@@ -35,9 +64,14 @@ async function startFixture() {
     };
     let serverModule;
     try { serverModule = require('../../server'); } finally { Module._load = originalLoad; }
-    const server = serverModule.createServerApp().listen(0, '127.0.0.1');
-    await new Promise((resolve) => server.once('listening', resolve));
-    const url = `http://127.0.0.1:${server.address().port}`;
+    const server = http.createServer(serverModule.createServerApp());
+    let url;
+    try { url = await listenForFetch(server); }
+    catch (error) {
+        db.close();
+        fs.rmSync(directory, { recursive: true, force: true });
+        throw error;
+    }
     return { directory, databasePath, db, url, server,
         async close() {
             server.closeAllConnections();
@@ -56,4 +90,4 @@ if (require.main === module) {
     }).catch((error) => { console.error(error); process.exit(1); });
 }
 
-module.exports = { startFixture };
+module.exports = { startFixture, listenForFetch };

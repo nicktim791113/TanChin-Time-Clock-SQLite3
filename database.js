@@ -704,6 +704,7 @@ const saveEmployees = (employees) => {
         run('DELETE FROM supervisor_assignments WHERE employee_id NOT IN (SELECT id FROM employees) OR supervisor_id NOT IN (SELECT id FROM employees)');
         run('DELETE FROM employee_review_supervisors WHERE employee_id NOT IN (SELECT id FROM employees) OR supervisor_id <> \'\' AND supervisor_id NOT IN (SELECT id FROM employees)');
         run('DELETE FROM browser_punch_permissions WHERE employee_id NOT IN (SELECT id FROM employees)');
+        run("DELETE FROM workspace_nav_order WHERE scope = 'personal' AND employee_id NOT IN (SELECT id FROM employees)");
     })();
 };
 const loadEmployees = () => all('SELECT * FROM employees ORDER BY id');
@@ -717,6 +718,7 @@ const deleteAllEmployees = () => db.transaction(() => {
     run('DELETE FROM supervisor_assignments');
     run('DELETE FROM employee_review_supervisors');
     run('DELETE FROM browser_punch_permissions');
+    run("DELETE FROM workspace_nav_order WHERE scope = 'personal'");
     return run('DELETE FROM employees');
 })();
 

@@ -130,9 +130,15 @@ const ADMIN_PERMISSION_PRESETS = [
   },
   {
     id: 'full_admin',
-    label: '完整管理者',
-    description: '可使用一般管理者功能；他人網頁密碼、特休制度、給假、結轉及借支須另行授權。',
+    label: '一般管理者（既有模板）',
+    description: '沿用舊版「完整管理者」的權限範圍，不含他人網頁帳號、特休制度與借支管理。需要這些功能時，請改選完整管理者或使用自訂權限。',
     permissions: ADMIN_PERMISSION_DEFINITIONS.filter((permission) => !permission.delegatedOnly).map((permission) => permission.code)
+  },
+  {
+    id: 'complete_admin',
+    label: '完整管理者',
+    description: '包含所有管理者功能，含一般員工網頁帳號、特休制度與借支管理。儲存後才生效；不包含開發人員角色、帳號權限管理或管理者／開發人員的密碼管理。',
+    permissions: ADMIN_PERMISSION_DEFINITIONS.map((permission) => permission.code)
   },
   {
     id: 'hr_admin',
@@ -193,7 +199,9 @@ const ADMIN_PERMISSION_PRESETS = [
   }
 ];
 const ADMIN_PERMISSION_PRESET_IDS = new Set(ADMIN_PERMISSION_PRESETS.map((preset) => preset.id));
-const FULL_ADMIN_PERMISSION_CODES = ADMIN_PERMISSION_PRESETS.find((preset) => preset.id === 'full_admin').permissions;
+// The legacy full_admin preset deliberately retains its original scope. System
+// administration and developer simulation use the complete catalog instead.
+const FULL_ADMIN_PERMISSION_CODES = ADMIN_PERMISSION_DEFINITIONS.map((permission) => permission.code);
 
 let serverInstance = null;
 let mainWindowRef = null;
@@ -370,6 +378,9 @@ const API_ROUTE_CATALOG = [
   { category: '主管設定 API', method: 'GET', path: '/api/browser/supervisors/reviewers', auth: '審核路徑設定權限或系統管理者', description: '讀取個別員工請假／加班審核主管' },
   { category: '主管設定 API', method: 'POST', path: '/api/browser/supervisors/reviewers/batch', auth: '審核路徑設定權限或系統管理者', description: '批量指定個別員工的單一審核主管；完整版本、原因、確認與稽核' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/leave/request', auth: '員工', description: '員工送出請假申請' },
+  { category: '瀏覽器入口', method: 'GET', path: '/api/browser/employee/workspace-nav-order', auth: '員工', description: '讀取本人工作台功能順序；不改變功能權限' },
+  { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/workspace-nav-order/save', auth: '員工本人', description: '儲存個人工作台功能順序，跨裝置保留，禁止身份模擬' },
+  { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/workspace-nav-order/reset', auth: '員工本人', description: '還原本人預設功能順序，不影響其他員工或全域排序' },
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/employee/leave/calendar?month=YYYY-MM', auth: '員工', description: '本人請假月曆／指定主管待審，台北日期、月份重疊與明細分頁' },
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/employee/overtime/calendar?month=YYYY-MM', auth: '員工', description: '本人與本人代申請加班月曆／指定主管待審，完整月份查詢' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/leave/withdraw', auth: '員工', description: '員工撤回尚未終審的請假申請' },
@@ -630,6 +641,44 @@ function buildPermissionCatalog() {
 
 function getWorkspaceNavDefaultOrder(role) {
   return (WORKSPACE_NAV_ROLE_DEFINITIONS[role]?.sections || []).map((section) => section.id);
+}
+
+const EMPLOYEE_WORKSPACE_NAV_DEFAULT_ORDER = [
+  'leave-request', 'overtime-request', 'meals', 'salaryAdvances', 'leave-history',
+  'overtime-history', 'records', 'supervisor-review', 'supervisor', 'private', 'security'
+];
+
+function normalizeEmployeeWorkspaceNavOrder(order = []) {
+  const submitted = normalizeStringList(order).filter((id) => EMPLOYEE_WORKSPACE_NAV_DEFAULT_ORDER.includes(id));
+  return [...submitted, ...EMPLOYEE_WORKSPACE_NAV_DEFAULT_ORDER.filter((id) => !submitted.includes(id))];
+}
+
+function buildEmployeeWorkspaceNavState(employeeId, session = {}) {
+  const record = dbModule.getWorkspaceNavOrderRecord('employee', 'main', 'personal', employeeId);
+  return {
+    order: normalizeEmployeeWorkspaceNavOrder(record?.order || []),
+    defaultOrder: [...EMPLOYEE_WORKSPACE_NAV_DEFAULT_ORDER],
+    source: record ? 'custom' : 'default',
+    updatedAt: record?.updated_at || 0,
+    canEdit: session?.role === 'employee' && session?.employeeId === employeeId && !session?.impersonation?.active
+  };
+}
+
+function validateEmployeeWorkspaceNavOwner(request) {
+  const session = request.browserSession;
+  if (!session?.employeeId || session.impersonation?.active) {
+    throw createHttpError('請使用本人的員工工作台調整個人功能順序。', 403);
+  }
+  return session.employeeId;
+}
+
+function validateEmployeeWorkspaceNavOrder(order) {
+  if (!Array.isArray(order) || order.length > EMPLOYEE_WORKSPACE_NAV_DEFAULT_ORDER.length
+      || order.some((id) => typeof id !== 'string' || !EMPLOYEE_WORKSPACE_NAV_DEFAULT_ORDER.includes(id))
+      || new Set(order).size !== order.length) {
+    throw createHttpError('個人功能順序格式不正確，請重新整理後再試。', 400);
+  }
+  return normalizeEmployeeWorkspaceNavOrder(order);
 }
 
 function normalizeWorkspaceNavOrder(role, order = []) {
@@ -3189,6 +3238,7 @@ function buildEmployeeDashboard(employee, session = null) {
     user: sanitizeEmployeeForProfile(employee),
     displaySettings: getBrowserDisplaySettings(),
     workspaceNavOrder: buildWorkspaceNavOrderState(session),
+    employeeWorkspaceNav: buildEmployeeWorkspaceNavState(employee.id, session),
     summary: {
       todayRecordCount,
       validRecordCount,
@@ -7625,6 +7675,43 @@ function attachBrowserRoutes(server) {
       message: '已返回開發人員頁面。',
       dashboard: buildDashboardForSession(session)
     });
+  });
+
+  server.get('/api/browser/employee/workspace-nav-order', requireBrowserSession, requireBrowserRole('employee'), (request, response) => {
+    response.json({ success: true, employeeWorkspaceNav: buildEmployeeWorkspaceNavState(request.browserSession.employeeId, request.browserSession) });
+  });
+
+  server.post('/api/browser/employee/workspace-nav-order/save', requireBrowserSession, requireBrowserRole('employee'), (request, response) => {
+    try {
+      const employeeId = validateEmployeeWorkspaceNavOwner(request);
+      const order = validateEmployeeWorkspaceNavOrder(request.body?.order);
+      const before = buildEmployeeWorkspaceNavState(employeeId, request.browserSession);
+      dbModule.saveWorkspaceNavOrderRecord({ role: 'employee', nav_type: 'main', scope: 'personal', employee_id: employeeId,
+        order, updated_at: Date.now(), updated_by: employeeId });
+      writeBrowserAuditLog(request, {
+        action: 'save', target_type: 'employee_workspace_nav_order', target_id: employeeId,
+        summary: '儲存員工個人工作台功能順序', before_data: { order: before.order, source: before.source }, after_data: { order }
+      });
+      response.json({ success: true, message: '個人功能順序已儲存，下次登入與其他裝置也會使用此順序。', dashboard: buildDashboardForSession(request.browserSession) });
+    } catch (error) {
+      response.status(error.statusCode || 400).json({ success: false, error: error.message });
+    }
+  });
+
+  server.post('/api/browser/employee/workspace-nav-order/reset', requireBrowserSession, requireBrowserRole('employee'), (request, response) => {
+    try {
+      const employeeId = validateEmployeeWorkspaceNavOwner(request);
+      const before = buildEmployeeWorkspaceNavState(employeeId, request.browserSession);
+      dbModule.deleteWorkspaceNavOrderRecord('employee', 'main', 'personal', employeeId);
+      writeBrowserAuditLog(request, {
+        action: 'reset', target_type: 'employee_workspace_nav_order', target_id: employeeId,
+        summary: '還原員工個人工作台預設功能順序', before_data: { order: before.order, source: before.source },
+        after_data: { order: [...EMPLOYEE_WORKSPACE_NAV_DEFAULT_ORDER], source: 'default' }
+      });
+      response.json({ success: true, message: '個人功能順序已還原預設。', dashboard: buildDashboardForSession(request.browserSession) });
+    } catch (error) {
+      response.status(error.statusCode || 400).json({ success: false, error: error.message });
+    }
   });
 
   server.post('/api/browser/developer/workspace-nav-order/save', requireBrowserSession, requireBrowserRole('developer'), (request, response) => {

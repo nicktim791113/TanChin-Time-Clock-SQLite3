@@ -3681,6 +3681,7 @@ async function handleDashboardClick(event) {
             const panelId = actionTarget.dataset.panel || "";
             state.employeeWorkspacePanel = state.employeeWorkspacePanel === panelId ? "" : panelId;
             renderDashboard(state.dashboard);
+            document.getElementById(`employee-tab-${panelId}`)?.focus({ preventScroll: true });
             return;
         }
         if (action === "switch-section") {
@@ -9942,18 +9943,25 @@ function renderEmployeeWorkspaceItems(dashboard) {
 }
 
 function renderEmployeeWorkspacePanel(dashboard) {
-    const items = renderEmployeeWorkspaceItems(dashboard);
+    const items = orderEmployeeWorkspaceItems(renderEmployeeWorkspaceItems(dashboard), dashboard);
     const activeItem = items.find((item) => item.id === state.employeeWorkspacePanel);
     return `
         <section class="employee-workbench" style="grid-column: 1 / -1;">
+            <div class="employee-workbench-heading">
+                <h3>常用功能</h3>
+                ${dashboard.employeeWorkspaceNav?.canEdit ? '<button class="outline-btn" type="button" data-employee-order-open>調整我的順序</button>' : ''}
+            </div>
             <div class="employee-workbench-tabs" role="tablist" aria-label="員工工作台項目">
-                ${items.map((item) => {
+                ${items.map((item, index) => {
                     const isActive = activeItem?.id === item.id;
                     return `
                         <button
+                            id="employee-tab-${escapeHtml(item.id)}"
                             class="employee-workbench-tab ${isActive ? "is-active" : ""}"
                             type="button"
                             role="tab"
+                            tabindex="${isActive || (!activeItem && index === 0) ? '0' : '-1'}"
+                            aria-controls="employee-workbench-content"
                             aria-selected="${isActive ? "true" : "false"}"
                             aria-expanded="${isActive ? "true" : "false"}"
                             data-action="select-employee-workspace-panel"
@@ -9964,7 +9972,7 @@ function renderEmployeeWorkspacePanel(dashboard) {
                     `;
                 }).join("")}
             </div>
-            <div class="employee-workbench-content">
+            <div id="employee-workbench-content" class="employee-workbench-content" ${activeItem ? `role="tabpanel" aria-labelledby="employee-tab-${escapeHtml(activeItem.id)}" tabindex="0"` : ''}>
                 ${activeItem ? activeItem.html : renderEmptyState("請點選上方項目查看內容。")}
             </div>
         </section>
@@ -9972,34 +9980,40 @@ function renderEmployeeWorkspacePanel(dashboard) {
 }
 
 renderEmployeeDashboard = function renderEmployeeDashboardWorkbenchOverride(dashboard) {
+    const user = dashboard.user || {};
+    const summary = dashboard.summary || {};
     const lastPunchText = dashboard.summary.lastPunch
         ? `${dashboard.summary.lastPunch.dateText} ${dashboard.summary.lastPunch.timeText} ${dashboard.summary.lastPunch.statusText}`
         : "目前沒有打卡紀錄";
 
     return `
-        <div class="dashboard-layout employee-layout">
+        <div class="dashboard-layout employee-layout employee-overview-layout">
             <article class="info-card employee-summary-card" data-no-collapsible="true">
-                <h3>員工資料</h3>
-                <p class="hero-copy">查看目前登入員工、班別與近期打卡摘要。</p>
-                ${buildInfoGrid(dashboard.user)}
-                ${renderStatsGrid(dashboard.summary, {
-                    todayRecordCount: "今日紀錄數",
-                    validRecordCount: "有效打卡",
-                    weekRecordCount: "近 7 日紀錄",
-                    currentShiftName: "目前班別",
-                    nextPunchType: "下一次動作"
-                })}
-            </article>
-
-            <article class="clock-panel employee-clock-card">
-                <h3>目前時間</h3>
-                <p id="employee-live-clock" class="clock-time">--:--:--</p>
-                <p id="employee-clock-subtext" class="clock-subtext"></p>
-                <div class="quick-actions">
-                    <button data-action="employee-punch" class="primary-btn" type="button" ${dashboard.punchAction.enabled === false ? 'disabled' : ''}>${dashboard.punchAction.enabled === false ? '未開放網頁打卡' : escapeHtml(dashboard.punchAction.label)}</button>
-                    <button data-action="refresh-dashboard" class="secondary-btn" type="button">重新整理</button>
+                <div class="employee-overview-top">
+                    <div class="employee-profile">
+                        <h3>員工資料 <strong>${escapeHtml(user.name || '—')}</strong><span>工號 ${escapeHtml(user.id || '—')}</span></h3>
+                        <dl class="employee-profile-details">
+                            ${[['部門', user.department], ['職稱', user.job_title], ['性別', user.gender], ['國籍', user.nationality]].map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value || '—')}</dd></div>`).join('')}
+                        </dl>
+                    </div>
+                    <dl class="employee-attendance-summary" aria-label="打卡摘要">
+                        ${[['今日紀錄', summary.todayRecordCount], ['近 7 日紀錄', summary.weekRecordCount], ['有效打卡', summary.validRecordCount]].map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value ?? '—')}<small>筆</small></dd></div>`).join('')}
+                    </dl>
                 </div>
-                <p class="punch-note">最後一次打卡：${escapeHtml(lastPunchText)}</p>
+                <div class="employee-clock-card">
+                    <div class="employee-clock-display">
+                        <p id="employee-live-clock" class="clock-time" aria-label="目前時間">--:--:--</p>
+                        <p id="employee-clock-subtext" class="clock-subtext"></p>
+                    </div>
+                    <div class="employee-punch-context">
+                        <p>目前班別 <strong>${escapeHtml(summary.currentShiftName || '—')}</strong><span>下一次動作 <strong>${escapeHtml(summary.nextPunchType || '—')}</strong></span></p>
+                        <p class="punch-note">最後一次打卡：${escapeHtml(lastPunchText)}</p>
+                    </div>
+                    <div class="quick-actions">
+                        <button data-action="employee-punch" class="primary-btn" type="button" ${dashboard.punchAction.enabled === false ? 'disabled' : ''}>${dashboard.punchAction.enabled === false ? '未開放網頁打卡' : escapeHtml(dashboard.punchAction.label)}</button>
+                        <button data-action="refresh-dashboard" class="secondary-btn" type="button">重新整理</button>
+                    </div>
+                </div>
             </article>
 
             ${renderEmployeeWorkspacePanel(dashboard)}
@@ -11206,7 +11220,7 @@ function renderAccountAccessManager(accountAccess = getAccountAccessDataset()) {
                 <div>
                     <p class="sub-kicker">帳號管理</p>
                     <h3>帳號權限管理</h3>
-                    <p class="helper-text">設定每位員工可登入的頁面角色，並限制管理者能使用的管理功能。</p>
+                    <p class="helper-text">設定每位員工可登入的頁面角色，並限制管理者能使用的管理功能。舊版「完整管理者」現標示為「一般管理者（既有模板）」，權限保持不變；選擇新的「完整管理者」並儲存，才會開放全部管理者功能。開發人員角色另外指定。</p>
                 </div>
                 <div class="badge-row">
                     ${renderBadge(accountAccess.initialized ? "已啟用自訂權限" : "預設員工權限", accountAccess.initialized ? "success" : "warning")}
@@ -11250,6 +11264,7 @@ function renderAccountAccessManager(accountAccess = getAccountAccessDataset()) {
                                             ${renderAccountPresetOptions(account, catalog.adminPresets || [])}
                                         </select>
                                     </label>
+                                    <p class="helper-text" data-access-preset-description aria-live="polite">${escapeHtml((catalog.adminPresets || []).find((preset) => preset.id === account.access?.admin_preset)?.description || "")}</p>
                                     ${renderAccountPermissionGroups(account, catalog.adminPermissions || [])}
                                 </div>
                             </div>
@@ -11376,6 +11391,11 @@ function syncAccountAccessRow(row) {
     const presetId = adminEnabled ? (presetSelect?.value || "none") : "none";
     const presetPermissions = getAccountAccessPresetPermissions(presetId);
     if (presetSelect) presetSelect.disabled = !adminEnabled;
+    const description = row.querySelector("[data-access-preset-description]");
+    if (description) {
+        const preset = (getAccountAccessCatalog().adminPresets || []).find((item) => item.id === presetId);
+        description.textContent = adminEnabled ? (preset?.description || "") : "尚未指定管理者角色，此帳號沒有管理者功能權限。";
+    }
 
     permissionCheckboxes.forEach((checkbox) => {
         if (!adminEnabled) {
