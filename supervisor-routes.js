@@ -5,6 +5,9 @@ const { normalizeLeaveDateSelection, leaveOverlapsRange } = require('./leave-dat
 
 function fail(message, status = 400) { throw Object.assign(new Error(message), { status }); }
 function requestPeriod(body, kind) {
+    if (kind === 'leave' && body.dateSelectionMode === 'explicit_segments') {
+        return normalizeLeaveDateSelection({ date_selection_mode: 'explicit_segments', leave_segments: body.leaveSegments });
+    }
     const parse = (date, time) => {
         if (typeof date !== 'string' || !monthRange(date.slice(0, 7)).dates.includes(date) ||
             typeof time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) fail('請輸入有效日期與時間。');
@@ -142,7 +145,7 @@ function attachSupervisorRoutes(server, context) {
                     const target = targets[index];
                     db.addAuditLog(auditEntry(request, { action: 'supervisor_proxy_create', target_type: `${kind}_request`, target_id: record.id,
                         summary: `指定主管代 ${target.id} ${target.name} 申請${kind === 'leave' ? '請假' : '加班'}（${record.status === 'pending_supervisor' ? '依多主管規則送審' : record.status === 'pending_admin' ? '送管理部終審' : '已核准'}）：${reason}`,
-                        after_data: { ...record, batchId, batchSize: targets.length } }));
+                        after_data: { ...(kind === 'leave' ? db.getLeaveRequestById(record.id) : record), batchId, batchSize: targets.length } }));
                 });
             });
             notify(request, kind === 'leave' ? 'leaveRequests' : 'overtimeRequests');

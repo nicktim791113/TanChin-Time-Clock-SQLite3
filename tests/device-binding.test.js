@@ -128,12 +128,46 @@ test('device binding retains credentials, enforces configurable limits, and expo
         assert.deepEqual(bindingSnapshot('E001'), before);
     });
 
+    await t.test('retained verified tokens recover lost IDs at the four-device cap without changing binding rows', async () => {
+        const before = bindingSnapshot('E001');
+        for (const missingId of ['', 'regenerated-local-id', 'employee-2']) {
+            const recovered = await login('E001', 'employee-card', device(missingId, {
+                deviceToken: issuedTokens[0], identitySource: 'generated', tokenSource: 'cookie',
+                localStorageStatus: 'unavailable', cookieStorageStatus: 'available'
+            }));
+            assert.equal(recovered.status, 200, JSON.stringify(recovered));
+            assert.equal(recovered.deviceBinding.deviceId, 'employee-1');
+            assert.equal(recovered.deviceBinding.newlyBound, false);
+            assert.equal(recovered.deviceBinding.boundDeviceCount, 4);
+            assert.equal(recovered.dashboard.security.currentDeviceTrusted, true);
+            const dashboard = await request('/dashboard', null, recovered.token);
+            assert.equal(dashboard.dashboard.security.currentDeviceTrusted, true);
+        }
+        assert.deepEqual(bindingSnapshot('E001'), before);
+        assertFailure(await login('E001', 'employee-card', device('unknown-id', { deviceToken: 'invalid-proof' })), 403, 'P213');
+        const recovery = (await securityFor(manager.token)).deviceLoginDiagnostics.records.find((row) => row.identityRecovered);
+        assert.ok(recovery); assert.equal(recovery.identitySource, 'generated'); assert.equal(recovery.tokenSource, 'cookie');
+        assert.equal(recovery.localStorageStatus, 'unavailable'); assert.equal(recovery.cookieStorageStatus, 'available');
+        // Another employee cannot consume the recovered employee's secret as a binding proof.
+        const foreign = await login('A002', 'delegated-card', device('foreign-device', { deviceToken: issuedTokens[0] }));
+        assert.equal(foreign.status, 200); assert.equal(foreign.deviceBinding.newlyBound, true);
+        assert.notEqual(foreign.deviceBinding.issuedDeviceToken, issuedTokens[0]);
+        assert.equal(foreign.deviceBinding.deviceId, 'foreign-device');
+        db.deleteEmployeeDevicesByEmployee('A002');
+        const blocked = await login('A002', 'delegated-card', device('storage-blocked', {
+            localStorageStatus: 'unavailable', cookieStorageStatus: 'unavailable'
+        }));
+        assertFailure(blocked, 400, 'P216'); assert.equal(db.loadEmployeeDevices('A002').length, 0);
+    });
+
     await t.test('lowering the limit never removes devices or bypasses a missing or incorrect credential', async () => {
         const before = bindingSnapshot('E001');
         assert.equal((await saveSettings(manager.token, { maxDevicesPerEmployee: 1 })).status, 200);
         assertFailure(await login('E001', 'employee-card', device('employee-1')), 403, 'P212');
         assertFailure(await login('E001', 'employee-card', device('employee-1', { deviceToken: 'wrong-device-token' })), 403, 'P212');
-        assertFailure(await login('E001', 'employee-card', device('employee-1', { deviceToken: issuedTokens[1] })), 403, 'P212');
+        const mismatchedId = await login('E001', 'employee-card', device('employee-1', { deviceToken: issuedTokens[1] }));
+        assert.equal(mismatchedId.status, 200); assert.equal(mismatchedId.deviceBinding.deviceId, 'employee-2');
+        assert.equal(mismatchedId.deviceBinding.newlyBound, false);
         assertFailure(await login('E001', 'employee-card', device('employee-5')), 403, 'P213');
         assertFailure(await login('E001', 'employee-card', {}), 400, 'P211');
         const valid = await login('E001', 'employee-card', device('employee-1', { deviceToken: issuedTokens[0] }));
@@ -173,6 +207,12 @@ test('device binding retains credentials, enforces configurable limits, and expo
         const valid = await select(pending.token, 'employee', device('workspace-1', { deviceToken: workspaceTokens[0] }));
         assert.equal(valid.status, 200);
         assert.equal(valid.deviceBinding.newlyBound, false);
+        const recoveryAccount = await login('D001', 'D001-test-password');
+        const recoveredWorkspace = await select(recoveryAccount.token, 'employee', device('workspace-2', { deviceToken: workspaceTokens[0] }));
+        assert.equal(recoveredWorkspace.status, 200);
+        assert.equal(recoveredWorkspace.deviceBinding.deviceId, 'workspace-1');
+        assert.equal(recoveredWorkspace.dashboard.security.currentDeviceTrusted, true);
+        assert.equal(recoveredWorkspace.deviceBinding.boundDeviceCount, 4);
         assert.deepEqual(bindingSnapshot('D001'), before);
     });
 

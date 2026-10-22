@@ -1,6 +1,6 @@
 const crypto = require('node:crypto');
 const XLSX = require('xlsx');
-const { normalizeLeaveDateSelection, EXPLICIT_DATES } = require('./leave-date-selection');
+const { normalizeLeaveDateSelection, EXPLICIT_DATES, EXPLICIT_SEGMENTS } = require('./leave-date-selection');
 const KEY = 'leaveEntitlementSettings';
 const HEADERS = ['員工編號', '姓名', '假別代碼', '假別', '年度', '每日工時', '設定方式', '扣抵起日', '額度天數', '結轉小時', '調整小時', '設定原因', '版本'];
 const hash = (value) => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -44,7 +44,7 @@ function createLeaveEntitlementStore(sql, addAuditLog) {
     const usageRevision = () => hash({ requests: sql.prepare('SELECT id, employee_id, leave_type_id, start_at, end_at, duration_hours, status, updated_at FROM leave_requests ORDER BY id').all(),
         charges: sql.prepare('SELECT * FROM leave_entitlement_charges ORDER BY request_id, date').all() });
     function allocation(request, dailyHours, explicitHours) {
-        if (request.date_selection_mode === EXPLICIT_DATES) {
+        if ([EXPLICIT_DATES, EXPLICIT_SEGMENTS].includes(request.date_selection_mode)) {
             return normalizeLeaveDateSelection({ ...request, daily_hours: dailyHours }).daily_hours
                 .map((row) => ({ date: row.date, units: Math.round(row.hours * 100) }));
         }
@@ -176,7 +176,7 @@ function createLeaveEntitlementStore(sql, addAuditLog) {
         if (body.revision !== revision() || body.usageRevision !== usageRevision() || body.confirm !== true) fail('資料已變更或尚未確認，請重新整理。', 409);
         const request = sql.prepare('SELECT * FROM leave_requests WHERE id = ?').get(body.requestId);
         if (!request) fail('找不到請假單。', 404);
-        if (request.date_selection_mode === EXPLICIT_DATES) fail('此單已保存實際請假日期；請由原申請／紙本修正流程調整，不可用舊單扣抵分配改寫請假日期。');
+        if ([EXPLICIT_DATES, EXPLICIT_SEGMENTS].includes(request.date_selection_mode)) fail('此單已保存實際請假日期；請由原申請／紙本修正流程調整，不可用舊單扣抵分配改寫請假日期。');
         const rows = allocation(request, body.dailyHours, request.duration_hours), why = reason(body.reason);
         const before = sql.prepare('SELECT * FROM leave_entitlement_charges WHERE request_id = ?').all(request.id);
         replaceCharges(request.id, rows);

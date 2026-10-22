@@ -102,6 +102,15 @@ test('management without security viewing permission does not render diagnostics
     }
 });
 
+test('diagnostics explain retained cookie recovery separately from new identities and unrecorded legacy storage', () => {
+    const datasets = { security: { deviceLoginDiagnostics: { records: [diagnostic('E001', {
+        identitySource: 'cookie', tokenSource: 'cookie', localStorageStatus: 'unavailable', cookieStorageStatus: 'available', identityRecovered: true
+    }), diagnostic('E002')] } } };
+    const html = setup({ datasets }).directory.renderDiagnostics(datasets);
+    assert.match(html, /從 Cookie 備援恢復/); assert.match(html, /已用有效憑證找回原綁定/);
+    assert.match(html, /不可用 \/ 可用/); assert.match(html, /舊紀錄未記錄/);
+});
+
 test('device review filter selects only employees with at least three bindings and shows the configured limit', () => {
     const employees = ['E001', 'E002', 'E003'].map((id) => ({ id, name: `Person ${id}` }));
     const employeeDevices = employees.flatMap((person, index) => Array.from({ length: index + 2 }, (_, i) => ({ employee_id: person.id, device_id: `${person.id}-${i}` })));

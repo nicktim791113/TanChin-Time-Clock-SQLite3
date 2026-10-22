@@ -7837,43 +7837,38 @@ function buildDefaultBrowserDeviceName() {
     return `${detectPlatformName()} / ${detectBrowserName()}`;
 }
 
-function ensureBrowserDeviceIdentity() {
-    let deviceId = localStorage.getItem(BROWSER_DEVICE_ID_STORAGE_KEY) || "";
-    if (!deviceId) {
-        deviceId = generateBrowserDeviceId();
-        localStorage.setItem(BROWSER_DEVICE_ID_STORAGE_KEY, deviceId);
-    }
-
-    let deviceName = localStorage.getItem(BROWSER_DEVICE_NAME_STORAGE_KEY) || "";
-    if (!deviceName) {
-        deviceName = buildDefaultBrowserDeviceName();
-        localStorage.setItem(BROWSER_DEVICE_NAME_STORAGE_KEY, deviceName);
-    }
-
-    return {
-        deviceId,
-        deviceName,
-        deviceToken: localStorage.getItem(BROWSER_DEVICE_TOKEN_STORAGE_KEY) || "",
-        platform: detectPlatformName(),
-        browserName: detectBrowserName()
-    };
+let browserDeviceIdentityStore = null;
+function getBrowserDeviceIdentityStore() {
+    if (!browserDeviceIdentityStore) browserDeviceIdentityStore = window.createBrowserDeviceIdentityStore({
+        storage: () => window.localStorage, document, origin: window.location.origin, protocol: window.location.protocol,
+        generateId: generateBrowserDeviceId, defaultName: buildDefaultBrowserDeviceName
+    });
+    return browserDeviceIdentityStore;
 }
 
-function buildClientDeviceInfo() {
-    const identity = ensureBrowserDeviceIdentity();
+function ensureBrowserDeviceIdentity(employeeId = "") {
+    return getBrowserDeviceIdentityStore().read(employeeId);
+}
+
+function buildClientDeviceInfo(employeeId = "") {
+    if (state.activeRole === "system_admin") return { platform: detectPlatformName(), browserName: detectBrowserName() };
+    const identity = ensureBrowserDeviceIdentity(employeeId);
     return {
         deviceId: identity.deviceId,
         deviceToken: identity.deviceToken,
         deviceName: identity.deviceName,
-        platform: identity.platform,
-        browserName: identity.browserName
+        browserName: detectBrowserName(),
+        platform: detectPlatformName(),
+        identitySource: identity.identitySource,
+        tokenSource: identity.tokenSource,
+        localStorageStatus: identity.localStorageStatus,
+        cookieStorageStatus: identity.cookieStorageStatus
     };
 }
 
-function storeIssuedDeviceToken(token) {
-    const normalizedToken = String(token || "").trim();
-    if (!normalizedToken) return;
-    localStorage.setItem(BROWSER_DEVICE_TOKEN_STORAGE_KEY, normalizedToken);
+function storeIssuedDeviceToken(token, employeeId = "", canonicalDeviceId = "") {
+    if (!token && !canonicalDeviceId) return;
+    getBrowserDeviceIdentityStore().save(token, employeeId, canonicalDeviceId);
 }
 
 function describeGeolocationError(error) {
@@ -8171,7 +8166,7 @@ handleLoginSubmit = async function handleLoginSubmitSecurityOverride(event) {
             }
         });
 
-        storeIssuedDeviceToken(result.deviceBinding?.issuedDeviceToken || "", result.dashboard?.user?.id);
+        storeIssuedDeviceToken(result.deviceBinding?.issuedDeviceToken || "", result.dashboard?.user?.id, result.deviceBinding?.deviceId || "");
         state.token = result.token;
         sessionStorage.setItem("browserPortalToken", state.token);
         ui.loginView.classList.add("hidden");
@@ -9517,7 +9512,7 @@ function renderAdminPaperLeaveForm(datasets = {}) {
                     </label>
                     <label class="field paper-span-4">
                         <span>請假時數</span>
-                        <input name="durationHours" type="number" readonly aria-label="請假總時數（逐日自動加總）" placeholder="由勾選日期自動加總">
+                        <input name="durationHours" type="number" readonly aria-label="請假總時數（明細自動加總）" placeholder="由請假明細自動加總">
                     </label>
                     ${renderLeaveDaysEditor({ batch: true })}
                     <label class="field paper-span-4">
@@ -9834,7 +9829,7 @@ function renderEmployeeLeaveApplicationPanel(dashboard) {
                     </label>
                     <label class="field">
                         <span>請假時數</span>
-                        <input name="durationHours" type="number" readonly aria-label="請假總時數（逐日自動加總）" placeholder="由勾選日期自動加總">
+                        <input name="durationHours" type="number" readonly aria-label="請假總時數（明細自動加總）" placeholder="由請假明細自動加總">
                     </label>
                     <label class="field request-reason">
                         <span>請假原因</span>
@@ -9844,7 +9839,7 @@ function renderEmployeeLeaveApplicationPanel(dashboard) {
                 ${renderLeaveDaysEditor()}
                 <div class="form-toolbar dense-toolbar">
                     <button class="primary-btn" type="submit">送出請假申請</button>
-                    <p class="helper-text">送出後會依照主管審核與管理部終審流程更新狀態。</p>
+                    <p class="helper-text">同一假別的所有時段合為一張申請，依指定主管審核與管理部終審流程處理。</p>
                 </div>
                 <div class="inline-message" data-form-message-for="employee-leave-form" aria-live="polite"></div>
             </form>
@@ -9888,6 +9883,12 @@ function renderEmployeeWorkspaceItems(dashboard) {
     const records = Array.isArray(dashboard.recentRecords) ? dashboard.recentRecords : [];
     const security = dashboard.security || {};
     return [
+        {
+            id: "salaryAdvances",
+            label: "我的借支",
+            meta: "申請與審核進度",
+            html: typeof renderSalaryAdvanceWorkspace === 'function' ? renderSalaryAdvanceWorkspace('employee') : ''
+        },
         {
             id: "private",
             label: "私人資訊",
@@ -11089,6 +11090,7 @@ function getAdminDashboardSections(dashboard = state.dashboard) {
 }
 
 function renderAdminPermissionAwareContent(sectionId, datasets) {
+    if (sectionId === "salaryAdvances") return renderSalaryAdvanceWorkspace('admin');
     if (sectionId === "people") return renderAdminPeopleSection(datasets);
     if (sectionId === "security") return renderAdminSecuritySection(datasets);
     if (sectionId === "shifts") return renderAdminShiftSection(datasets);

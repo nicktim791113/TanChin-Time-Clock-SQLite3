@@ -1,5 +1,5 @@
 const crypto = require('node:crypto');
-const { getLeaveDateSegments } = require('./leave-date-selection');
+const { getLeaveDateSegments, guaranteedLeaveHoursInRange } = require('./leave-date-selection');
 
 const DEFAULT_SCHEDULE = { weekdays: [], cutoff: '09:00', leaveStart: '08:00', leaveEnd: '17:00' };
 function fail(message, status = 400) { const error = new Error(message); error.status = status; throw error; }
@@ -94,6 +94,13 @@ function createMealStore(sql, addAuditLog) {
             if (leave.date_selection_mode === 'explicit_dates') {
                 leave.daily_hours = all('SELECT date, units FROM leave_entitlement_charges WHERE request_id = ? ORDER BY date', leave.id)
                     .map((row) => ({ date: row.date, hours: row.units / 100 }));
+            }
+            if (leave.date_selection_mode === 'explicit_segments') {
+                leave.leave_segments = all('SELECT id, start_at AS startAt, end_at AS endAt, units FROM leave_request_segments WHERE request_id = ? ORDER BY start_at', leave.id)
+                    .map(({ units, ...segment }) => ({ ...segment, hours: units / 100 }));
+                const segments = getLeaveDateSegments(leave).filter((segment) => segment.date === date);
+                return segments.length > 0 && guaranteedLeaveHoursInRange(segments, at(date, schedule.leaveStart), at(date, schedule.leaveEnd)) >= 7.5 &&
+                    segments[0].startAt <= at(date, schedule.leaveStart) && segments.at(-1).endAt >= at(date, schedule.leaveEnd);
             }
             return getLeaveDateSegments(leave).some((segment) => segment.date === date &&
                 (leave.date_selection_mode !== 'explicit_dates' || segment.hours >= 7.5) &&

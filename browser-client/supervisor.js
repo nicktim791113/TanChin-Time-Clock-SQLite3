@@ -120,7 +120,7 @@ function spRequestForm() {
         <div class="request-period-grid">${spField('開始日期', 'startDate', 'date', date)}${spField('開始時間', 'startTime', 'time', leave ? '09:00' : '18:00')}
         ${spField('結束日期', 'endDate', 'date', date)}${spField('結束時間', 'endTime', 'time', leave ? '18:00' : '20:00')}</div>
         <div class="sp-form-grid">${leave ? `<label class="field"><span>假別</span><select name="leaveTypeId" required>${supervisorState.data.leaveTypes.map((t) => `<option value="${spEscape(t.id)}">${spEscape(t.name)}</option>`).join('')}</select></label>` : ''}
-        ${spField('每人整筆時數', 'durationHours', 'number', leave ? '' : '2', leave ? 'readonly placeholder="由勾選日期自動加總"' : 'min="0.01" step="0.01"')}</div>
+         ${spField('每人整筆時數', 'durationHours', 'number', leave ? '' : '2', leave ? 'readonly placeholder="由請假時段自動加總"' : 'min="0.01" step="0.01"')}</div>
         ${leave ? renderLeaveDaysEditor({ batch: true }) : ''}
         ${spField('申請事由', 'reason', 'text', '', 'maxlength="2000"')}${spField('代辦原因', 'proxyReason', 'text', '', 'maxlength="500"')}
         <label class="sp-confirm"><input type="checkbox" name="confirmApproval" required>確認替所有勾選員工代申請相同內容；多主管設定依各人審核規則送審，原單主管代辦流程保留</label>

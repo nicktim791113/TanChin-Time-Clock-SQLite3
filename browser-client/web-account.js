@@ -80,29 +80,14 @@ setActiveRole = function setUnifiedLoginRole(role) {
 let webSecretTimer = null;
 let workspaceSwitchBusy = false;
 
-function readAccountDeviceTokens() {
-    try {
-        const value = JSON.parse(localStorage.getItem("browserPortalAccountDeviceTokens") || "{}");
-        return value && typeof value === "object" && !Array.isArray(value) ? value : {};
-    } catch { return {}; }
-}
-
 const previousWebBuildDeviceInfo = buildClientDeviceInfo;
 buildClientDeviceInfo = function buildAccountDeviceInfo(employeeId = state.dashboard?.user?.id || ui.employeeIdInput.value.trim()) {
-    const identity = previousWebBuildDeviceInfo();
-    const tokens = readAccountDeviceTokens();
-    const key = `id:${employeeId}`;
-    if (Object.hasOwn(tokens, key)) identity.deviceToken = tokens[key];
-    return identity;
+    return previousWebBuildDeviceInfo(employeeId);
 };
 
 const previousWebStoreDeviceToken = storeIssuedDeviceToken;
-storeIssuedDeviceToken = function storeAccountDeviceToken(token, employeeId) {
-    if (!token) return;
-    if (!employeeId) return previousWebStoreDeviceToken(token);
-    const tokens = readAccountDeviceTokens();
-    tokens[`id:${employeeId}`] = token;
-    localStorage.setItem("browserPortalAccountDeviceTokens", JSON.stringify(tokens));
+storeIssuedDeviceToken = function storeAccountDeviceToken(token, employeeId, canonicalDeviceId) {
+    return previousWebStoreDeviceToken(token, employeeId, canonicalDeviceId);
 };
 
 function clearWebSecrets() {
@@ -182,7 +167,7 @@ async function switchWebWorkspace(role) {
     closeRealtimeSync();
     try {
         const result = await requestJson("/api/browser/workspace", { method: "POST", auth: true, body: { role, deviceInfo: buildClientDeviceInfo() } });
-        storeIssuedDeviceToken(result.deviceBinding?.issuedDeviceToken || "", result.dashboard?.user?.id);
+        storeIssuedDeviceToken(result.deviceBinding?.issuedDeviceToken || "", result.dashboard?.user?.id, result.deviceBinding?.deviceId || "");
         state.token = result.token;
         sessionStorage.setItem("browserPortalToken", result.token);
         renderDashboard(result.dashboard);

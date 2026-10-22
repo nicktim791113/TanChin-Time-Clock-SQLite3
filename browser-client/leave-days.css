@@ -30,6 +30,16 @@
 .ld-request-summary li { display: flex; gap: 16px; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #e3eaf0; font-variant-numeric: tabular-nums; }
 .ld-request-summary p, .ld-legacy-note { color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; white-space: normal; }
 .ld-legacy-note { display: block; margin-top: 6px; }
+.ls-add-tools { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; margin: 14px 0; }
+.ls-add-tools .field { flex: 1 1 180px; max-width: 250px; }
+.ls-weekends { display: flex; align-items: center; gap: 7px; min-height: 40px; font-size: 13px; }
+.ls-weekends input { width: 18px; height: 18px; accent-color: var(--brand); }
+.ls-rows { display: grid; gap: 10px; max-height: 580px; overflow-y: auto; }
+.ls-row { display: grid; grid-template-columns: minmax(140px, 1.2fr) repeat(2, minmax(105px, 1fr)) minmax(110px, 1fr); gap: 10px; padding: 12px; border: 1px solid #cbdce7; border-radius: 9px; background: #fff; }
+.ls-row-number { grid-column: 1 / -1; color: var(--brand-dark); font-size: 13px; }
+.ls-row .field { min-width: 0; }
+.ls-row input { min-width: 0; width: 100%; box-sizing: border-box; }
+.ls-row-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; justify-content: end; }
 @media (max-width: 760px) {
     .ld-editor { padding: 12px; }
     .ld-day { grid-template-columns: minmax(130px, 1fr) minmax(100px, 1fr); gap: 8px; padding: 10px; }
@@ -40,4 +50,9 @@
     .ld-apply { width: 100%; }
     .ld-apply .field { max-width: none; flex: 1; }
     .ld-heading > strong { width: 100%; }
+    .ls-row { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 10px; }
+    .ls-row .field:first-of-type { grid-column: 1 / -1; }
+    .ls-add-tools { align-items: stretch; }
+    .ls-add-tools .field { flex-basis: 100%; max-width: none; }
+    .ls-add-tools > button { flex: 1 1 130px; }
 }

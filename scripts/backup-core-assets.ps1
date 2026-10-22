@@ -124,6 +124,8 @@ $projectFiles = @(
     "server.js",
     "browser-accounts.js",
     "browser-device-diagnostics.js",
+    "salary-advances.js",
+    "salary-advance-routes.js",
     "web-credentials.js",
     "meal-management.js",
     "meal-routes.js",

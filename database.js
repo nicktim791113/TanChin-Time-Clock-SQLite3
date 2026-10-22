@@ -1,6 +1,7 @@
 // database.js
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('node:crypto');
 const Database = require('better-sqlite3');
 const webCredentials = require('./web-credentials');
 const { createMealStore } = require('./meal-management');
@@ -12,8 +13,9 @@ const { createLeaveEntitlementStore } = require('./leave-entitlements');
 const { createAnnualLeaveStore } = require('./annual-leave-store');
 const { createReviewWorkflow } = require('./review-workflow');
 const { createDashboardMetricStore } = require('./dashboard-metrics');
+const { createSalaryAdvanceStore } = require('./salary-advances');
 const { normalizeLeavePay } = require('./leave-type-pay');
-const { normalizeLeaveDateSelection, getLeaveDateSegments, EXPLICIT_DATES, LEGACY_RANGE } = require('./leave-date-selection');
+const { normalizeLeaveDateSelection, getLeaveDateSegments, EXPLICIT_DATES, EXPLICIT_SEGMENTS, LEGACY_RANGE } = require('./leave-date-selection');
 let db = null;
 let meals = null;
 let supervisors = null;
@@ -24,6 +26,7 @@ let leaveEntitlements = null;
 let annualLeave = null;
 let reviewWorkflow = null;
 let dashboardMetrics = null;
+let salaryAdvances = null;
 let currentDbFilePath = '';
 
 function init(dbFilePath) {
@@ -185,6 +188,18 @@ function init(dbFilePath) {
       withdrawn_at INTEGER,
       cancelled_at INTEGER
     );
+    CREATE TABLE IF NOT EXISTS leave_request_segments (
+      request_id TEXT NOT NULL,
+      id TEXT NOT NULL,
+      date TEXT NOT NULL,
+      start_at INTEGER NOT NULL,
+      end_at INTEGER NOT NULL,
+      units INTEGER NOT NULL CHECK(units > 0 AND units <= 2400),
+      PRIMARY KEY(request_id, id),
+      UNIQUE(request_id, start_at, end_at),
+      CHECK(end_at > start_at)
+    );
+    CREATE INDEX IF NOT EXISTS idx_leave_request_segments_period ON leave_request_segments(start_at, end_at);
     CREATE TABLE IF NOT EXISTS leave_approval_steps (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       request_id TEXT NOT NULL,
@@ -500,6 +515,7 @@ function init(dbFilePath) {
   leaveEntitlements.setAnnualProvider(annualLeave);
   reviewWorkflow = createReviewWorkflow(db);
   dashboardMetrics = createDashboardMetricStore(db, (entry) => addAuditLog(entry));
+  salaryAdvances = createSalaryAdvanceStore(db, (entry) => addAuditLog(entry));
 }
 
 function close() {
@@ -515,6 +531,7 @@ function close() {
   annualLeave = null;
   reviewWorkflow = null;
   dashboardMetrics = null;
+  salaryAdvances = null;
   currentDbFilePath = '';
 }
 
@@ -998,12 +1015,33 @@ function mapLeaveRequestRow(row) {
         ...row,
         duration_hours: Number(row.duration_hours || 0),
         date_selection_mode: row.date_selection_mode || LEGACY_RANGE,
-        daily_hours: row.date_selection_mode === EXPLICIT_DATES ? leaveEntitlements.charges(row.id) : []
+        daily_hours: [EXPLICIT_DATES, EXPLICIT_SEGMENTS].includes(row.date_selection_mode) ? leaveEntitlements.charges(row.id) : [],
+        ...(row.date_selection_mode === EXPLICIT_SEGMENTS ? { leave_segments: all(
+            'SELECT id, date, start_at AS startAt, end_at AS endAt, units FROM leave_request_segments WHERE request_id = ? ORDER BY start_at, end_at, id', row.id
+        ).map(({ units, ...segment }) => ({ ...segment, hours: units / 100 })) } : {})
     };
 }
 
+function assignLeaveSegmentIds(request, original = null, creating = false) {
+    if (request.date_selection_mode !== EXPLICIT_SEGMENTS) return request;
+    const existingIds = new Set((original?.leave_segments || []).map((segment) => segment.id));
+    return { ...request, leave_segments: request.leave_segments.map((segment) => {
+        if (!creating && segment.id && !existingIds.has(segment.id)) {
+            throw Object.assign(new Error('請假時段已變更或識別碼不屬於此單，請重新整理。'), { statusCode: 409 });
+        }
+        return { ...segment, id: creating || !segment.id ? `segment_${randomUUID()}` : segment.id };
+    }) };
+}
+
+function replaceLeaveSegments(request) {
+    run('DELETE FROM leave_request_segments WHERE request_id = ?', request.id);
+    if (request.date_selection_mode !== EXPLICIT_SEGMENTS) return;
+    const insert = db.prepare('INSERT INTO leave_request_segments (request_id, id, date, start_at, end_at, units) VALUES (?, ?, ?, ?, ?, ?)');
+    for (const segment of request.leave_segments) insert.run(request.id, segment.id, segment.date, segment.startAt, segment.endAt, Math.round(segment.hours * 100));
+}
+
 const createLeaveRequest = (request) => {
-    request = { ...request, ...normalizeLeaveDateSelection(request) };
+    request = assignLeaveSegmentIds({ ...request, ...normalizeLeaveDateSelection(request) }, null, true);
     const charges = Object.hasOwn(request, 'explicit_duration_hours') || request.daily_hours ?
         leaveEntitlements.allocation(request, request.daily_hours, request.explicit_duration_hours ?? request.duration_hours) : [];
     const insertRequest = db.prepare(`
@@ -1046,8 +1084,9 @@ const createLeaveRequest = (request) => {
         paper_comment: request.paper_comment ?? null,
         corrected_from_request_id: request.corrected_from_request_id ?? null
     };
-    db.transaction(() => {
+    return db.transaction(() => {
         insertRequest.run(requestForDb);
+        replaceLeaveSegments(request);
         if (request.status === 'pending_supervisor') reviewWorkflow.snapshot('leave', request, request.review_policy);
         leaveEntitlements.replaceCharges(request.id, charges);
         insertStep.run(
@@ -1070,6 +1109,7 @@ const createLeaveRequest = (request) => {
             isApproved ? (request.admin_decided_at || request.created_at) : null,
             request.created_at
         );
+        return getLeaveRequestById(request.id);
     })();
 };
 
@@ -1119,6 +1159,10 @@ const buildLeaveRequestWhere = (filters = {}) => {
     if (filters.overlapStartAt !== undefined && filters.overlapEndAt !== undefined) {
         clauses.push('start_at <= ? AND end_at > ?');
         params.push(Number(filters.overlapEndAt) || 0, Number(filters.overlapStartAt) || 0);
+        clauses.push(`(date_selection_mode <> 'explicit_segments' OR EXISTS (
+            SELECT 1 FROM leave_request_segments s WHERE s.request_id = leave_requests.id
+            AND s.start_at <= ? AND s.end_at > ?))`);
+        params.push(Number(filters.overlapEndAt) || 0, Number(filters.overlapStartAt) || 0);
         // Coarse request bounds keep the existing index useful. The correlated
         // date filter runs before LIMIT/OFFSET and is shared by count queries.
         clauses.push(`(date_selection_mode <> 'explicit_dates' OR EXISTS (
@@ -1129,6 +1173,9 @@ const buildLeaveRequestWhere = (filters = {}) => {
     }
     if (filters.endAfterAt !== undefined) {
         clauses.push('end_at > ?');
+        params.push(Number(filters.endAfterAt));
+        clauses.push(`(date_selection_mode <> 'explicit_segments' OR EXISTS (
+            SELECT 1 FROM leave_request_segments s WHERE s.request_id = leave_requests.id AND s.end_at > ?))`);
         params.push(Number(filters.endAfterAt));
         clauses.push(`(date_selection_mode <> 'explicit_dates' OR EXISTS (
             SELECT 1 FROM leave_entitlement_charges c WHERE c.request_id = leave_requests.id AND c.units > 0
@@ -1171,6 +1218,7 @@ const countLeaveRequests = (filters = {}) => {
 const hasOverlappingLeaveRequest = (employeeId, startAt, endAt, excludeId = '', selection = {}) => {
     const candidate = { ...selection, start_at: Number(startAt), end_at: Number(endAt) };
     const segments = getLeaveDateSegments(candidate);
+    if (!segments.length) return false;
     const rows = all(
         `SELECT * FROM leave_requests
          WHERE employee_id = ?
@@ -1178,8 +1226,8 @@ const hasOverlappingLeaveRequest = (employeeId, startAt, endAt, excludeId = '', 
            AND start_at < ?
            AND end_at > ?`,
         employeeId,
-        Number(endAt) || 0,
-        Number(startAt) || 0
+        segments[segments.length - 1].endAt,
+        segments[0].startAt
     );
     return rows.some((row) => {
         if (row.id === excludeId) return false;
@@ -1290,13 +1338,18 @@ const updatePaperLeaveRequest = ({ requestId, updates, auditLog }) => db.transac
         throw new Error('修正紙本請假補登時必須同時寫入稽核紀錄。');
     }
     const original = getLeaveRequestById(requestId);
-    if (original?.date_selection_mode === EXPLICIT_DATES && updates.date_selection_mode != null && updates.date_selection_mode !== EXPLICIT_DATES) {
+    if (original?.date_selection_mode === EXPLICIT_DATES && updates.date_selection_mode != null && ![EXPLICIT_DATES, EXPLICIT_SEGMENTS].includes(updates.date_selection_mode)) {
         throw Object.assign(new Error('逐日請假單不可改回連續區間；請保留逐日選擇並核對日期。'), { statusCode: 400 });
     }
+    if (original?.date_selection_mode === EXPLICIT_SEGMENTS && updates.date_selection_mode != null && updates.date_selection_mode !== EXPLICIT_SEGMENTS) {
+        throw Object.assign(new Error('多時段請假單不可改回其他日期模式；請保留各段實際起訖時間。'), { statusCode: 400 });
+    }
     const nextMode = updates.date_selection_mode ?? original?.date_selection_mode ?? LEGACY_RANGE;
-    if (nextMode === EXPLICIT_DATES) {
+    if ([EXPLICIT_DATES, EXPLICIT_SEGMENTS].includes(nextMode)) {
         updates = { ...updates, ...normalizeLeaveDateSelection({ ...original, ...updates, date_selection_mode: nextMode,
-            daily_hours: updates.daily_hours ?? original?.daily_hours }) };
+            daily_hours: updates.daily_hours ?? original?.daily_hours,
+            leave_segments: updates.leave_segments ?? updates.leaveSegments ?? original?.leave_segments }) };
+        updates = assignLeaveSegmentIds(updates, original);
     } else {
         updates = { ...updates, date_selection_mode: normalizeLeaveDateSelection({ ...updates, date_selection_mode: nextMode }).date_selection_mode };
     }
@@ -1356,9 +1409,11 @@ const updatePaperLeaveRequest = ({ requestId, updates, auditLog }) => db.transac
         updates.admin_decided_at || null,
         requestId
     );
-    addAuditLog(auditLog);
     if (charges) leaveEntitlements.replaceCharges(requestId, charges);
-    return getLeaveRequestById(requestId);
+    replaceLeaveSegments({ ...updates, id: requestId });
+    const saved = getLeaveRequestById(requestId);
+    addAuditLog(nextMode === EXPLICIT_SEGMENTS ? { ...auditLog, after_data: { ...auditLog.after_data, ...saved } } : auditLog);
+    return saved;
 })();
 
 function mapOvertimeRequestRow(row) {
@@ -2305,6 +2360,7 @@ module.exports = {
   getAnnualLeave: () => annualLeave,
   getReviewWorkflow: () => reviewWorkflow,
   getDashboardMetrics: () => dashboardMetrics,
+  getSalaryAdvances: () => salaryAdvances,
   getMeals: () => meals,
   init, close,
   getDatabasePath, backupDatabase, validateBackupDatabaseFile, replaceDatabaseFromBackup,

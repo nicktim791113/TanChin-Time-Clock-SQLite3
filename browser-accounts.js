@@ -165,6 +165,7 @@ function createBrowserAccounts(context) {
   function deviceBinding(authorization, device) {
     return { enabled: authorization?.securitySettings?.deviceBindingEnabled ?? false,
       newlyBound: authorization?.newlyBound === true,
+      deviceId: authorization?.deviceRecord?.device_id || '',
       deviceName: authorization?.deviceRecord?.device_name || device.deviceName || '',
       maxDevicesPerEmployee: authorization?.securitySettings?.maxDevicesPerEmployee ?? 4,
       boundDeviceCount: authorization?.boundDeviceCount ?? 0,

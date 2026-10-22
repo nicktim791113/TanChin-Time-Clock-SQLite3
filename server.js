@@ -14,6 +14,7 @@ const { attachSupervisorRoutes } = require('./supervisor-routes');
 const { attachRequestHistoryRoutes } = require('./request-history');
 const { attachLeaveEntitlementRoutes } = require('./leave-entitlement-routes');
 const { attachAnnualLeaveRoutes, ANNUAL_LEAVE_PERMISSIONS } = require('./annual-leave-routes');
+const { attachSalaryAdvanceRoutes, SALARY_ADVANCE_PERMISSIONS } = require('./salary-advance-routes');
 const { buildDashboardMetrics, attachDashboardMetricRoutes } = require('./dashboard-metrics');
 const { recentTaipeiDateRange, groupBrowserPunches, confirmedDeviceClear } = require('./admin-security-data');
 const { buildDeviceLoginDiagnostic, mapDeviceLoginDiagnostic } = require('./browser-device-diagnostics');
@@ -73,6 +74,10 @@ const ADMIN_PERMISSION_DEFINITIONS = [
   { code: 'admin.meals.manage', category: '午餐團膳', label: '參加資格與代登用餐', section: 'meals' },
   { code: 'admin.meals.settings', category: '午餐團膳', label: '供餐日與截止時間設定', section: 'meals' },
   { code: 'admin.meals.close', category: '午餐團膳', label: '結單與更新供應商訂餐', section: 'meals', highRisk: true },
+  { code: SALARY_ADVANCE_PERMISSIONS.view, category: '借支管理', label: '查看借支申請', section: 'salaryAdvances', delegatedOnly: true },
+  { code: SALARY_ADVANCE_PERMISSIONS.review, category: '借支管理', label: '審核與作廢借支申請', section: 'salaryAdvances', highRisk: true, delegatedOnly: true },
+  { code: SALARY_ADVANCE_PERMISSIONS.settings, category: '借支管理', label: '調整借支活動設定', section: 'salaryAdvances', highRisk: true, delegatedOnly: true },
+  { code: SALARY_ADVANCE_PERMISSIONS.export, category: '借支管理', label: '匯出借支總表', section: 'salaryAdvances', highRisk: true, delegatedOnly: true },
   { code: 'admin.supervisors.manage', category: '主管代辦', label: '指定員工的代辦主管', section: 'supervisors', highRisk: true },
   { code: 'admin.system.manage', category: '系統外觀與提醒', label: '主畫面與問候語設定', section: 'system' },
   { code: 'admin.bells.manage', category: '系統外觀與提醒', label: '響鈴與聲音設定', section: 'bells' },
@@ -91,6 +96,7 @@ const ADMIN_SECTION_RULES = [
   { id: 'leave', label: '請假管理', permissions: ['admin.leave.review', 'admin.leave.paperCreate', 'admin.leave.settings', 'admin.leave.balances.view', 'admin.leave.balances.manage', ANNUAL_LEAVE_PERMISSIONS.policyManage, ANNUAL_LEAVE_PERMISSIONS.grant, ANNUAL_LEAVE_PERMISSIONS.close] },
   { id: 'overtime', label: '加班管理', permissions: ['admin.overtime.view', 'admin.overtime.paperCreate'] },
   { id: 'meals', label: '午餐團膳', permissions: ['admin.meals.view'] },
+  { id: 'salaryAdvances', label: '借支管理', permissions: Object.values(SALARY_ADVANCE_PERMISSIONS) },
   { id: 'supervisors', label: '主管指定', permissions: ['admin.supervisors.manage', 'admin.leave.settings'] },
   { id: 'system', label: '系統設定', permissions: ['admin.system.manage'] },
   { id: 'bells', label: '響鈴設定', permissions: ['admin.bells.manage'] },
@@ -125,7 +131,7 @@ const ADMIN_PERMISSION_PRESETS = [
   {
     id: 'full_admin',
     label: '完整管理者',
-    description: '可使用一般管理者功能；他人網頁密碼與特休制度、給假、結轉須另行授權。',
+    description: '可使用一般管理者功能；他人網頁密碼、特休制度、給假、結轉及借支須另行授權。',
     permissions: ADMIN_PERMISSION_DEFINITIONS.filter((permission) => !permission.delegatedOnly).map((permission) => permission.code)
   },
   {
@@ -253,13 +259,12 @@ const EXTERNAL_API_PERMISSION_DEFINITIONS = [
     label: '外部打卡',
     description: '允許外部裝置送出卡號打卡',
     examples: ['POST /api/punch']
-  }
+  },
+  { code: 'salary_advances', label: '借支申請資料', description: '唯讀查詢員工借支申請及審核結果；不代表已付款或已扣薪', examples: ['GET /api/salary-advance-requests'] }
 ];
 const EXTERNAL_API_PERMISSION_CODES = new Set(EXTERNAL_API_PERMISSION_DEFINITIONS.map((item) => item.code));
 // 舊版單一 API Key 轉入多組 Key 時，不可自動取得升級後新增的寫入權限。
-const LEGACY_EXTERNAL_API_PERMISSIONS = EXTERNAL_API_PERMISSION_DEFINITIONS
-  .filter((item) => item.code !== 'employees.write')
-  .map((item) => item.code);
+const LEGACY_EXTERNAL_API_PERMISSIONS = ['employees', 'attendance', 'leave', 'overtime', 'punch'];
 const LEGACY_EXTERNAL_API_KEY_ID_PREFIX = 'legacy_external_api_';
 const LEGACY_EXTERNAL_API_KEY_NOTES = '由舊版單一 API Key 自動轉入。';
 const LEGACY_EMPLOYEE_WRITE_REVIEW_SETTING = 'legacyExternalApiEmployeeWriteReviewedV1151';
@@ -338,6 +343,15 @@ const API_ROUTE_CATALOG = [
   { category: '外部 API', method: 'GET', path: '/api/overtime-requests?start=YYYY-MM-DD&end=YYYY-MM-DD&status=approved', auth: 'API Key', description: '依日期區間查詢加班申請' },
   { category: '外部 API', method: 'GET', path: '/api/leave/requests?start=YYYY-MM-DD&end=YYYY-MM-DD', auth: 'API Key', description: '查詢請假申請紀錄（相容路徑）' },
   { category: '外部 API', method: 'GET', path: '/api/overtime/requests?start=YYYY-MM-DD&end=YYYY-MM-DD', auth: 'API Key', description: '查詢加班申請紀錄（相容路徑）' },
+  { category: '外部 API', method: 'GET', path: '/api/salary-advance-requests?cursor=0&limit=200', auth: 'API Key：salary_advances', description: '借支申請修訂事件（含取消）；後續游標搭配 cursorEventId，上界搭配 untilEventId，不表示已發放或扣薪' },
+  { category: '借支 API', method: 'GET', path: '/api/browser/employee/salary-advances', auth: '員工本人與有效裝置', description: '查看本人借支紀錄與活動設定，不開放代辦或身份模擬' },
+  { category: '借支 API', method: 'POST', path: '/api/browser/employee/salary-advances/submit', auth: '員工本人與有效裝置', description: '開放期間送交管理部審核；冪等送件識別碼防止重複建立' },
+  { category: '借支 API', method: 'POST', path: '/api/browser/employee/salary-advances/withdraw', auth: '員工本人與有效裝置', description: '撤回本人待管理部審核的申請，驗證修訂版本並留原因' },
+  { category: '借支 API', method: 'GET', path: '/api/browser/salary-advances', auth: '借支管理權限', description: '按月份查看借支申請、總額與可用操作' },
+  { category: '借支 API', method: 'POST', path: '/api/browser/salary-advances/settings', auth: '借支活動設定權限', description: '調整開放日期、金額、筆數與預計扣回月份；保留送件規則快照' },
+  { category: '借支 API', method: 'POST', path: '/api/browser/salary-advances/review', auth: '借支審核權限', description: '管理部直接核准或退回，不發放款項、不扣薪' },
+  { category: '借支 API', method: 'POST', path: '/api/browser/salary-advances/cancel', auth: '借支審核權限', description: '取消待審或已核准申請並建立修訂事件，不自動沖回ERP' },
+  { category: '借支 API', method: 'GET', path: '/api/browser/salary-advances/export', auth: '借支匯出權限', description: '下載借支明細與總表 Excel，工號保留前導零' },
 
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/health', auth: '公開', description: '查詢 Express 服務健康狀態摘要' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/login', auth: '公開', description: '瀏覽器入口登入，取得 Session Token' },
@@ -1220,7 +1234,11 @@ function normalizeClientDeviceInfo(deviceInfo = {}) {
     deviceToken,
     platform,
     browserName,
-    deviceName
+    deviceName,
+    identitySource: ['local_storage', 'cookie', 'generated'].includes(deviceInfo.identitySource) ? deviceInfo.identitySource : 'unknown',
+    tokenSource: ['local_storage', 'cookie', 'legacy', 'none'].includes(deviceInfo.tokenSource) ? deviceInfo.tokenSource : 'unknown',
+    localStorageStatus: ['available', 'unavailable'].includes(deviceInfo.localStorageStatus) ? deviceInfo.localStorageStatus : 'unknown',
+    cookieStorageStatus: ['available', 'unavailable'].includes(deviceInfo.cookieStorageStatus) ? deviceInfo.cookieStorageStatus : 'unknown'
   };
 }
 
@@ -1484,13 +1502,14 @@ function allocateLeaveSegmentDurations(segments, approvedHours) {
 
 function getActualLeaveAttendanceSegments(request) {
   return getLeaveDateSegments(request).map((segment) => ({
+    segmentId: segment.id || null,
     dayStartAt: new Date(`${segment.date}T00:00:00+08:00`).getTime(),
     dateText: segment.date,
     segmentStartAt: segment.startAt,
     segmentEndAt: segment.endAt,
     rawHours: (segment.endAt - segment.startAt) / 3_600_000,
     durationHours: segment.hours,
-    explicitDates: request.date_selection_mode === 'explicit_dates'
+    explicitDates: ['explicit_dates', 'explicit_segments'].includes(request.date_selection_mode)
   }));
 }
 
@@ -1534,6 +1553,7 @@ function buildApprovedLeaveAttendanceRecords({ employees, employeeMap, employeeI
         recordKind: 'leave',
         recordKindText: LEAVE_RECORD_KIND_TEXT,
         leaveRequestId: request.id,
+        leaveSegmentId: segment.segmentId,
         leaveTypeName,
         leaveStartText: formatTaipeiDateTime(segment.segmentStartAt),
         leaveEndText: formatTaipeiDateTime(segment.segmentEndAt),
@@ -1903,13 +1923,17 @@ function calculateLeaveDurationHours(startAt, endAt, submittedHours) {
 
 function resolveSubmittedLeaveSelection(body, startAt, endAt, original = null) {
   const mode = body?.dateSelectionMode ?? original?.date_selection_mode ?? 'legacy_range';
-  if (original?.date_selection_mode === 'explicit_dates' && mode !== 'explicit_dates') {
+  if (original?.date_selection_mode === 'explicit_segments' && mode !== 'explicit_segments') {
+    throw createHttpError('多時段請假不能改回單一範圍，請在時段明細內修正。', 400);
+  }
+  if (original?.date_selection_mode === 'explicit_dates' && !['explicit_dates', 'explicit_segments'].includes(mode)) {
     throw createHttpError('逐日請假不能改回連續日期模式，請重新核對勾選日期與每日時數。', 400);
   }
-  if (mode === 'explicit_dates') {
+  if (['explicit_dates', 'explicit_segments'].includes(mode)) {
     const selected = normalizeLeaveDateSelection({
       start_at: startAt, end_at: endAt, date_selection_mode: mode,
-      daily_hours: body?.dailyHours ?? original?.daily_hours
+      daily_hours: body?.dailyHours ?? original?.daily_hours,
+      leave_segments: body?.leaveSegments ?? original?.leave_segments
     });
     return { ...selected, explicit_duration_hours: selected.duration_hours };
   }
@@ -1920,6 +1944,17 @@ function resolveSubmittedLeaveSelection(body, startAt, endAt, original = null) {
     explicit_duration_hours: body?.durationHours || '',
     daily_hours: body?.dailyHours
   };
+}
+
+function resolveSubmittedLeavePeriod(body, original = null) {
+  if ((body?.dateSelectionMode ?? original?.date_selection_mode) === 'explicit_segments') {
+    const selection = resolveSubmittedLeaveSelection(body, null, null, original);
+    return { startAt: selection.start_at, endAt: selection.end_at, selection };
+  }
+  const startAt = parseLeaveDateTime(body?.startDate, body?.startTime, '09:00');
+  const endAt = parseLeaveDateTime(body?.endDate, body?.endTime, '18:00');
+  if (endAt <= startAt) throw createHttpError('請假結束時間必須晚於開始時間。', 400);
+  return { startAt, endAt, selection: resolveSubmittedLeaveSelection(body, startAt, endAt, original) };
 }
 
 function getLeaveSupervisorForEmployee(employee, routes = dbModule.getReviewSupervisors().rows()) {
@@ -1956,6 +1991,7 @@ function formatLeaveRequestForDashboard(request, lookup = buildLeaveLookup()) {
     leaveTypeName: type.name || request.leave_type_id,
     dateSelectionMode: request.date_selection_mode || 'legacy_range',
     dailyHours: dbModule.getLeaveEntitlements().charges(request.id),
+    leaveSegments: request.leave_segments || [],
     supervisorId: request.supervisor_id || '',
     supervisorName: supervisor.name || '',
     adminDecisionBy: request.admin_decision_by || '',
@@ -2027,7 +2063,8 @@ function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rang
     const leaveTypeName = typeMap.get(request.leave_type_id)?.name || request.leave_type_id;
     // Allocate the full request first, then filter dates; a narrow report must
     // never redistribute the entire request's hours onto the remaining dates.
-    const segments = getActualLeaveAttendanceSegments(request).filter((segment) =>
+    const allSegments = getActualLeaveAttendanceSegments(request);
+    const segments = allSegments.filter((segment) =>
       segment.segmentEndAt > effectiveStartMs && segment.segmentStartAt <= effectiveEndMs);
 
     segments.forEach((segment) => {
@@ -2042,9 +2079,10 @@ function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rang
         record.timestamp >= segment.segmentStartAt &&
         record.timestamp < segment.segmentEndAt
       );
+      const daySegments = request.date_selection_mode === 'explicit_segments'
+        ? allSegments.filter((item) => item.dateText === segment.dateText) : [segment];
       const punchesOutsideLeave = sameDayPunches.filter((record) =>
-        record.timestamp < segment.segmentStartAt ||
-        record.timestamp >= segment.segmentEndAt
+        !daySegments.some((item) => record.timestamp >= item.segmentStartAt && record.timestamp < item.segmentEndAt)
       );
       const durationHours = segment.durationHours;
 
@@ -2071,8 +2109,10 @@ function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rang
         });
       });
 
-      if (segment.segmentEndAt > now) return;
-      if (isLeaveFullDaySegment(segment, durationHours) && punchesOutsideLeave.length) {
+      if (daySegments[0] !== segment || daySegments.at(-1).segmentEndAt > now) return;
+      const dailyDurationHours = roundAttendanceHours(daySegments.reduce((sum, item) => sum + item.durationHours, 0));
+      const fullDayLeave = isLeaveFullDaySegment(segment, dailyDurationHours);
+      if (fullDayLeave && punchesOutsideLeave.length) {
         alerts.push({
           id: `leave_full_day_with_attendance_${request.id}_${segment.dayStartAt}`,
           alertType: 'full_day_leave_with_attendance',
@@ -2084,17 +2124,17 @@ function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rang
           requestId: request.id,
           leaveTypeName,
           startAt: segment.segmentStartAt,
-          endAt: segment.segmentEndAt,
+          endAt: daySegments.at(-1).segmentEndAt,
           punchAt: punchesOutsideLeave[0]?.timestamp || '',
           startText: formatTaipeiDateTime(segment.segmentStartAt),
-          endText: formatTaipeiDateTime(segment.segmentEndAt),
+          endText: formatTaipeiDateTime(daySegments.at(-1).segmentEndAt),
           punchText: `${punchesOutsideLeave.length} 筆打卡`,
-          durationHours,
+          durationHours: dailyDurationHours,
           detail: '這筆請假接近全天或全天，但同一天仍有請假區間外打卡，建議人工確認實際出勤與請假是否一致。'
         });
       }
 
-      if (!isLeaveFullDaySegment(segment, durationHours) && !punchesInsideLeave.length && !punchesOutsideLeave.length) {
+      if (!fullDayLeave && !sameDayPunches.length) {
         alerts.push({
           id: `leave_partial_missing_attendance_${request.id}_${segment.dayStartAt}`,
           alertType: 'partial_leave_missing_attendance',
@@ -2106,12 +2146,12 @@ function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rang
           requestId: request.id,
           leaveTypeName,
           startAt: segment.segmentStartAt,
-          endAt: segment.segmentEndAt,
+          endAt: daySegments.at(-1).segmentEndAt,
           punchAt: '',
           startText: formatTaipeiDateTime(segment.segmentStartAt),
-          endText: formatTaipeiDateTime(segment.segmentEndAt),
+          endText: formatTaipeiDateTime(daySegments.at(-1).segmentEndAt),
           punchText: '-',
-          durationHours,
+          durationHours: dailyDurationHours,
           detail: '這筆核准請假不是全天區間，但當天沒有任何上班或下班打卡，需確認是否另有出勤、補登或請假時數需調整。'
         });
       }
@@ -3639,11 +3679,23 @@ function authorizeEmployeeDeviceForLogin(employee, request, deviceInfo = {}) {
     };
   }
 
+  // A retained secret can recover its original binding after the local ID was lost or changed.
+  // Never infer device ownership from IP, browser metadata, or an unverified client ID.
+  let existingDevice = deviceInfo.deviceId ? dbModule.getEmployeeDevice(employee.id, deviceInfo.deviceId) : null;
+  if (deviceInfo.deviceToken && (!existingDevice || existingDevice.device_token_hash !== hashDeviceToken(deviceInfo.deviceToken))) {
+    const providedHash = hashDeviceToken(deviceInfo.deviceToken);
+    const matches = dbModule.loadEmployeeDevices(employee.id).filter((row) => row.device_token_hash === providedHash);
+    if (matches.length === 1) {
+      existingDevice = matches[0];
+      deviceInfo.deviceId = existingDevice.device_id;
+      request.deviceIdentityRecovered = true;
+    }
+  }
+
   if (!deviceInfo.deviceId) {
     throw createHttpError(withSupportCode('P211', '此帳號已啟用裝置綁定，請使用支援本地儲存的瀏覽器登入。'), 400);
   }
 
-  const existingDevice = dbModule.getEmployeeDevice(employee.id, deviceInfo.deviceId);
   if (existingDevice) {
     const providedHash = deviceInfo.deviceToken ? hashDeviceToken(deviceInfo.deviceToken) : '';
     if (!providedHash || existingDevice.device_token_hash !== providedHash) {
@@ -3661,6 +3713,9 @@ function authorizeEmployeeDeviceForLogin(employee, request, deviceInfo = {}) {
     };
   }
 
+  if (deviceInfo.localStorageStatus === 'unavailable' && deviceInfo.cookieStorageStatus === 'unavailable') {
+    throw createHttpError(withSupportCode('P216', '無法保存裝置綁定資料，請允許此網站使用網站資料或 Cookie 後再登入。'), 400);
+  }
   const employeeDevices = dbModule.loadEmployeeDevices(employee.id);
   if (employeeDevices.length >= securitySettings.maxDevicesPerEmployee) {
     throw createHttpError(withSupportCode('P213', `此裝置尚未綁定，已達每人 ${securitySettings.maxDevicesPerEmployee} 台上限；請使用已綁定裝置，或請管理者確認舊裝置。`), 403);
@@ -3840,6 +3895,7 @@ function getExternalApiPermissionForRequest(request) {
     pathText === '/api/overtime/requests'
   )) return 'overtime';
   if (method === 'POST' && pathText === '/api/punch') return 'punch';
+  if (method === 'GET' && pathText === '/api/salary-advance-requests') return 'salary_advances';
   return '';
 }
 
@@ -5339,11 +5395,7 @@ function attachBrowserRoutes(server) {
       const leaveType = leaveTypes.find((type) => type.id === leaveTypeId && type.enabled);
       if (!leaveType) throw createHttpError('請選擇有效的假別。', 400);
 
-      const startAt = parseLeaveDateTime(request.body?.startDate, request.body?.startTime, '09:00');
-      const endAt = parseLeaveDateTime(request.body?.endDate, request.body?.endTime, '18:00');
-      if (endAt <= startAt) throw createHttpError('請假結束時間必須晚於開始時間。', 400);
-
-      const selection = resolveSubmittedLeaveSelection(request.body, startAt, endAt);
+      const { startAt, endAt, selection } = resolveSubmittedLeavePeriod(request.body);
       const durationHours = selection.duration_hours;
       if (durationHours <= 0) throw createHttpError('請輸入有效的請假時數。', 400);
       if (dbModule.hasOverlappingLeaveRequest(employee.id, startAt, endAt, '', selection)) {
@@ -5375,13 +5427,13 @@ function attachBrowserRoutes(server) {
         updated_at: now
       };
       dbModule.getSupervisors().transaction(() => {
-      dbModule.createLeaveRequest(leaveRequest);
+      const savedLeaveRequest = dbModule.createLeaveRequest(leaveRequest);
       dbModule.addAuditLog(buildBrowserAuditLogEntry(request, {
         action: 'create',
         target_type: 'leave_request',
         target_id: leaveRequest.id,
         summary: `${employee.id} ${employee.name} 送出請假申請：${leaveType.name}`,
-        after_data: leaveRequest
+        after_data: savedLeaveRequest
       }));
       });
       notifyDesktop('leaveRequests', getBrowserSyncMeta(request));
@@ -6203,11 +6255,7 @@ function attachBrowserRoutes(server) {
       const leaveType = leaveTypes.find((type) => type.id === leaveTypeId && type.enabled);
       if (!leaveType) throw createHttpError('請選擇有效的假別。', 400);
 
-      const startAt = parseLeaveDateTime(request.body?.startDate, request.body?.startTime, '09:00');
-      const endAt = parseLeaveDateTime(request.body?.endDate, request.body?.endTime, '18:00');
-      if (endAt <= startAt) throw createHttpError('請假結束時間必須晚於開始時間。', 400);
-
-      const selection = resolveSubmittedLeaveSelection(request.body, startAt, endAt);
+      const { startAt, endAt, selection } = resolveSubmittedLeavePeriod(request.body);
       const durationHours = selection.duration_hours;
       if (durationHours <= 0) throw createHttpError('請輸入有效的請假時數。', 400);
       const overlappingEmployees = selectedEmployees.filter((employee) => dbModule.hasOverlappingLeaveRequest(employee.id, startAt, endAt, '', selection));
@@ -6251,14 +6299,14 @@ function attachBrowserRoutes(server) {
           created_at: now,
           updated_at: now
         };
-        dbModule.createLeaveRequest(leaveRequest);
+        const savedLeaveRequest = dbModule.createLeaveRequest(leaveRequest);
         dbModule.addAuditLog(buildBrowserAuditLogEntry(request, {
           action: 'create',
           target_type: 'leave_request',
           target_id: leaveRequest.id,
           summary: `管理者紙本補登 ${employee.id} ${employee.name} 已核准請假：${leaveType.name}`,
           after_data: {
-            ...leaveRequest,
+            ...savedLeaveRequest,
             paper_no: paperNo,
             paper_approved_by: paperApprovedBy,
             batch_employee_ids: employeeIds
@@ -6303,10 +6351,7 @@ function attachBrowserRoutes(server) {
       const leaveType = leaveTypes.find((type) => type.id === leaveTypeId && (type.enabled || type.id === original.leave_type_id));
       if (!leaveType) throw createHttpError('請選擇有效的假別。', 400);
 
-      const startAt = parseLeaveDateTime(request.body?.startDate, request.body?.startTime, '09:00');
-      const endAt = parseLeaveDateTime(request.body?.endDate, request.body?.endTime, '18:00');
-      if (endAt <= startAt) throw createHttpError('請假結束時間必須晚於開始時間。', 400);
-      const selection = resolveSubmittedLeaveSelection(request.body, startAt, endAt, original);
+      const { startAt, endAt, selection } = resolveSubmittedLeavePeriod(request.body, original);
       const durationHours = selection.duration_hours;
       if (durationHours <= 0) throw createHttpError('請輸入有效的請假時數。', 400);
       if (dbModule.hasOverlappingLeaveRequest(employee.id, startAt, endAt, original.id, selection)) {
@@ -7739,6 +7784,11 @@ function createServerApp() {
     db: dbModule, requireSession: requireBrowserSession, requireRole: requireBrowserRole,
     requirePermission: requireAdminPermission, auditEntry: buildBrowserAuditLogEntry,
     notify: (request) => { notifyDesktop('meals', getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); }
+  });
+  attachSalaryAdvanceRoutes(server, {
+    db: dbModule, requireSession: requireBrowserSession, hasPermission: hasAdminPermission,
+    auditEntry: buildBrowserAuditLogEntry, validateBoundDevice: validateBoundEmployeeDevice, requireExternalApiAccess,
+    notify: (request, type) => { notifyDesktop(type || 'salaryAdvances', getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); }
   });
   attachSupervisorRoutes(server, {
     db: dbModule, requireSession: requireBrowserSession, requireRole: requireBrowserRole,

@@ -7,6 +7,7 @@ const REASONS = Object.freeze({
     P213: '這是未綁定的裝置識別，且已達每人綁定上限。',
     P214: '目前登入工作階段缺少裝置資訊。',
     P215: '目前登入工作階段的裝置綁定已解除。',
+    P216: '無法保存裝置綁定資料，請允許此網站使用網站資料或 Cookie。',
     AUTH_INPUT_INVALID: '登入欄位不完整或格式不正確。',
     AUTH_INVALID_CREDENTIALS: '帳號或登入憑證未通過驗證。',
     AUTH_RATE_LIMIT: '登入嘗試過於頻繁，請稍後再試。',
@@ -33,7 +34,7 @@ function siteOrigin(request) {
 
 function failureCode(error, stage) {
     if (Object.hasOwn(REASONS, error?.diagnosticCode || '')) return error.diagnosticCode;
-    const supportCode = typeof error?.message === 'string' ? error.message.match(/\bP21[1-5]\b/)?.[0] : '';
+    const supportCode = typeof error?.message === 'string' ? error.message.match(/\bP21[1-6]\b/)?.[0] : '';
     if (supportCode) return supportCode;
     if (error?.statusCode === 429) return 'AUTH_RATE_LIMIT';
     if (error?.statusCode === 401) return stage === 'login' ? 'AUTH_INVALID_CREDENTIALS' : 'SESSION_INVALID';
@@ -68,6 +69,11 @@ function buildDeviceLoginDiagnostic({ request, employee, stage, success, error, 
         ipAddress: safe(request.socket?.remoteAddress, 80),
         userAgent: safe(request.headers?.['user-agent'], 512),
         tokenPresent: typeof device.deviceToken === 'string' && device.deviceToken.trim().length > 0,
+        identitySource: ['local_storage', 'cookie', 'generated'].includes(device.identitySource) ? device.identitySource : 'unknown',
+        tokenSource: ['local_storage', 'cookie', 'legacy', 'none'].includes(device.tokenSource) ? device.tokenSource : 'unknown',
+        localStorageStatus: ['available', 'unavailable'].includes(device.localStorageStatus) ? device.localStorageStatus : 'unknown',
+        cookieStorageStatus: ['available', 'unavailable'].includes(device.cookieStorageStatus) ? device.cookieStorageStatus : 'unknown',
+        identityRecovered: request.deviceIdentityRecovered === true,
         boundDeviceCount: Number.isInteger(boundDeviceCount) && boundDeviceCount >= 0 ? boundDeviceCount : 0,
         maxDevicesPerEmployee: settings.maxDevicesPerEmployee
     };
@@ -87,6 +93,11 @@ function mapDeviceLoginDiagnostic(record) {
         success: record.success !== false, failureCode: record.success !== false ? '' : code,
         reason: record.success !== false ? '登入或工作台驗證成功。' : REASONS[code],
         tokenPresent: data.tokenPresent === true,
+        identitySource: ['local_storage', 'cookie', 'generated'].includes(data.identitySource) ? data.identitySource : 'unknown',
+        tokenSource: ['local_storage', 'cookie', 'legacy', 'none'].includes(data.tokenSource) ? data.tokenSource : 'unknown',
+        localStorageStatus: ['available', 'unavailable'].includes(data.localStorageStatus) ? data.localStorageStatus : 'unknown',
+        cookieStorageStatus: ['available', 'unavailable'].includes(data.cookieStorageStatus) ? data.cookieStorageStatus : 'unknown',
+        identityRecovered: data.identityRecovered === true,
         boundDeviceCount: Number.isInteger(data.boundDeviceCount) && data.boundDeviceCount >= 0 ? data.boundDeviceCount : 0,
         maxDevicesPerEmployee: [1, 2, 3, 4].includes(data.maxDevicesPerEmployee) ? data.maxDevicesPerEmployee : 4 };
 }
