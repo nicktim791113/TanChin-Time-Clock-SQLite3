@@ -25,8 +25,8 @@ test('employee workbench order is account owned, persistent, validated and isola
     const employee = await cardLogin('E001', 'employee-card');
     assert.equal(employee.status, 200);
     const defaults = employee.dashboard.employeeWorkspaceNav.defaultOrder;
-    assert.deepEqual(defaults, ['leave-request', 'overtime-request', 'meals', 'salaryAdvances', 'leave-history',
-        'overtime-history', 'records', 'supervisor-review', 'supervisor', 'private', 'security']);
+    assert.deepEqual(defaults, ['leave', 'overtime', 'meals', 'salaryAdvances',
+        'records', 'supervisor-review', 'supervisor', 'private', 'security']);
     assert.equal(employee.dashboard.employeeWorkspaceNav.canEdit, true);
     assert.equal(employee.dashboard.employeeWorkspaceNav.source, 'default');
 
@@ -77,6 +77,27 @@ test('employee workbench order is account owned, persistent, validated and isola
         const saved = await request(route + '/save', employee.token, { order: ['meals', 'private'] });
         assert.equal(saved.status, 200);
         assert.deepEqual(saved.dashboard.employeeWorkspaceNav.order, ['meals', 'private', ...defaults.filter((id) => !['meals', 'private'].includes(id))]);
+    });
+
+    await t.test('legacy application and history ids merge at their first position without rewriting saved history', async () => {
+        const legacy = ['private', 'leave-history', 'records', 'overtime-request', 'meals',
+            'leave-request', 'supervisor', 'overtime-history', 'salaryAdvances', 'security', 'supervisor-review'];
+        const expected = ['private', 'leave', 'records', 'overtime', 'meals', 'supervisor',
+            'salaryAdvances', 'security', 'supervisor-review'];
+        db.saveWorkspaceNavOrderRecord({ role: 'employee', nav_type: 'main', scope: 'personal', employee_id: 'E001', order: legacy });
+        const migrated = (await request(route, employee.token)).employeeWorkspaceNav;
+        assert.deepEqual(migrated.order, expected);
+        assert.equal(migrated.source, 'custom');
+        assert.deepEqual(db.getWorkspaceNavOrderRecord('employee', 'main', 'personal', 'E001').order, legacy);
+        // A previously loaded client can still save. The persisted form becomes canonical.
+        const saved = await request(route + '/save', employee.token, { order: legacy });
+        assert.equal(saved.status, 200);
+        assert.deepEqual(saved.dashboard.employeeWorkspaceNav.order, expected);
+        assert.deepEqual(db.getWorkspaceNavOrderRecord('employee', 'main', 'personal', 'E001').order, expected);
+        assert.deepEqual(saved.dashboard.supervisorProxy, employee.dashboard.supervisorProxy);
+        assert.deepEqual(saved.dashboard.supervisorReview, employee.dashboard.supervisorReview);
+        const mixed = await request(route + '/save', employee.token, { order: ['leave-history', 'private', 'leave', 'overtime'] });
+        assert.deepEqual(mixed.dashboard.employeeWorkspaceNav.order, ['leave', 'private', 'overtime', ...defaults.filter((id) => !['leave', 'private', 'overtime'].includes(id))]);
     });
 
     await t.test('developer impersonation may view but cannot modify the target employee preference', async () => {

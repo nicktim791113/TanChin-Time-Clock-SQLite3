@@ -62,6 +62,24 @@ test('employee active salary panel has personal help while a hidden panel does n
     assert.equal(another.run('workbenchHelpContext(false).topic[0]'), '考勤報表');
 });
 
+test('integrated employee pages explain their distinct review and draft rules without changing admin context', () => {
+    const employee = loadHelp({ role: 'employee', section: '', salaryVisible: false });
+    employee.run("state.employeeWorkspacePanel = 'leave'");
+    assert.equal(employee.run('workbenchHelpContext(false).topic[0]'), '我的請假');
+    assert.match(employee.run('workbenchHelpContext(false).topic[3].join(" ")'), /管理部終審/);
+    assert.match(employee.run('workbenchHelpContext(false).topic[3].join(" ")'), /重整／關頁不保存/);
+    employee.run("state.employeeWorkspacePanel = 'overtime'");
+    assert.equal(employee.run('workbenchHelpContext(false).topic[0]'), '我的加班');
+    assert.match(employee.run('workbenchHelpContext(false).topic[3].join(" ")'), /僅待主管時可撤回/);
+    assert.match(employee.run('workbenchHelpContext(false).topic[3].join(" ")'), /新申請只限本人/);
+    employee.run("state.employeeWorkspacePanel = 'records'");
+    assert.equal(employee.run('workbenchHelpContext(false).topic[0]'), '員工工作台');
+
+    const admin = loadHelp({ role: 'admin', section: 'reports', salaryVisible: false });
+    admin.run("state.employeeWorkspacePanel = 'leave'");
+    assert.equal(admin.run('workbenchHelpContext(false).topic[0]'), '考勤報表');
+});
+
 test('salary controls explain actual management review, cancellation and monthly export without using leave workflows', () => {
     const ui = loadHelp();
     const cancel = ui.describe({ label: '取消', action: 'cancel' });

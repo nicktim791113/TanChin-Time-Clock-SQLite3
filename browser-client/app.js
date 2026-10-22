@@ -9928,21 +9928,17 @@ function renderEmployeeWorkspaceItems(dashboard) {
                 `
         },
         {
-            id: "leave-request",
-            label: "請假申請",
-            meta: `${leave.leaveTypes?.length || 0} 種假別`,
-            html: renderEmployeeLeaveApplicationPanel(dashboard)
-        },
-        {
-            id: "leave-history",
-            label: "我的請假紀錄",
-            meta: `${leave.myRequests?.length || 0} 筆`,
-            html: renderEmployeeLeaveRecordsPanel(dashboard)
+            id: "leave",
+            label: "我的請假",
+            meta: "申請／紀錄／審核進度",
+            html: renderEmployeeRequestWorkspace("leave")
         }
     ];
 }
 
 function renderEmployeeWorkspacePanel(dashboard) {
+    const legacyPanelIds = { "leave-request": "leave", "leave-history": "leave", "overtime-request": "overtime", "overtime-history": "overtime" };
+    state.employeeWorkspacePanel = legacyPanelIds[state.employeeWorkspacePanel] || state.employeeWorkspacePanel;
     const items = orderEmployeeWorkspaceItems(renderEmployeeWorkspaceItems(dashboard), dashboard);
     const activeItem = items.find((item) => item.id === state.employeeWorkspacePanel);
     return `
@@ -10736,22 +10732,15 @@ const originalRenderEmployeeWorkspaceItemsWithOvertime = renderEmployeeWorkspace
 renderEmployeeWorkspaceItems = function renderEmployeeWorkspaceItemsOvertimeOverride(dashboard) {
     const items = originalRenderEmployeeWorkspaceItemsWithOvertime(dashboard);
     if (!dashboard?.overtime) return items;
-    const overtime = dashboard.overtime || {};
     const overtimeItems = [
         {
-            id: "overtime-request",
-            label: "加班申請",
-            meta: '本人申請',
-            html: renderEmployeeOvertimeApplicationPanel(dashboard)
-        },
-        {
-            id: "overtime-history",
-            label: "我的加班紀錄",
-            meta: `${overtime.myRequests?.length || 0} 筆`,
-            html: renderEmployeeOvertimeRecordsPanel(dashboard)
+            id: "overtime",
+            label: "我的加班",
+            meta: "申請／紀錄／審核進度",
+            html: renderEmployeeRequestWorkspace("overtime")
         }
     ];
-    const insertIndex = items.findIndex((item) => item.id === "leave-history");
+    const insertIndex = items.findIndex((item) => item.id === "leave");
     if (insertIndex === -1) return [...items, ...overtimeItems];
     return [
         ...items.slice(0, insertIndex + 1),

@@ -644,12 +644,20 @@ function getWorkspaceNavDefaultOrder(role) {
 }
 
 const EMPLOYEE_WORKSPACE_NAV_DEFAULT_ORDER = [
-  'leave-request', 'overtime-request', 'meals', 'salaryAdvances', 'leave-history',
-  'overtime-history', 'records', 'supervisor-review', 'supervisor', 'private', 'security'
+  'leave', 'overtime', 'meals', 'salaryAdvances', 'records',
+  'supervisor-review', 'supervisor', 'private', 'security'
 ];
+const EMPLOYEE_WORKSPACE_NAV_LEGACY_IDS = {
+  'leave-request': 'leave', 'leave-history': 'leave',
+  'overtime-request': 'overtime', 'overtime-history': 'overtime'
+};
 
 function normalizeEmployeeWorkspaceNavOrder(order = []) {
-  const submitted = normalizeStringList(order).filter((id) => EMPLOYEE_WORKSPACE_NAV_DEFAULT_ORDER.includes(id));
+  // Merge each old application/history pair at its first saved position. Reading
+  // preferences does not rewrite the historic record or alter other workspaces.
+  const submitted = [...new Set(normalizeStringList(order)
+    .map((id) => EMPLOYEE_WORKSPACE_NAV_LEGACY_IDS[id] || id)
+    .filter((id) => EMPLOYEE_WORKSPACE_NAV_DEFAULT_ORDER.includes(id)))];
   return [...submitted, ...EMPLOYEE_WORKSPACE_NAV_DEFAULT_ORDER.filter((id) => !submitted.includes(id))];
 }
 
@@ -673,8 +681,9 @@ function validateEmployeeWorkspaceNavOwner(request) {
 }
 
 function validateEmployeeWorkspaceNavOrder(order) {
-  if (!Array.isArray(order) || order.length > EMPLOYEE_WORKSPACE_NAV_DEFAULT_ORDER.length
-      || order.some((id) => typeof id !== 'string' || !EMPLOYEE_WORKSPACE_NAV_DEFAULT_ORDER.includes(id))
+  const accepted = [...EMPLOYEE_WORKSPACE_NAV_DEFAULT_ORDER, ...Object.keys(EMPLOYEE_WORKSPACE_NAV_LEGACY_IDS)];
+  if (!Array.isArray(order) || order.length > accepted.length
+      || order.some((id) => typeof id !== 'string' || !accepted.includes(id))
       || new Set(order).size !== order.length) {
     throw createHttpError('個人功能順序格式不正確，請重新整理後再試。', 400);
   }
