@@ -43,13 +43,66 @@ test('automatic hours never exceed minute intervals and manual adjustments survi
         ui.run(`collectLeaveSegments([{date:'2026-10-26',startTime:'09:00',endTime:'09:${text}',hours:'${hours}'}])`);
     }
     ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.rows=[{date:'2026-10-26',startTime:'09:00',endTime:'12:00',hours:'3',manual:false}]");
-    input(ui, 'leave', 'endTime', '13:00', 0); assert.equal(ui.run("erState('leave').draft.rows[0].hours"), '4');
+    input(ui, 'leave', 'endTime', '13:00', 0); assert.equal(ui.run("erState('leave').draft.rows[0].hours"), '3.33');
     input(ui, 'leave', 'hours', '2.5', 0); input(ui, 'leave', 'endTime', '14:00', 0);
     assert.equal(ui.run("erState('leave').draft.rows[0].hours"), '2.5');
     input(ui, 'leave', 'commonHours', '7.5'); input(ui, 'leave', 'commonEnd', '19:00');
     assert.equal(ui.run("erState('leave').draft.commonHours"), '7.5');
     input(ui, 'leave', 'endTime', '10:00', 0);
     assert.throws(() => ui.run("erBuildPayload('leave',erState('leave').draft)"), /不得超過/);
+});
+
+test('employee defaults separate lunch break from net leave hours and retain overtime two-hour duration', () => {
+    const ui = loadUi();
+    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.rows=[erNewRow(erState('leave').draft,'2026-10-26')]; erState('overtime').draft=erNewDraft('overtime')");
+    const leave = ui.run("erState('leave').draft"), overtime = ui.run("erState('overtime').draft");
+    assert.equal(leave.rows[0].startTime, '08:20'); assert.equal(leave.rows[0].endTime, '17:00');
+    assert.equal(leave.rows[0].breakMinutes, '40'); assert.equal(leave.rows[0].hours, '8');
+    assert.equal(overtime.startTime, '17:30'); assert.equal(overtime.endTime, '19:30'); assert.equal(overtime.durationHours, '2');
+    const body = JSON.parse(ui.run("JSON.stringify(erBuildPayload('leave',erState('leave').draft))"));
+    assert.equal(body.leaveSegments[0].breakMinutes, 40); assert.equal(body.durationHours, 8);
+    assert.match(ui.run("erEditor('leave')"), /data-er-row-field="breakMinutes"/);
+    assert.match(ui.run("erConfirmation('leave',erState('leave').draft)"), /休息 40 分鐘/);
+});
+
+test('leave auto break tracks full lunch boundaries, manual rest persists, and restore auto recalculates net', async () => {
+    const ui = loadUi();
+    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.rows=[erNewRow(erState('leave').draft,'2026-10-26')]");
+    const row = ui.run("erState('leave').draft.rows[0]");
+    input(ui, 'leave', 'endTime', '12:59', 0); assert.equal(row.breakMinutes, '0'); assert.equal(row.hours, '4.65');
+    input(ui, 'leave', 'endTime', '13:00', 0); assert.equal(row.breakMinutes, '40'); assert.equal(row.hours, '4');
+    input(ui, 'leave', 'startTime', '12:20', 0); assert.equal(row.breakMinutes, '40'); assert.equal(row.hours, '');
+    input(ui, 'leave', 'startTime', '12:21', 0); assert.equal(row.breakMinutes, '0'); assert.equal(row.hours, '0.65');
+    input(ui, 'leave', 'startTime', '08:20', 0); input(ui, 'leave', 'endTime', '17:00', 0);
+    input(ui, 'leave', 'breakMinutes', '60', 0); assert.equal(row.hours, '7.66');
+    input(ui, 'leave', 'endTime', '18:00', 0); assert.equal(row.breakMinutes, '60'); assert.equal(row.hours, '8.66');
+    input(ui, 'leave', 'hours', '7.5', 0); input(ui, 'leave', 'endTime', '19:00', 0); assert.equal(row.hours, '7.5');
+    input(ui, 'leave', 'breakMinutes', '30', 0); assert.equal(row.manual, false); assert.equal(row.hours, '10.16');
+    await ui.run("erHandleAction({dataset:{kind:'leave',action:'er-auto-break',row:'0'}})");
+    assert.equal(row.breakMinutes, '40'); assert.equal(row.hours, '10'); assert.equal(row.breakManual, false);
+    input(ui, 'leave', 'endTime', '12:20', 0); assert.equal(row.breakMinutes, '0'); assert.equal(row.hours, '4');
+});
+
+test('common break settings copy into new days and invalid or excessive rest cannot be submitted', async () => {
+    const ui = loadUi();
+    ui.run("erState('leave').draft=erNewDraft('leave')");
+    input(ui, 'leave', 'commonHours', '7'); input(ui, 'leave', 'commonBreakMinutes', '60');
+    const draft = ui.run("erState('leave').draft");
+    assert.equal(draft.commonHours, '7.66'); assert.equal(draft.commonManual, false);
+    input(ui, 'leave', 'commonEnd', '18:00'); assert.equal(draft.commonBreakMinutes, '60'); assert.equal(draft.commonHours, '8.66');
+    ui.run("erState('leave').draft.rows=[erNewRow(erState('leave').draft,'2026-10-26')]");
+    assert.equal(draft.rows[0].breakMinutes, '60'); assert.equal(draft.rows[0].breakManual, true);
+    for (const invalid of ['', '-1', '0.5', '580']) {
+        input(ui, 'leave', 'breakMinutes', invalid, 0);
+        assert.throws(() => ui.run("erBuildPayload('leave',erState('leave').draft)"), /休息|時數/);
+    }
+    input(ui, 'leave', 'breakMinutes', '60', 0); input(ui, 'leave', 'hours', '9', 0);
+    assert.throws(() => ui.run("erBuildPayload('leave',erState('leave').draft)"), /休息|不得超過/);
+    await ui.run("erHandleAction({dataset:{kind:'leave',action:'er-auto-break'}})");
+    assert.equal(draft.commonBreakMinutes, '40'); assert.equal(draft.commonHours, '9');
+    await ui.run("erHandleAction({dataset:{kind:'leave',action:'er-apply-time'}})");
+    await ui.run("erHandleAction({dataset:{kind:'leave',action:'er-confirm-apply-time'}})");
+    assert.equal(draft.rows[0].breakMinutes, '40'); assert.equal(draft.rows[0].hours, '9');
 });
 
 test('overtime keeps full continuous end date and manual hours, including more than one midnight', () => {
@@ -141,7 +194,7 @@ test('server conflict keeps the exact leave draft and inline discard or apply re
     await ui.run("erHandleAction({dataset:{kind:'leave',action:'er-apply-time'}})");
     assert.equal(original.rows[0].hours, '2.5');
     await ui.run("erHandleAction({dataset:{kind:'leave',action:'er-confirm-apply-time'}})");
-    assert.equal(original.rows[0].hours, '9');
+    assert.equal(original.rows[0].hours, '8');
     await ui.run("erHandleAction({dataset:{kind:'leave',action:'er-discard'}})");
     await ui.run("erHandleAction({dataset:{kind:'leave',action:'er-confirm-discard'}})");
     assert.equal(ui.run("erState('leave').draft"), null); assert.equal(ui.confirmations.length, 0);

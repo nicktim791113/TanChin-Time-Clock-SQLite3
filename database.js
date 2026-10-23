@@ -195,6 +195,7 @@ function init(dbFilePath) {
       start_at INTEGER NOT NULL,
       end_at INTEGER NOT NULL,
       units INTEGER NOT NULL CHECK(units > 0 AND units <= 2400),
+      break_minutes INTEGER CHECK(break_minutes >= 0 AND break_minutes < 1440),
       PRIMARY KEY(request_id, id),
       UNIQUE(request_id, start_at, end_at),
       CHECK(end_at > start_at)
@@ -424,6 +425,11 @@ function init(dbFilePath) {
             console.log('[資料庫] punch_records 安全欄位升級成功！');
         }
 
+        const leaveSegmentColumns = db.prepare('PRAGMA table_info(leave_request_segments)').all();
+        if (!leaveSegmentColumns.some((column) => column.name === 'break_minutes')) {
+            // NULL means an older request has no separately recorded rest time.
+            run('ALTER TABLE leave_request_segments ADD COLUMN break_minutes INTEGER CHECK(break_minutes >= 0 AND break_minutes < 1440)');
+        }
         const leaveRequestTableInfo = db.prepare("PRAGMA table_info(leave_requests)").all();
         const leaveRequestColumns = leaveRequestTableInfo.map(col => col.name);
         if (!leaveRequestColumns.includes('date_selection_mode')) {
@@ -1019,8 +1025,8 @@ function mapLeaveRequestRow(row) {
         date_selection_mode: row.date_selection_mode || LEGACY_RANGE,
         daily_hours: [EXPLICIT_DATES, EXPLICIT_SEGMENTS].includes(row.date_selection_mode) ? leaveEntitlements.charges(row.id) : [],
         ...(row.date_selection_mode === EXPLICIT_SEGMENTS ? { leave_segments: all(
-            'SELECT id, date, start_at AS startAt, end_at AS endAt, units FROM leave_request_segments WHERE request_id = ? ORDER BY start_at, end_at, id', row.id
-        ).map(({ units, ...segment }) => ({ ...segment, hours: units / 100 })) } : {})
+            'SELECT id, date, start_at AS startAt, end_at AS endAt, units, break_minutes FROM leave_request_segments WHERE request_id = ? ORDER BY start_at, end_at, id', row.id
+        ).map(({ units, break_minutes, ...segment }) => ({ ...segment, hours: units / 100, ...(break_minutes == null ? {} : { breakMinutes: break_minutes }) })) } : {})
     };
 }
 
@@ -1031,15 +1037,21 @@ function assignLeaveSegmentIds(request, original = null, creating = false) {
         if (!creating && segment.id && !existingIds.has(segment.id)) {
             throw Object.assign(new Error('請假時段已變更或識別碼不屬於此單，請重新整理。'), { statusCode: 409 });
         }
-        return { ...segment, id: creating || !segment.id ? `segment_${randomUUID()}` : segment.id };
+        const previous = original?.leave_segments?.find((row) => row.id === segment.id);
+        // Cached clients may omit this newer optional field even on a note-only
+        // correction. Keep known rest only when that exact period is unchanged.
+        const preservedRest = !Object.hasOwn(segment, 'breakMinutes') && previous?.breakMinutes != null &&
+            previous.startAt === segment.startAt && previous.endAt === segment.endAt && previous.hours === segment.hours
+            ? { breakMinutes: previous.breakMinutes } : {};
+        return { ...segment, ...preservedRest, id: creating || !segment.id ? `segment_${randomUUID()}` : segment.id };
     }) };
 }
 
 function replaceLeaveSegments(request) {
     run('DELETE FROM leave_request_segments WHERE request_id = ?', request.id);
     if (request.date_selection_mode !== EXPLICIT_SEGMENTS) return;
-    const insert = db.prepare('INSERT INTO leave_request_segments (request_id, id, date, start_at, end_at, units) VALUES (?, ?, ?, ?, ?, ?)');
-    for (const segment of request.leave_segments) insert.run(request.id, segment.id, segment.date, segment.startAt, segment.endAt, Math.round(segment.hours * 100));
+    const insert = db.prepare('INSERT INTO leave_request_segments (request_id, id, date, start_at, end_at, units, break_minutes) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    for (const segment of request.leave_segments) insert.run(request.id, segment.id, segment.date, segment.startAt, segment.endAt, Math.round(segment.hours * 100), segment.breakMinutes ?? null);
 }
 
 const createLeaveRequest = (request) => {

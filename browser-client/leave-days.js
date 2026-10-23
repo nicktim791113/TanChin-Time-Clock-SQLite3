@@ -98,7 +98,7 @@ function renderLeaveDaysSummary(request) {
         const dates = new Set(rows.map((row) => row.date || lsDateTime(row.startAt).date));
         return `<details class="ld-request-summary"><summary>實際請假 ${dates.size} 日 · ${rows.length} 段</summary><ul>${rows.map((row) => {
             const start = lsDateTime(row.startAt), end = lsDateTime(row.endAt);
-            return `<li><span>${ldEscape(row.date || start.date)} ${ldEscape(start.time)}–${ldEscape(end.date !== start.date ? '24:00' : end.time)}</span><strong>${ldEscape(row.hours)} 小時</strong></li>`;
+            return `<li><span>${ldEscape(row.date || start.date)} ${ldEscape(start.time)}–${ldEscape(end.date !== start.date ? '24:00' : end.time)}${row.breakMinutes !== undefined && row.breakMinutes !== null ? `<small class="ls-break-summary">休息 ${ldEscape(row.breakMinutes)} 分鐘</small>` : ''}</span><strong>${ldEscape(row.hours)} 小時</strong></li>`;
         }).join('')}</ul><p>只計入列出的時段；日期之間及同日時段之間的空檔不算請假。</p></details>`;
     }
     if (request?.dateSelectionMode !== 'explicit_dates' && request?.date_selection_mode !== 'explicit_dates') return '<small class="ld-legacy-note">舊單沿用原起訖範圍；尚未確認逐日請假日期。</small>';
@@ -114,11 +114,13 @@ function renderLeaveDaysEditor({ batch = false } = {}) {
         <div class="ld-heading"><div><h4>同一張單的請假時段</h4><p>同一假別可加入多個日期或區間，全部時段一起送出審核。</p></div><strong data-ld-summary aria-live="polite">尚未加入時段</strong></div>
         <p class="ld-note">先填上方的新增區間與每日起訖，再加入下方清單。可重複加入其他日期，也可在同一天新增上午、下午等不重疊的時段。只列入清單中的時段。</p>
         ${batch ? '<p class="ld-note">所選員工共用下方所有時段與時數；每位員工各建立一張完整申請。班表不同時請分開送出。</p>' : ''}
-        <div class="ls-add-tools"><label class="field"><span>加入區間的每日時數</span><input type="number" min="0.01" max="24" step="0.01" data-ls-batch-hours placeholder="扣除午休後，例如 8" aria-label="加入區間的每日實際請假時數"></label>
+        <div class="ls-add-tools"><label class="field"><span>每日休息（分鐘）</span><input type="number" min="0" max="1439" step="1" data-ls-batch-break aria-label="加入區間的每日休息分鐘"></label>
+            <label class="field"><span>每日實際請假時數</span><input type="number" min="0.01" max="24" step="0.01" data-ls-batch-hours placeholder="依起訖減休息計算" aria-label="加入區間的每日實際請假時數"></label>
+            <button type="button" class="outline-btn" data-ls-action="auto-batch">恢復自動計算</button>
             <label class="ls-weekends"><input type="checkbox" data-ls-weekends>多日區間包含週末</label>
             <button type="button" class="outline-btn" data-ls-action="add-range">加入上方日期區間</button>
             <button type="button" class="outline-btn" data-ls-action="add-one">新增單一時段</button></div>
-        <p class="ld-note">多日區間預設只加入週一至五，請自行刪除國定假日並核對補班日。每段時數須扣除午休等非工作時間；結束 00:00 表示該日 24:00，跨夜請拆成兩天。最多 740 段，最早至最晚日期最多 370 日。</p>
+        <p class="ld-note">完整涵蓋 12:20–13:00 時預帶休息 40 分鐘，其他時段預帶 0 分鐘；可另外修改休息分鐘，實際時數會重新計算，也可再自行調整實際時數。多日區間預設只加入週一至五，請自行核對假日與補班日。結束 00:00 表示該日 24:00，跨夜請拆成兩天。最多 740 段，最早至最晚日期最多 370 日。</p>
         <p class="ld-message" data-ld-message role="status"></p><div class="ls-rows" data-ls-rows></div>
     </section>`;
 }
@@ -130,11 +132,28 @@ function lsDateTime(timestamp) {
 }
 function lsRowFromSegment(segment) {
     const start = lsDateTime(segment.startAt), end = lsDateTime(segment.endAt);
-    return { id: segment.id || '', date: segment.date || start.date, startTime: start.time, endTime: end.time, hours: String(segment.hours ?? '') };
+    // Historical hours are already net. Never invent or deduct a lunch break during correction.
+    return { id: segment.id || '', date: segment.date || start.date, startTime: start.time, endTime: end.time, hours: String(segment.hours ?? ''), manual: true, breakManual: true,
+        ...(segment.breakMinutes !== undefined && segment.breakMinutes !== null ? { breakMinutes: String(segment.breakMinutes) } : {}) };
 }
 function lsReadRows(form) {
     return [...form.querySelectorAll('[data-ls-row]')].map((row) => ({ id: row.dataset.lsId || '',
-        ...Object.fromEntries(['date', 'startTime', 'endTime', 'hours'].map((key) => [key, row.querySelector(`[data-ls-field="${key}"]`).value])) }));
+        ...Object.fromEntries(['date', 'startTime', 'endTime', 'hours'].map((key) => [key, row.querySelector(`[data-ls-field="${key}"]`).value])),
+        manual: row.dataset.lsManual === 'true', breakManual: row.dataset.lsBreakManual === 'true',
+        ...(row.dataset.lsBreakKnown === 'true' ? { breakMinutes: row.querySelector('[data-ls-field="breakMinutes"]').value } : {}) }));
+}
+function leaveSegmentElapsedMinutes(startTime, endTime) {
+    if (![startTime, endTime].every((time) => /^([01]\d|2[0-3]):[0-5]\d$/.test(time || ''))) return 0;
+    const minutes = (time) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
+    return Math.max(0, (endTime === '00:00' ? 1440 : minutes(endTime)) - minutes(startTime));
+}
+function leaveSegmentDefaultBreakMinutes(startTime, endTime) {
+    return leaveSegmentElapsedMinutes(startTime, endTime) > 0 && startTime <= '12:20' && (endTime === '00:00' || endTime >= '13:00') ? 40 : 0;
+}
+function leaveSegmentNetHours(startTime, endTime, breakMinutes) {
+    const elapsed = leaveSegmentElapsedMinutes(startTime, endTime), rest = Number(breakMinutes);
+    if (!/^\d+$/.test(String(breakMinutes)) || !Number.isSafeInteger(rest) || rest < 0 || rest >= elapsed) return '';
+    return String(Math.floor((elapsed - rest) * 100 / 60) / 100);
 }
 function collectLeaveSegments(rows) {
     if (!rows.length || rows.length > 740) throw new Error('請先加入至少 1 段請假時段，最多 740 段。');
@@ -145,9 +164,11 @@ function collectLeaveSegments(rows) {
         const startAt = Date.parse(`${row.date}T${row.startTime}:00+08:00`), endAt = row.endTime === '00:00'
             ? Date.parse(`${row.date}T00:00:00+08:00`) + 86400000 : Date.parse(`${row.date}T${row.endTime}:00+08:00`);
         if (endAt <= startAt) throw new Error(`${label}結束時間須晚於開始；跨夜請分成兩天填寫。`);
+        const hasBreak = row.breakMinutes !== undefined && row.breakMinutes !== null, breakMinutes = hasBreak ? Number(row.breakMinutes) : 0;
+        if (hasBreak && (!/^\d+$/.test(String(row.breakMinutes)) || !Number.isSafeInteger(breakMinutes) || breakMinutes < 0 || breakMinutes * 60000 >= endAt - startAt)) throw new Error(`${label}休息分鐘須為 0 以上的整數，且小於該段起訖時間。`);
         const units = Math.round(Number(row.hours) * 100);
-        if (!/^\d+(\.\d{1,2})?$/.test(String(row.hours)) || !Number.isSafeInteger(units) || units <= 0 || units > 2400 || units * 36000 > endAt - startAt) throw new Error(`${label}實際時數須大於 0、最多兩位小數，且不得超過該段起訖時間。`);
-        return { ...(row.id ? { id: row.id } : {}), date: row.date, startAt, endAt, hours: units / 100 };
+        if (!/^\d+(\.\d{1,2})?$/.test(String(row.hours)) || !Number.isSafeInteger(units) || units <= 0 || units > 2400 || units * 36000 > endAt - startAt - breakMinutes * 60000) throw new Error(`${label}實際時數須大於 0、最多兩位小數，且不得超過該段起訖時間扣除休息後的時數。`);
+        return { ...(row.id ? { id: row.id } : {}), date: row.date, startAt, endAt, hours: units / 100, ...(hasBreak ? { breakMinutes } : {}) };
     }).sort((a, b) => a.startAt - b.startAt || a.endAt - b.endAt);
     const daily = new Map();
     segments.forEach((row, index) => {
@@ -160,24 +181,25 @@ function collectLeaveSegments(rows) {
         durationHours: [...daily.values()].reduce((sum, units) => sum + units, 0) / 100,
         startDate: start.date, startTime: start.time, endDate: end.date, endTime: end.time };
 }
-function leaveSegmentBatchRows(fields, hours, includeWeekends = false) {
+function leaveSegmentBatchRows(fields, hours, includeWeekends = false, breakMinutes) {
     const [startDate, startTime, endDate, endTime] = fields;
     const dates = leaveDayRange(startDate, '00:00', endDate, '23:59');
     const rows = dates.filter((row) => includeWeekends || leaveDayInitiallySelected(row.date, dates.length > 1))
-        .map((row) => ({ id: '', date: row.date, startTime, endTime, hours: String(hours ?? '') }));
+        .map((row) => ({ id: '', date: row.date, startTime, endTime, hours: String(hours ?? ''), ...(breakMinutes !== undefined ? { breakMinutes: String(breakMinutes) } : {}) }));
     if (!rows.length) throw new Error('區間沒有週一至五；輪班或補班請勾選「多日區間包含週末」。');
     collectLeaveSegments(rows);
     return rows;
 }
 function lsPaintRows(form, rows) {
     const host = form.querySelector('[data-ls-rows]');
-    host.innerHTML = rows.map((row, index) => `<div class="ls-row" data-ls-row data-ls-id="${ldEscape(row.id)}">
+    host.innerHTML = rows.map((row, index) => `<div class="ls-row" data-ls-row data-ls-id="${ldEscape(row.id)}" data-ls-manual="${Boolean(row.manual)}" data-ls-break-manual="${Boolean(row.breakManual)}" data-ls-break-known="${row.breakMinutes !== undefined && row.breakMinutes !== null}">
         <strong class="ls-row-number">第 ${index + 1} 段</strong>
         <label class="field"><span>日期</span><input type="date" data-ls-field="date" value="${ldEscape(row.date)}" required aria-label="第 ${index + 1} 段日期"></label>
         <label class="field"><span>開始</span><input type="time" data-ls-field="startTime" value="${ldEscape(row.startTime)}" required aria-label="第 ${index + 1} 段開始時間"></label>
         <label class="field"><span>結束</span><input type="time" data-ls-field="endTime" value="${ldEscape(row.endTime)}" required aria-label="第 ${index + 1} 段結束時間"></label>
+        <label class="field"><span>休息（分鐘）</span><input type="number" min="0" max="1439" step="1" data-ls-field="breakMinutes" value="${ldEscape(row.breakMinutes)}" placeholder="舊單未記錄" aria-label="第 ${index + 1} 段休息分鐘"></label>
         <label class="field"><span>實際時數</span><input type="number" min="0.01" max="24" step="0.01" data-ls-field="hours" value="${ldEscape(row.hours)}" required placeholder="扣除休息" aria-label="第 ${index + 1} 段實際時數"></label>
-        <div class="ls-row-actions"><button type="button" class="outline-btn" data-ls-action="duplicate">同日加一段</button><button type="button" class="outline-btn" data-ls-action="remove" aria-label="刪除第 ${index + 1} 段">刪除</button></div>
+        <div class="ls-row-actions"><button type="button" class="outline-btn" data-ls-action="auto-row">恢復自動計算</button><button type="button" class="outline-btn" data-ls-action="duplicate">同日加一段</button><button type="button" class="outline-btn" data-ls-action="remove" aria-label="刪除第 ${index + 1} 段">刪除</button></div>
     </div>`).join('');
     lsWriteTotals(form);
 }
@@ -192,6 +214,22 @@ function lsWriteTotals(form) {
         form.elements.namedItem('dailyHours').value = selection.dailyHours.map((row) => `${row.date}=${row.hours}`).join('\n');
     } catch (error) { message = error.message; form.elements.namedItem('dailyHours').value = ''; }
     editor.querySelector('[data-ld-message]').textContent = rows.length ? message : '請先加入日期區間或新增單一時段，再送出申請。';
+}
+function lsSyncBatch(form, { reset = false } = {}) {
+    const editor = form.querySelector('[data-leave-days]');
+    if (editor?.dataset.ldMode !== 'segments') return;
+    if (reset) { delete editor.dataset.lsManual; delete editor.dataset.lsBreakManual; }
+    const [, startTime, , endTime] = ldFields(form), rest = editor.querySelector('[data-ls-batch-break]'), hours = editor.querySelector('[data-ls-batch-hours]');
+    if (editor.dataset.lsBreakManual !== 'true') rest.value = leaveSegmentDefaultBreakMinutes(startTime, endTime);
+    if (editor.dataset.lsManual !== 'true') hours.value = leaveSegmentNetHours(startTime, endTime, rest.value);
+}
+function lsSyncRow(row, changed = '') {
+    const field = (name) => row.querySelector(`[data-ls-field="${name}"]`), start = field('startTime').value, end = field('endTime').value;
+    if (changed === 'hours') row.dataset.lsManual = 'true';
+    if (changed === 'breakMinutes') { row.dataset.lsBreakManual = 'true'; row.dataset.lsBreakKnown = 'true'; row.dataset.lsManual = 'false'; }
+    if (changed === 'auto') { row.dataset.lsManual = 'false'; row.dataset.lsBreakManual = 'false'; }
+    if (row.dataset.lsBreakManual !== 'true') { field('breakMinutes').value = leaveSegmentDefaultBreakMinutes(start, end); row.dataset.lsBreakKnown = 'true'; }
+    if (row.dataset.lsManual !== 'true') field('hours').value = leaveSegmentNetHours(start, end, field('breakMinutes').value);
 }
 function syncLeaveDaysEditor(form, { reset = false, request = null } = {}) {
     let editor = form?.querySelector('[data-leave-days]'); if (!editor) return;
@@ -209,6 +247,7 @@ function syncLeaveDaysEditor(form, { reset = false, request = null } = {}) {
         field.required = mode !== 'segments';
     }
     if (mode === 'legacy') return syncLegacyLeaveDaysEditor(form, { reset, request });
+    lsSyncBatch(form, { reset });
     if (request) lsPaintRows(form, (request.leaveSegments || request.leave_segments || []).map(lsRowFromSegment));
     else if (reset) lsPaintRows(form, []);
     else lsWriteTotals(form);
@@ -219,19 +258,25 @@ document.addEventListener('click', (event) => {
     event.preventDefault();
     try {
         const rows = lsReadRows(form), action = button.dataset.lsAction;
+        if (action === 'auto-batch') { lsSyncBatch(form, { reset: true }); return; }
+        if (action === 'auto-row') { lsSyncRow(button.closest('[data-ls-row]'), 'auto'); lsWriteTotals(form); return; }
         if (action === 'remove' || action === 'duplicate') {
             const index = [...form.querySelectorAll('[data-ls-row]')].indexOf(button.closest('[data-ls-row]'));
             if (action === 'remove') rows.splice(index, 1);
-            else { if (rows.length >= 740) throw new Error('一次最多 740 段請假。'); rows.splice(index + 1, 0, { ...rows[index], id: '', startTime: rows[index].endTime === '00:00' ? '' : rows[index].endTime, endTime: '', hours: '' }); }
+            else { if (rows.length >= 740) throw new Error('一次最多 740 段請假。'); rows.splice(index + 1, 0, { ...rows[index], id: '', startTime: rows[index].endTime === '00:00' ? '' : rows[index].endTime, endTime: '', hours: '', breakMinutes: '0', manual: false, breakManual: false }); }
         } else if (action === 'add-range') {
-            const additions = leaveSegmentBatchRows(ldFields(form), editor.querySelector('[data-ls-batch-hours]').value, editor.querySelector('[data-ls-weekends]').checked);
+            lsSyncBatch(form);
+            const additions = leaveSegmentBatchRows(ldFields(form), editor.querySelector('[data-ls-batch-hours]').value, editor.querySelector('[data-ls-weekends]').checked, editor.querySelector('[data-ls-batch-break]').value)
+                .map((row) => ({ ...row, manual: editor.dataset.lsManual === 'true', breakManual: editor.dataset.lsBreakManual === 'true' }));
             if (rows.length + additions.length > 740) throw new Error('一次最多 740 段請假。');
             // Validate before mutating so a duplicate range cannot partly append.
             collectLeaveSegments([...rows, ...additions]); rows.push(...additions);
         } else if (action === 'add-one') {
             if (rows.length >= 740) throw new Error('一次最多 740 段請假。');
+            lsSyncBatch(form);
             const [date, startTime, , endTime] = ldFields(form);
-            rows.push({ id: '', date, startTime, endTime, hours: editor.querySelector('[data-ls-batch-hours]').value });
+            rows.push({ id: '', date, startTime, endTime, hours: editor.querySelector('[data-ls-batch-hours]').value, breakMinutes: editor.querySelector('[data-ls-batch-break]').value,
+                manual: editor.dataset.lsManual === 'true', breakManual: editor.dataset.lsBreakManual === 'true' });
         }
         lsPaintRows(form, rows);
         form.dispatchEvent(new Event('input', { bubbles: true }));
@@ -241,13 +286,26 @@ const ldPreviousPostRender = postRenderSetup;
 postRenderSetup = function postRenderWithLeaveDays() { ldPreviousPostRender(); setupLeaveDaysEditors(); };
 document.addEventListener('input', (event) => {
     const form = event.target.closest('form'); if (!form?.querySelector('[data-leave-days]')) return;
-    if (form.querySelector('[data-leave-days]').dataset.ldMode === 'segments') { if (event.target.closest('[data-ls-row]')) lsWriteTotals(form); return; }
+    if (form.querySelector('[data-leave-days]').dataset.ldMode === 'segments') {
+        const row = event.target.closest('[data-ls-row]'), editor = form.querySelector('[data-leave-days]');
+        if (row) { lsSyncRow(row, event.target.dataset.lsField); lsWriteTotals(form); }
+        else {
+            if (event.target.matches('[data-ls-batch-hours]')) editor.dataset.lsManual = 'true';
+            if (event.target.matches('[data-ls-batch-break]')) { editor.dataset.lsBreakManual = 'true'; editor.dataset.lsManual = 'false'; }
+            lsSyncBatch(form);
+        }
+        return;
+    }
     if (['startDate', 'startTime', 'endDate', 'endTime'].includes(event.target.name)) syncLeaveDaysEditor(form);
     else if (event.target.matches('[data-ld-hours]')) ldWriteTotals(form);
 });
 document.addEventListener('change', (event) => {
     const form = event.target.closest('form'); if (!form?.querySelector('[data-leave-days]')) return;
-    if (form.querySelector('[data-leave-days]').dataset.ldMode === 'segments') { if (event.target.closest('[data-ls-row]')) lsWriteTotals(form); return; }
+    if (form.querySelector('[data-leave-days]').dataset.ldMode === 'segments') {
+        const row = event.target.closest('[data-ls-row]');
+        if (row) { lsSyncRow(row, event.target.dataset.lsField); lsWriteTotals(form); } else lsSyncBatch(form);
+        return;
+    }
     if (event.target.matches('[data-ld-selected], [data-ld-hours]')) ldWriteTotals(form);
     else if (['startDate', 'startTime', 'endDate', 'endTime'].includes(event.target.name)) syncLeaveDaysEditor(form);
 });

@@ -9505,11 +9505,11 @@ function renderAdminPaperLeaveForm(datasets = {}) {
                     </label>
                     <label class="field paper-span-2">
                         <span>開始時間</span>
-                        <input name="startTime" type="time" value="09:00" required>
+                        <input name="startTime" type="time" value="08:20" required>
                     </label>
                     <label class="field paper-span-2">
                         <span>結束時間</span>
-                        <input name="endTime" type="time" value="18:00" required>
+                        <input name="endTime" type="time" value="17:00" required>
                     </label>
                     <label class="field paper-span-4">
                         <span>請假時數</span>
@@ -9728,7 +9728,7 @@ function renderAdminLeaveSection(datasets) {
                 <div class="list-toolbar">
                     <div>
                         <h3>請假出勤查核</h3>
-                        <p class="helper-text">比對已核准請假與實際打卡，列出請假期間有打卡、全天請假日仍有打卡、部分請假但當日無打卡等需要人工確認的情況。</p>
+                        <p class="helper-text">請假起點或終點前後 20 分鐘內（含第 20 分鐘）的打卡以黃色「容許時間範圍」提示；相接時段視為連續請假，內部切點不另算邊界。更深入請假區間的打卡仍為紅色，全天請假日仍有其他打卡、部分請假當日無打卡等警示保留，供人工查核，不自動修改出勤或扣薪。</p>
                     </div>
                     <button class="outline-btn" type="button" data-action="export-leave-audit-alerts">匯出查核 CSV</button>
                 </div>
@@ -10805,11 +10805,11 @@ function renderAdminPaperOvertimeForm(datasets = {}) {
                     </label>
                     <label class="field paper-span-3">
                         <span>開始時間</span>
-                        <input name="startTime" type="time" value="18:00" required>
+                        <input name="startTime" type="time" value="17:30" required>
                     </label>
                     <label class="field paper-span-3">
                         <span>結束時間</span>
-                        <input name="endTime" type="time" value="20:00" required>
+                        <input name="endTime" type="time" value="19:30" required>
                     </label>
                     <label class="field paper-span-4">
                         <span>加班時數</span>

@@ -35,7 +35,8 @@
 .ls-weekends { display: flex; align-items: center; gap: 7px; min-height: 40px; font-size: 13px; }
 .ls-weekends input { width: 18px; height: 18px; accent-color: var(--brand); }
 .ls-rows { display: grid; gap: 10px; max-height: 580px; overflow-y: auto; }
-.ls-row { display: grid; grid-template-columns: minmax(140px, 1.2fr) repeat(2, minmax(105px, 1fr)) minmax(110px, 1fr); gap: 10px; padding: 12px; border: 1px solid #cbdce7; border-radius: 9px; background: #fff; }
+.ls-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; padding: 12px; border: 1px solid #cbdce7; border-radius: 9px; background: #fff; }
+.ls-break-summary { display: block; color: var(--muted); margin-top: 2px; }
 .ls-row-number { grid-column: 1 / -1; color: var(--brand-dark); font-size: 13px; }
 .ls-row .field { min-width: 0; }
 .ls-row input { min-width: 0; width: 100%; box-sizing: border-box; }

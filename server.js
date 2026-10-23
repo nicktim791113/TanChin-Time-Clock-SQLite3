@@ -2095,6 +2095,27 @@ function isLeaveFullDaySegment(segment, durationHours) {
   return approvedHours >= 7.5 || (!segment?.explicitDates && rawHours >= 7.5);
 }
 
+const LEAVE_PUNCH_TOLERANCE_MS = 20 * 60 * 1000;
+
+function classifyLeaveAttendancePunch(timestamp, segments) {
+  // A punch inside an actual segment belongs to that segment. Midnight splits
+  // and touching rows are interior points of continuous leave, not grace edges.
+  const containing = segments.find((segment) =>
+    timestamp >= segment.segmentStartAt && timestamp < segment.segmentEndAt);
+  let nearest = null;
+  for (let index = 0; index < segments.length; index++) {
+    const segment = segments[index];
+    for (const [boundary, boundaryAt] of [['開始', segment.segmentStartAt], ['結束', segment.segmentEndAt]]) {
+      if (boundary === '開始' && segments[index - 1]?.segmentEndAt === boundaryAt) continue;
+      if (boundary === '結束' && segments[index + 1]?.segmentStartAt === boundaryAt) continue;
+      const distance = Math.abs(timestamp - boundaryAt);
+      if (!nearest || distance < nearest.distance) nearest = { segment, boundary, boundaryAt, distance };
+    }
+  }
+  if (!nearest || (!containing && nearest.distance > LEAVE_PUNCH_TOLERANCE_MS)) return null;
+  return { ...nearest, segment: containing || nearest.segment, tolerance: nearest.distance <= LEAVE_PUNCH_TOLERANCE_MS };
+}
+
 function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rangeStartMs = null, rangeEndMs = null } = {}) {
   const now = Date.now();
   const effectiveEndMs = rangeEndMs != null && Number.isFinite(Number(rangeEndMs)) ? Number(rangeEndMs) : now;
@@ -2106,8 +2127,11 @@ function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rang
   const typeMap = new Map(leaveTypes.map((type) => [type.id, type]));
   const approvedRequests = dbModule.queryLeaveRequests({
     status: 'approved',
-    overlapStartAt: effectiveStartMs,
-    overlapEndAt: effectiveEndMs,
+    // The overlap query treats an end equal to its lower bound as outside.
+    // Include that millisecond so exactly 20 minutes before the report starts
+    // remains eligible for the inclusive boundary tolerance.
+    overlapStartAt: effectiveStartMs - LEAVE_PUNCH_TOLERANCE_MS - 1,
+    overlapEndAt: effectiveEndMs + LEAVE_PUNCH_TOLERANCE_MS,
     limit: null
   });
   const punchRecords = dbModule.loadPunchRecords()
@@ -2125,6 +2149,34 @@ function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rang
     const segments = allSegments.filter((segment) =>
       segment.segmentEndAt > effectiveStartMs && segment.segmentStartAt <= effectiveEndMs);
 
+    punchRecords.filter((record) => record.id === request.employee_id).forEach((record) => {
+      const match = classifyLeaveAttendancePunch(record.timestamp, allSegments);
+      if (!match) return;
+      const { segment, tolerance, boundary, boundaryAt } = match;
+      const formatted = formatPunchRecord(record);
+      alerts.push({
+        id: `leave_punch_${tolerance ? 'tolerance' : 'conflict'}_${request.id}_${record.timestamp}`,
+        alertType: tolerance ? 'leave_boundary_tolerance' : 'leave_window_punch_conflict',
+        alertText: tolerance ? '容許時間範圍' : '請假期間有打卡',
+        severity: tolerance ? 'warning' : 'danger',
+        employeeId: request.employee_id,
+        employeeName: employee.name || '',
+        department: employee.department || '',
+        requestId: request.id,
+        leaveTypeName,
+        startAt: segment.segmentStartAt,
+        endAt: segment.segmentEndAt,
+        punchAt: record.timestamp,
+        startText: formatTaipeiDateTime(segment.segmentStartAt),
+        endText: formatTaipeiDateTime(segment.segmentEndAt),
+        punchText: `${formatTaipeiDateTime(record.timestamp)} ${formatted.typeText}`,
+        durationHours: segment.durationHours,
+        detail: tolerance
+          ? `${formatted.typeText}打卡落在核准請假${boundary}時間（${formatTaipeiDateTime(boundaryAt)}）前後 20 分鐘內（含邊界），列為容許時間範圍；不變更請假或打卡紀錄。`
+          : `核准請假區間內出現${formatted.typeText}打卡，需確認是否銷假、誤打或審核資料需修正。`
+      });
+    });
+
     segments.forEach((segment) => {
       if (segment.segmentStartAt > now) return;
       const dayEndAt = segment.dayStartAt + (24 * 60 * 60 * 1000) - 1;
@@ -2133,39 +2185,11 @@ function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rang
         record.timestamp >= segment.dayStartAt &&
         record.timestamp <= dayEndAt
       );
-      const punchesInsideLeave = sameDayPunches.filter((record) =>
-        record.timestamp >= segment.segmentStartAt &&
-        record.timestamp < segment.segmentEndAt
-      );
       const daySegments = request.date_selection_mode === 'explicit_segments'
         ? allSegments.filter((item) => item.dateText === segment.dateText) : [segment];
       const punchesOutsideLeave = sameDayPunches.filter((record) =>
         !daySegments.some((item) => record.timestamp >= item.segmentStartAt && record.timestamp < item.segmentEndAt)
       );
-      const durationHours = segment.durationHours;
-
-      punchesInsideLeave.forEach((record) => {
-        const formatted = formatPunchRecord(record);
-        alerts.push({
-          id: `leave_punch_conflict_${request.id}_${record.timestamp}`,
-          alertType: 'leave_window_punch_conflict',
-          alertText: '請假期間有打卡',
-          severity: 'danger',
-          employeeId: request.employee_id,
-          employeeName: employee.name || '',
-          department: employee.department || '',
-          requestId: request.id,
-          leaveTypeName,
-          startAt: segment.segmentStartAt,
-          endAt: segment.segmentEndAt,
-          punchAt: record.timestamp,
-          startText: formatTaipeiDateTime(segment.segmentStartAt),
-          endText: formatTaipeiDateTime(segment.segmentEndAt),
-          punchText: `${formatTaipeiDateTime(record.timestamp)} ${formatted.typeText}`,
-          durationHours,
-          detail: `核准請假區間內出現${formatted.typeText}打卡，需確認是否銷假、誤打或審核資料需修正。`
-        });
-      });
 
       if (daySegments[0] !== segment || daySegments.at(-1).segmentEndAt > now) return;
       const dailyDurationHours = roundAttendanceHours(daySegments.reduce((sum, item) => sum + item.durationHours, 0));

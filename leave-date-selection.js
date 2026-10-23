@@ -44,10 +44,21 @@ function normalizeLeaveSegments(request = {}) {
         if (!['number', 'string'].includes(typeof row.hours) || !/^\d+(\.\d{1,2})?$/.test(String(row.hours))) fail('每段實際時數須為最多兩位小數的數字。');
         const units = Math.round(Number(row.hours) * 100);
         if (!Number.isSafeInteger(units) || units <= 0 || units > 2400 || units * 36000 > endAt - startAt) fail('每段實際時數須大於 0、不超過 24 小時，且不得超過該段起訖時間。');
+        // Rest is optional on historical and older-client rows. Never infer or
+        // deduct it again from their already recorded net hours.
+        const rest = {};
+        if (Object.hasOwn(row, 'breakMinutes')) {
+            const value = row.breakMinutes;
+            if (!['number', 'string'].includes(typeof value) || !/^\d+$/.test(String(value)) || !Number.isSafeInteger(Number(value))) fail('每段休息時間須為 0 以上的整數分鐘。');
+            const minutes = Number(value);
+            if (minutes * 60000 >= endAt - startAt) fail('每段休息時間須小於該段起訖時間。');
+            if (units * 36000 > endAt - startAt - minutes * 60000) fail('每段實際時數不得超過扣除休息後的時間。');
+            rest.breakMinutes = minutes;
+        }
         const id = row.id == null || row.id === '' ? null : row.id;
         if (id !== null && (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(id) || ids.has(id))) fail('請假時段識別碼格式不正確或重複。');
         if (id !== null) ids.add(id);
-        return { id, date, startAt, endAt, hours: units / 100 };
+        return { id, date, startAt, endAt, hours: units / 100, ...rest };
     }).sort((a, b) => a.startAt - b.startAt || a.endAt - b.endAt);
     const daily = new Map();
     for (let index = 0; index < segments.length; index++) {
