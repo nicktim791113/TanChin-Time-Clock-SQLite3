@@ -75,6 +75,27 @@ function createSalaryAdvanceStore(sql, addAuditLog, options = {}) {
         if (row.termination_date && row.termination_date <= taipeiDate(now())) fail('已離職員工不能送出新的借支申請。', 403);
         return row;
     }
+    function roster() {
+        // Only expose fields needed by the authorized monthly roster; never card numbers or payroll details.
+        return sql.prepare('SELECT id,name,department,termination_date FROM employees ORDER BY id').all().map((row) => ({
+            id: row.id, name: row.name || '', department: row.department || '', terminationDate: row.termination_date || null
+        }));
+    }
+    function rulesSnapshot(policy) {
+        return { startDay: policy.startDay, endDay: policy.endDay, maxAmount: policy.maxAmount, maxActivePerMonth: policy.maxActivePerMonth,
+            deductionMonthOffset: policy.deductionMonthOffset, settingsRevision: policy.revision };
+    }
+    function checkPaperLimits(employeeId, applicationMonth, amount, policy, excludedRequestId = '') {
+        if (!Number.isSafeInteger(policy.maxAmount) || policy.maxAmount < 1 || !Number.isSafeInteger(policy.maxActivePerMonth) || policy.maxActivePerMonth < 1) {
+            fail('紙本補登前請先在活動設定完成金額及每月有效申請上限。', 409);
+        }
+        if (amount > policy.maxAmount) fail(`申請金額不得超過本次上限 ${policy.maxAmount.toLocaleString('zh-TW')} 元。`);
+        // Editing a current paper row does not consume a new slot. Later policy changes may have allowed more rows.
+        if (excludedRequestId) return;
+        const count = sql.prepare("SELECT COUNT(*) AS total FROM salary_advance_requests WHERE employee_id=? AND application_month=? AND status IN ('pending_admin','approved') AND id<>?")
+            .get(employeeId, applicationMonth, excludedRequestId).total;
+        if (count >= policy.maxActivePerMonth) fail('本月待審及核准申請已達有效筆數上限，請先查看既有申請。', 409);
+    }
     function currentWindow() {
         const policy = settings(), currentDate = taipeiDate(now()), applicationMonth = currentDate.slice(0, 7);
         const day = Number(currentDate.slice(8)), [year, mon] = applicationMonth.split('-').map(Number);
@@ -129,11 +150,58 @@ function createSalaryAdvanceStore(sql, addAuditLog, options = {}) {
             const record = { sourceSystem: 'tanchin-time-clock', requestId: crypto.randomUUID(), employeeId, employeeName: person.name || '', department: person.department || '',
                 applicationMonth, deductionMonth: shiftedMonth(applicationMonth, policy.deductionMonthOffset), currency: 'TWD', requestedAmount, approvedAmount: null,
                 status: 'pending_admin', revision: 1, note, reviewNote: '', reviewerId: null, createdAt: at, submittedAt: at, reviewedAt: null, updatedAt: at,
-                rulesSnapshot: { startDay: policy.startDay, endDay: policy.endDay, maxAmount: policy.maxAmount, maxActivePerMonth: policy.maxActivePerMonth, deductionMonthOffset: policy.deductionMonthOffset, settingsRevision: policy.revision } };
+                rulesSnapshot: rulesSnapshot(policy) };
             sql.prepare('INSERT INTO salary_advance_requests VALUES (?,?,?,?,?,?,?,?,?,?)').run(record.requestId, employeeId, applicationMonth, record.status, 1, key, hash, stringify(record), now(), now());
             emit(record);
             audit(auditEntry, 'salary_advance_submitted', record.requestId, null, record, '員工送出借支申請，待管理部審核。');
             return { request: record, replayed: false };
+        })();
+    }
+    function paperApproved(input, auditEntry, actorId) {
+        return sql.transaction(() => {
+            if (input.confirm !== true) fail('請先確認紙本核准內容再儲存。');
+            const employeeId = text(input.employeeId, '員工工號', 100, true), person = employee(employeeId);
+            const applicationMonth = month(input.applicationMonth), requestedAmount = integer(input.requestedAmount, '申請金額', 1, 1000000000);
+            const note = text(input.note, '補登備註'), key = text(input.idempotencyKey, '送件識別碼', 100, true);
+            const entryMode = 'admin_paper_approved';
+            const hash = crypto.createHash('sha256').update(stringify({ entryMode, applicationMonth, requestedAmount, note })).digest('hex');
+            const replay = sql.prepare('SELECT input_hash,data_json FROM salary_advance_requests WHERE employee_id=? AND idempotency_key=?').get(employeeId, key);
+            if (replay) {
+                if (replay.input_hash !== hash) fail('送件識別碼已用於不同內容；請重新整理後確認。', 409);
+                return { request: JSON.parse(replay.data_json), replayed: true };
+            }
+            if (person.termination_date && applicationMonth > String(person.termination_date).slice(0, 7)) fail('已離職員工只能補登離職當月或之前的紙本紀錄。', 403);
+            const policy = settings();
+            checkPaperLimits(employeeId, applicationMonth, requestedAmount, policy);
+            const at = new Date(now()).toISOString();
+            const record = { sourceSystem: 'tanchin-time-clock', requestId: crypto.randomUUID(), employeeId, employeeName: person.name || '', department: person.department || '',
+                applicationMonth, deductionMonth: shiftedMonth(applicationMonth, policy.deductionMonthOffset), currency: 'TWD', requestedAmount, approvedAmount: requestedAmount,
+                status: 'approved', entryMode, revision: 1, note, reviewNote: '', reviewerId: actorId, createdAt: at, submittedAt: at, reviewedAt: at, updatedAt: at,
+                registeredBy: actorId, registeredAt: at, rulesSnapshot: rulesSnapshot(policy) };
+            sql.prepare('INSERT INTO salary_advance_requests VALUES (?,?,?,?,?,?,?,?,?,?)').run(record.requestId, employeeId, applicationMonth, record.status, 1, key, hash, stringify(record), now(), now());
+            emit(record);
+            audit(auditEntry, 'salary_advance_paper_approved', record.requestId, null, record, '管理部依已核准紙本補登借支紀錄。');
+            return { request: record, replayed: false };
+        })();
+    }
+    function correctPaperApproved(input, auditEntry, actorId) {
+        return sql.transaction(() => {
+            if (input.confirm !== true) fail('請先確認紙本更正內容再儲存。');
+            const previous = get(input.requestId);
+            if (input.revision !== previous.revision) fail('此申請已被更新，請重新整理後再操作。', 409);
+            if (previous.entryMode !== 'admin_paper_approved' || previous.status !== 'approved') fail('只能修改有效的紙本核准補登紀錄。', 409);
+            const requestedAmount = integer(input.requestedAmount, '申請金額', 1, 1000000000);
+            const note = input.note === undefined ? previous.note : text(input.note, '補登備註');
+            // A correction retains the request's original policy and deduction month, just like a review.
+            checkPaperLimits(previous.employeeId, previous.applicationMonth, requestedAmount, previous.rulesSnapshot, previous.requestId);
+            const at = new Date(now()).toISOString(), next = { ...previous, requestedAmount, approvedAmount: requestedAmount, note,
+                revision: previous.revision + 1, updatedAt: at, correctedBy: actorId, correctedAt: at };
+            const changed = sql.prepare('UPDATE salary_advance_requests SET revision=?,data_json=?,updated_at=? WHERE id=? AND revision=?')
+                .run(next.revision, stringify(next), now(), previous.requestId, previous.revision);
+            if (changed.changes !== 1) fail('此申請已被更新，請重新整理後再操作。', 409);
+            emit(next);
+            audit(auditEntry, 'salary_advance_paper_corrected', previous.requestId, previous, next, '管理部更正紙本核准借支紀錄；保留原單號、前後內容及操作人。');
+            return next;
         })();
     }
     function transition(id, input, auditEntry, actorId, operation, employeeId) {
@@ -141,7 +209,7 @@ function createSalaryAdvanceStore(sql, addAuditLog, options = {}) {
             const previous = get(id);
             if (employeeId && previous.employeeId !== employeeId) fail('只能操作本人的借支申請。', 403);
             if (input.revision !== previous.revision) fail('此申請已被更新，請重新整理後再操作。', 409);
-            const reason = text(input.reason, '操作原因', 500, true);
+            const reason = text(input.reason, operation === 'review' ? '審核說明' : '操作原因', 500, operation !== 'review');
             const at = new Date(now()).toISOString(), next = { ...previous, revision: previous.revision + 1, updatedAt: at };
             if (operation === 'withdraw') {
                 if (previous.status !== 'pending_admin') fail('只有待管理部審核的申請可以自行撤回。', 409);
@@ -160,7 +228,7 @@ function createSalaryAdvanceStore(sql, addAuditLog, options = {}) {
                 .run(next.status, next.revision, stringify(next), now(), previous.requestId, previous.revision);
             if (changed.changes !== 1) fail('此申請已被更新，請重新整理後再操作。', 409);
             emit(next);
-            audit(auditEntry, `salary_advance_${next.status}`, previous.requestId, previous, next, reason);
+            audit(auditEntry, `salary_advance_${next.status}`, previous.requestId, previous, next, reason || (next.status === 'approved' ? '管理部複核通過借支申請。' : '管理部退回借支申請。'));
             return next;
         })();
     }
@@ -224,7 +292,7 @@ function createSalaryAdvanceStore(sql, addAuditLog, options = {}) {
             nextCursorEventId: hasMore ? page.at(-1).event_id : untilEventId, untilCursor: String(until), untilEventId,
             paymentRecorded: false, note: '核准申請不是已發放或已扣薪；請依 requestId/revision 更新來源暫存。' } };
     }
-    return { settings, currentWindow, saveSettings, get, list, state, employeeState, submit, external,
+    return { settings, currentWindow, saveSettings, get, list, state, employeeState, submit, external, roster, paperApproved, correctPaperApproved,
         review: (input, auditEntry, actorId) => transition(input.requestId, input, auditEntry, actorId, 'review'),
         withdraw: (employeeId, input, auditEntry) => transition(input.requestId, input, auditEntry, employeeId, 'withdraw', employeeId),
         cancel: (input, auditEntry, actorId) => transition(input.requestId, input, auditEntry, actorId, 'cancel') };

@@ -1,8 +1,17 @@
 # ERP 借支申請串接交接說明
 
-文件日期：2026-10-22。對象：接手正式 ERP 的開發人員／ERP agent。
+文件日期：2026-10-24。對象：接手正式 ERP 的開發人員／ERP agent。
 
-> **狀態：考勤 v1.34.0 API 已實作，隔離測試通過；本機完整測試 313／313 通過。ERP 端仍待修改與驗證；TC-150 的目前安裝版本須在正式連線時核對。** 本文件是已實作的 API 契約及 ERP 交接說明，不是尚未定義的介面提案。ERP agent 可依本契約開發來源讀取與暫存；正式連線前仍須確認 TC-150 的實際安裝版本及 API 回應，不可將本機實作完成當成正式部署或 ERP 串接完成。
+> **狀態：考勤借支修訂 API 自 v1.34.0 提供，v1.38.0 增加紙本核准補登及同單更正事件。ERP 端的實作與正式部署仍須由接手者核對；TC-150 安裝版本也須在正式連線時確認。** 本文件是考勤端 API 契約及 ERP 交接說明。ERP agent 可依本契約開發來源讀取與暫存，不可將本機實作完成當成正式部署或 ERP 串接完成。
+
+## v1.38.0 接收端必須支援的增量變更
+
+- 管理部可依已核准紙本直接登記，也可更正同筆金額。紙本首筆即為 `status: "approved"`、`revision: 1`，不會先出現 `pending_admin`；以 `entryMode: "admin_paper_approved"` 辨識。舊員工申請可能沒有 `entryMode`，仍採原狀態流程。
+- 同一紙本再次儲存沿用 `requestId`，增加 revision 並建立新的 changeSequence／changeEventId。例如核准額 5,000 改為 7,500，ERP 的目前來源額應是 7,500，不能把兩次事件相加成 12,500，也不能新增第二筆發款。
+- 紙本保留 `registeredBy`／`registeredAt`；更正附 `correctedBy`／`correctedAt`。初次核准人與審核時間保留；最新異動時間為 updatedAt。rulesSnapshot、自由備註與員工姓名／部門仍不向外提供。
+- 紙本新增可在歷史月份或員工開放登記期間之外；消費端不得自行以每月 15～20 日拒絕來源。更正保留原扣回月份；不能用最新活動設定重新推導歷史單的 deductionMonth。
+- 核准／退回 reviewNote 現可為空字串，應正常接收。API 路徑、salary_advances scope、schemaVersion 1、分頁與還原檢查點契約維持，不新增自動發款／扣薪行為。
+- 若來源已連結 ERP 已發放借支或薪資，紙本更正或取消只建立待核對差異；保留財務歷史，禁止直接覆寫或重複發放。考勤 UI 的綠色「補登記」不等同已付款。
 
 ## 1. 要解決的問題與範圍
 
@@ -110,6 +119,7 @@ v1.34.0 API 支援：
 | `requestedAmount` | integer | 申請金額，新臺幣元。 |
 | `approvedAmount` | integer 或 null | 管理部核准金額；未核准為 null，不用 0 代替未知。 |
 | `status` | string | `pending_admin`、`approved`、`rejected`、`withdrawn`、`cancelled`。 |
+| `entryMode` | string（選用） | v1.38 紙本為 `admin_paper_approved`；舊自行申請可省略。首筆紙本即為 approved。 |
 | `revision` | integer | 同一申請每次具業務意義的修改遞增，供重送與衝突判斷。 |
 | `changeSequence` | integer | 此次修訂的來源事件序號，供分頁與增量同步。 |
 | `changeEventId` | string | 此次修訂的不可重用 UUID，與序號一同識別來源事件。 |
@@ -118,7 +128,9 @@ v1.34.0 API 支援：
 | `reviewedAt` | string 或 null | 管理部審核時間。 |
 | `reviewerId` | string 或 null | 審核人識別，不包含登入憑證。 |
 | `updatedAt` | string | 最後更新時間，含時區。 |
-| `reviewNote` | string | 管理部審核或退回說明；ERP 顯示前應當一般文字處理。 |
+| `reviewNote` | string | 管理部審核或退回說明，選填，可為空字串；ERP 顯示前應當一般文字處理。 |
+| `registeredBy`／`registeredAt` | string（選用） | 紙本初次補登的操作者及 ISO 時間。 |
+| `correctedBy`／`correctedAt` | string（選用） | 紙本最近一次更正的操作者及 ISO 時間；原審核人／時間不覆寫。 |
 | `withdrawnAt`／`withdrawalReason` | string（選用） | 員工撤回時附上，保留來源歷史。 |
 | `cancelledAt`／`cancelledBy`／`cancellationReason` | string（選用） | 管理部取消時附上，可能取消原已核准申請。 |
 
@@ -210,6 +222,10 @@ ERP 端另保存 `sourceConnectionId`：指向既有考勤來源設定的穩定�
 | 舊 key 升級 | 不自動獲得新增借支權限。 |
 | 同一核准單同步三次 | 一筆來源資料，未發放前不新增借支／扣款。 |
 | 同單較新及較舊 revision 交錯 | 最新資料保留，舊資料不倒灌。 |
+| 紙本首筆 approved、revision 1 | 正常建立待核對來源，不要求先見到 pending_admin。 |
+| 紙本 5,000 更正為 7,500 再同步三次 | 同一來源單目前額為 7,500，保留兩版歷史，不累加成 12,500、不新增第二筆發款。 |
+| 紙本歷史月份或登記期間外新增／更正 | 按來源月份及版本接收，不套用員工自行登記的日期窗口。 |
+| 空白 reviewNote、舊單沒有 entryMode | 正常接收，不誤判缺欄位或拒絕同步。 |
 | 核准但尚未發放 | 只出現在待處理／來源清單，不減少實領薪資。 |
 | 已發放後再次同步 | 不重複建立借支，不重複記還款。 |
 | 已發放後撤回／改額 | 保留財務歷史，顯示待核對，不刪除原帳。 |
@@ -229,7 +245,7 @@ ERP 端另保存 `sourceConnectionId`：指向既有考勤來源設定的穩定�
 ## 9. 可直接交給 ERP agent 的提示詞
 
 ```text
-請接手正式 Tan Chin ERP 的「考勤借支申請串接」。先閱讀隨附的《ERP借支串接交接說明.md》。考勤 v1.34.0 API 已實作並通過隔離測試，本機完整測試 313／313 通過；本文件就是目前已實作的契約，可依此開發 ERP consumer。ERP 端仍待修改及驗證；TC-150 的目前安裝版本須在正式連線時核對；正式連線前先核對考勤主機版本與 API 回應，不要把本地實作完成當成已部署。
+請接手正式 Tan Chin ERP 的「考勤借支申請串接」。先閱讀隨附的《ERP借支串接交接說明.md》，包含 v1.38.0 紙本補登及同單更正。考勤修訂 API 自 v1.34.0 提供，可依本契約開發 ERP consumer；正式連線前核對 TC-150 的版本與 API 回應，以及 ERP 目前實作／部署狀態，不要把本地實作完成當成已部署。
 
 請先確認你正在使用正式 ERP 1.149.0.0 或後續版本對應的最新專案、Git 分支與部署來源。不要使用 D:\Developer\Tan Chin ERP System 中的 2026.05.10 舊副本。正式頁為 http://192.168.0.113:3200/#/attendance-sync-center。
 
@@ -247,6 +263,7 @@ ERP 端另保存 `sourceConnectionId`：指向既有考勤來源設定的穩定�
 5. 沿用既有借支帳、FIFO、月份還款取代、薪資借支預覽後取代機制；不可同步一次再扣一次。已鎖薪資期別不改。
 6. 既有人工借支與調整不得被同步抹掉。申請來源與借支／薪資紀錄要有可追溯關聯。
 7. API Key 僅在 ERP 後端安全取得；不放網址、不輸出明文。財務查看、審核、發放與薪資調整權限分別核對。
+8. v1.38.0 紙本來源 entryMode=admin_paper_approved 的首筆直接是 approved/revision 1；更正同 requestId 增 revision，金額採最新值不可累加。支援 registeredBy/registeredAt、correctedBy/correctedAt 選用欄位、空白 reviewNote、舊單無 entryMode，並驗證紙本 5000 改 7500 後重讀三次仍只有一筆目前來源 7500。歷史月份／登記期間外來源照常讀取，已發放來源變更轉人工核對。
 
 請先完成現況盤點與具體設計，核對管理者已儲存的申請次數與金額上限，列出仍待確認的實際發放責任、扣回月份及發放後財務更正流程，取得必要答案後再做依賴這些規則的處理。考勤已實作管理部核准原額或較低正整數額、員工撤回待審、管理部取消待審或已核准申請，保留修訂歷史。登記期間已確認為每月 15–20 日，金額上限已確認為新臺幣 15,000 元（1.5 萬元），兩者均可在活動設定調整。使用者會自行設定正式活動，實際生效值及有效筆數應以考勤主機已儲存的活動規則為準；不得只根據本文件自動覆寫正式設定。可以直接依既定 API 契約先實作唯讀來源同步與預覽。
 

@@ -21,7 +21,7 @@ test('complete management is explicitly assigned while legacy presets and develo
     const catalog = system.dashboard.permissionCatalog;
     const allCodes = catalog.adminPermissions.map((item) => item.code);
     const explicitCodes = catalog.adminPermissions.filter((item) => item.delegatedOnly).map((item) => item.code);
-    assert.equal(explicitCodes.length, 9);
+    assert.equal(explicitCodes.length, 10);
     const legacy = catalog.adminPresets.find((preset) => preset.id === 'full_admin');
     const complete = catalog.adminPresets.find((preset) => preset.id === 'complete_admin');
     assert.equal(legacy.label, '一般管理者（既有模板）');
@@ -59,7 +59,7 @@ test('complete management is explicitly assigned while legacy presets and develo
         assert.deepEqual(refreshed.dashboard.webAccount.credentialAccounts.map((employee) => employee.id), ['E001']);
         const salary = await request('/salary-advances', null, manager.token);
         assert.equal(salary.status, 200);
-        assert.deepEqual(salary.permissions, { view: true, review: true, settings: true, export: true });
+        assert.deepEqual(salary.permissions, { view: true, review: true, paper: true, settings: true, export: true });
         const annual = await request('/annual-leave?year=2026', null, manager.token);
         assert.equal(annual.status, 200);
         for (const key of ['policyManage', 'grant', 'close', 'adjust']) assert.equal(annual.permissions[key], true);

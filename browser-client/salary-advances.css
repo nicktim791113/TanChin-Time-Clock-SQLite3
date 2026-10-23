@@ -1,1 +1,30 @@
 .sa-workspace{min-width:0;display:grid;gap:16px}.sa-header,.sa-toolbar,.sa-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.sa-header{justify-content:space-between}.sa-header h3{margin:0}.sa-header p,.sa-note{color:#64748b;margin:6px 0}.sa-card,.sa-help{border:1px solid #dce3eb;border-radius:14px;padding:18px;background:#fff;min-width:0}.sa-card h4{margin-top:0}.sa-card summary,.sa-help summary{cursor:pointer}.sa-help li{margin:8px 0;line-height:1.7}.sa-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:14px 0}.sa-grid input,.sa-grid select,.sa-grid textarea,.sa-toolbar input{box-sizing:border-box;width:100%;max-width:100%;border:1px solid #cbd5e1;border-radius:8px;padding:9px 11px;font:inherit}.sa-grid .field{min-width:0}.sa-grid textarea{resize:vertical}.sa-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.sa-summary>span{border-radius:12px;padding:16px;background:#f1f5f9;color:#475569}.sa-summary strong{display:block;margin-top:6px;font-size:1.3rem;color:#0f172a}.sa-message:empty{display:none}.sa-message{padding:12px 15px;background:#ecfdf5;color:#065f46;border-radius:10px;overflow-wrap:anywhere}.sa-message.sa-error{background:#fff1f2;color:#9f1239}.sa-notice{background:#fff7ed;color:#9a3412;border-radius:9px;padding:12px}.sa-check{display:flex;gap:8px;align-items:center;margin:14px 0}.sa-toolbar{justify-content:space-between;margin-bottom:16px}.sa-toolbar .field{max-width:240px}.sa-table-wrap{overflow:auto;max-width:100%}.sa-table{border-collapse:collapse;min-width:740px;width:100%;text-align:left}.sa-table td,.sa-table th{padding:12px;border-bottom:1px solid #e2e8f0;vertical-align:top}.sa-table th{font-size:.88rem;background:#f8fafc}.sa-table td{max-width:280px;overflow-wrap:anywhere}.sa-table small{display:block;margin-top:6px;color:#64748b;font-size:.78rem}.sa-status{display:inline-block;border-radius:6px;padding:4px 8px;background:#f1f5f9;white-space:nowrap}.sa-status-approved{background:#dcfce7;color:#166534}.sa-status-pending_admin{background:#fef3c7;color:#92400e}.sa-status-rejected,.sa-status-cancelled{background:#ffe4e6;color:#9f1239}.sa-decision{margin:12px 0;background:#f8fafc}.sa-empty{padding:28px;text-align:center;color:#64748b}.sa-workspace button:disabled{opacity:.6;cursor:wait}@media(max-width:700px){.sa-grid{grid-template-columns:1fr}.sa-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.sa-card,.sa-help{padding:14px}.sa-header{align-items:flex-start}.sa-help ol{padding-left:20px}.sa-actions button{flex:1}.sa-grid input,.sa-grid select,.sa-grid textarea{font-size:16px}}
+/* Monthly roster and paper entry share the management workbench navigation. */
+.sa-workspace .workspace-subnav-content{min-width:0;display:grid;gap:16px}
+.sa-workspace .workspace-subnav-content>.sa-card{margin:0}
+.sa-workspace .sa-header h4{margin:0}
+.sa-filters{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;align-items:end;margin:18px 0}
+.sa-filters .field,.sa-paper-form .field{min-width:0;display:grid;gap:6px}
+.sa-filters input,.sa-filters select,.sa-paper-table input,.sa-paper-table select,.sa-paper-table textarea{box-sizing:border-box;width:100%;max-width:100%;border:1px solid #cbd5e1;border-radius:8px;padding:9px 11px;font:inherit;background:#fff;color:inherit}
+.sa-filters .sa-actions{grid-column:1/-1;justify-content:flex-end}
+.sa-status{border-radius:999px;max-width:100%;white-space:normal;font-size:.84rem;font-weight:600;line-height:1.5}
+.sa-status-none{background:#e5e7eb;color:#4b5563}
+.sa-status-withdrawn{background:#ffe4e6;color:#9f1239}
+.sa-status-list{display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+.sa-record-detail+.sa-record-detail{border-top:1px solid #e2e8f0;padding-top:10px;margin-top:10px}
+.sa-record-detail strong{font-size:.88rem;font-weight:500}
+.sa-roster-table{min-width:700px}
+.sa-roster-table th:nth-child(3){min-width:170px}
+.sa-paper-table{min-width:820px}
+.sa-paper-table th:nth-child(3){min-width:260px}
+.sa-paper-form{display:grid;gap:10px;margin-top:10px}
+.sa-paper-form textarea{resize:vertical}
+.sa-paper-form button{justify-self:start}
+.sa-dialog{box-sizing:border-box;border:1px solid #cbd5e1;border-radius:16px;padding:24px;width:min(620px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow:auto;color:#0f172a;background:#fff;box-shadow:0 24px 80px #0f172a40}
+.sa-dialog::backdrop{background:#0f172a75}
+.sa-dialog h4{margin:0 0 16px;font-size:1.1rem}
+.sa-dialog>p{overflow-wrap:anywhere;line-height:1.7}
+.sa-dialog .sa-actions{justify-content:flex-end;margin-top:20px}
+.sa-confirm-amount{font-size:1.7rem;font-weight:700}
+@media(max-width:1000px){.sa-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.sa-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.sa-filters{grid-template-columns:minmax(0,1fr)}.sa-filters .sa-actions{justify-content:stretch}.sa-filters input,.sa-filters select,.sa-paper-table input,.sa-paper-table select,.sa-paper-table textarea{font-size:16px}.sa-dialog{padding:18px;width:calc(100vw - 20px);max-height:calc(100dvh - 20px)}.sa-workspace>.sa-header{gap:8px}.sa-roster-table{min-width:660px}}

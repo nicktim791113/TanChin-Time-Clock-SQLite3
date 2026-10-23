@@ -9,7 +9,7 @@ const { normalizeLeaveDateSelection, getLeaveDateSegments } = require('./leave-d
 const { attachDatabaseBackupRoutes } = require('./database-backup-routes');
 const { createBrowserAccounts, RESET_PERMISSION, REVEAL_PERMISSION } = require('./browser-accounts');
 const { attachMealRoutes } = require('./meal-routes');
-const { attachRequestCalendarRoutes } = require('./request-calendar');
+const { attachRequestCalendarRoutes, monthRange: leaveAuditMonthRange } = require('./request-calendar');
 const { attachSupervisorRoutes } = require('./supervisor-routes');
 const { attachRequestHistoryRoutes } = require('./request-history');
 const { attachLeaveEntitlementRoutes } = require('./leave-entitlement-routes');
@@ -76,6 +76,7 @@ const ADMIN_PERMISSION_DEFINITIONS = [
   { code: 'admin.meals.close', category: '午餐團膳', label: '結單與更新供應商訂餐', section: 'meals', highRisk: true },
   { code: SALARY_ADVANCE_PERMISSIONS.view, category: '借支管理', label: '查看借支申請', section: 'salaryAdvances', delegatedOnly: true },
   { code: SALARY_ADVANCE_PERMISSIONS.review, category: '借支管理', label: '審核與作廢借支申請', section: 'salaryAdvances', highRisk: true, delegatedOnly: true },
+  { code: SALARY_ADVANCE_PERMISSIONS.paper, category: '借支管理', label: '紙本借支補登與修正', section: 'salaryAdvances', highRisk: true, delegatedOnly: true },
   { code: SALARY_ADVANCE_PERMISSIONS.settings, category: '借支管理', label: '調整借支活動設定', section: 'salaryAdvances', highRisk: true, delegatedOnly: true },
   { code: SALARY_ADVANCE_PERMISSIONS.export, category: '借支管理', label: '匯出借支總表', section: 'salaryAdvances', highRisk: true, delegatedOnly: true },
   { code: 'admin.supervisors.manage', category: '主管代辦', label: '指定員工的代辦主管', section: 'supervisors', highRisk: true },
@@ -359,6 +360,8 @@ const API_ROUTE_CATALOG = [
   { category: '借支 API', method: 'POST', path: '/api/browser/salary-advances/settings', auth: '借支活動設定權限', description: '調整開放日期、金額、筆數與預計扣回月份；保留送件規則快照' },
   { category: '借支 API', method: 'POST', path: '/api/browser/salary-advances/review', auth: '借支審核權限', description: '管理部直接核准或退回，不發放款項、不扣薪' },
   { category: '借支 API', method: 'POST', path: '/api/browser/salary-advances/cancel', auth: '借支審核權限', description: '取消待審或已核准申請並建立修訂事件，不自動沖回ERP' },
+  { category: '借支 API', method: 'POST', path: '/api/browser/salary-advances/paper-approved', auth: '紙本借支補登與修正權限', description: '依已核准紙本補登借支，確認後直接核准並建立操作紀錄' },
+  { category: '借支 API', method: 'POST', path: '/api/browser/salary-advances/paper-approved/correct', auth: '紙本借支補登與修正權限', description: '修正同筆紙本借支，以 revision 防止覆蓋並保留 ERP 修訂事件' },
   { category: '借支 API', method: 'GET', path: '/api/browser/salary-advances/export', auth: '借支匯出權限', description: '下載借支明細與總表 Excel，工號保留前導零' },
 
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/health', auth: '公開', description: '查詢 Express 服務健康狀態摘要' },
@@ -423,6 +426,7 @@ const API_ROUTE_CATALOG = [
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave/final-decision', auth: '管理者', description: '管理部終審請假申請' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-types/save', auth: '管理者', description: '儲存請假假別設定' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-routes/save', auth: '管理者', description: '儲存請假／加班共用主管審核路徑（相容舊入口）' },
+  { category: '管理者 API', method: 'GET', path: '/api/browser/admin/leave-audit', auth: '管理者', description: '依月份、部門、員工與警示類型查詢請假出勤查核' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/leave-audit/export', auth: '管理者', description: '匯出請假與實際打卡查核 CSV' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/overtime/paper-approved', auth: '管理者', description: '依紙本核准資料直接補登已核准加班' },
   { category: '管理者 API', method: 'POST', path: '/api/browser/admin/overtime/paper-approved/correct', auth: '管理者', description: '直接修正同一筆紙本加班補登' },
@@ -2116,7 +2120,7 @@ function classifyLeaveAttendancePunch(timestamp, segments) {
   return { ...nearest, segment: containing || nearest.segment, tolerance: nearest.distance <= LEAVE_PUNCH_TOLERANCE_MS };
 }
 
-function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rangeStartMs = null, rangeEndMs = null } = {}) {
+function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rangeStartMs = null, rangeEndMs = null, limit = 200 } = {}) {
   const now = Date.now();
   const effectiveEndMs = rangeEndMs != null && Number.isFinite(Number(rangeEndMs)) ? Number(rangeEndMs) : now;
   const effectiveStartMs = rangeStartMs != null && Number.isFinite(Number(rangeStartMs))
@@ -2240,7 +2244,38 @@ function buildLeaveAttendanceAlerts({ employees = dbModule.loadEmployees(), rang
     });
   });
 
-  return alerts.sort((a, b) => Number(b.punchAt || b.startAt || 0) - Number(a.punchAt || a.startAt || 0)).slice(0, 200);
+  alerts.sort((a, b) => Number(b.punchAt || b.startAt || 0) - Number(a.punchAt || a.startAt || 0));
+  return limit == null ? alerts : alerts.slice(0, limit);
+}
+
+const LEAVE_AUDIT_ALERT_TYPES = [
+  ['leave_boundary_tolerance', '容許時間範圍'],
+  ['leave_window_punch_conflict', '請假期間有打卡'],
+  ['full_day_leave_with_attendance', '全天請假日仍有打卡'],
+  ['partial_leave_missing_attendance', '部分請假但當日無打卡']
+];
+
+function queryAdminLeaveAudit(input = {}, employees = dbModule.loadEmployees()) {
+  const scalar = (name) => {
+    if (input[name] == null || input[name] === '') return '';
+    if (typeof input[name] !== 'string') throw createHttpError('查核篩選格式不正確。', 400);
+    return input[name].trim();
+  };
+  const month = scalar('month') || new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 7);
+  let range;
+  try { range = leaveAuditMonthRange(month); } catch (error) { throw createHttpError(error.message, 400); }
+  const filters = { month, employeeId: scalar('employeeId'), department: scalar('department'), alertType: scalar('alertType') };
+  if (filters.alertType && !LEAVE_AUDIT_ALERT_TYPES.some(([id]) => id === filters.alertType)) throw createHttpError('請選擇有效的警示類型。', 400);
+  if (filters.employeeId.length > 100 || filters.department.length > 200) throw createHttpError('查核篩選內容過長。', 400);
+  const all = buildLeaveAttendanceAlerts({ employees, rangeStartMs: range.start, rangeEndMs: range.end - 1, limit: null });
+  const records = all.filter((row) => (!filters.employeeId || row.employeeId === filters.employeeId) &&
+    (!filters.department || row.department === filters.department) && (!filters.alertType || row.alertType === filters.alertType));
+  const roster = new Map(employees.map(({ id, name, department }) => [id, { id, name, department: department || '' }]));
+  all.forEach((row) => { if (!roster.has(row.employeeId)) roster.set(row.employeeId, { id: row.employeeId, name: row.employeeName, department: row.department }); });
+  return { filters, records, totalCount: records.length,
+    employees: [...roster.values()].sort((a, b) => a.id.localeCompare(b.id)),
+    departments: [...new Set([...roster.values()].map((row) => row.department).filter(Boolean))].sort(),
+    alertTypes: LEAVE_AUDIT_ALERT_TYPES.map(([id, label]) => ({ id, label })) };
 }
 
 function getAdminLeaveState(employees = dbModule.loadEmployees(), options = {}) {
@@ -2258,6 +2293,7 @@ function getAdminLeaveState(employees = dbModule.loadEmployees(), options = {}) 
     ? dbModule.queryLeaveRequests({ status: 'pending_admin', limit: 50, maxLimit: 50 })
       .map((request) => formatLeaveRequestForDashboard(request, lookup))
     : [];
+  const audit = canReview ? queryAdminLeaveAudit({}, employees) : null;
   return {
     leaveTypes,
     approvalRoutes: canSettings ? dbModule.getReviewSupervisors().rows() : [],
@@ -2265,7 +2301,8 @@ function getAdminLeaveState(employees = dbModule.loadEmployees(), options = {}) 
     requestsPage,
     pendingAdmin,
     pendingAdminTotalCount,
-    alerts: canReview ? buildLeaveAttendanceAlerts({ employees }) : []
+    alerts: audit?.records || [],
+    audit
   };
 }
 
@@ -6290,27 +6327,32 @@ function attachBrowserRoutes(server) {
     }
   });
 
+  server.get('/api/browser/admin/leave-audit', requireBrowserSession, requireAdminPermission('admin.leave.review'), (request, response) => {
+    try {
+      response.json({ success: true, data: queryAdminLeaveAudit(request.query || {}) });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+  });
+
   server.post('/api/browser/admin/leave-audit/export', requireBrowserSession, requireAdminPermission('admin.leave.review'), (request, response) => {
     try {
-      const employees = dbModule.loadEmployees();
-      const leaveState = getAdminLeaveState(employees);
-      const today = new Date();
+      const audit = queryAdminLeaveAudit(request.body || {});
       writeBrowserAuditLog(request, {
         action: 'export',
         target_type: 'leave_audit_alerts',
         target_id: 'leave_attendance_audit',
-        summary: `匯出請假出勤查核，共 ${leaveState.alerts.length} 筆`,
-        after_data: {
-          record_count: leaveState.alerts.length
-        }
+        summary: `匯出 ${audit.filters.month} 請假出勤查核，共 ${audit.records.length} 筆`,
+        after_data: { record_count: audit.records.length, filters: audit.filters }
       });
-
       response.json({
         success: true,
-        message: '請假出勤查核匯出內容已產生。',
+        message: '已依目前篩選產生請假出勤查核 CSV。',
         data: {
-          fileName: buildExportFileName('請假出勤查核', today, today),
-          csvContent: buildLeaveAlertsCsv(leaveState.alerts)
+          fileName: `請假出勤查核_${audit.filters.month}.csv`,
+          csvContent: buildLeaveAlertsCsv(audit.records),
+          totalCount: audit.records.length,
+          filters: audit.filters
         }
       });
     } catch (error) {

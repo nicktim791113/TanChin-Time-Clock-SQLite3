@@ -1,7 +1,15 @@
 /* Contextual instructions use the controls actually rendered for the signed-in user.
  * Never copy field values, employee names, credentials, or record contents into help. */
 const workbenchHelpTopics = {
-    'admin.salaryAdvances': ['借支申請管理', '員工登記後直接交管理部審核；依權限管理活動、核准或退回申請，並下載月份總表。', ['選查看登記月份，核對申請金額、狀態與申請備註。', '具審核權限者按審核，選核准或退回；核准時確認不超過申請金額，填審核說明後送出。', '待審或已核准申請需要取消時，填原因並確認取消；已發放款項須另行核對。', '具匯出權限者下載所選月份 Excel 總表及明細；具設定權限者可設定開放日期、單筆上限、有效筆數及預計扣回月份。'], ['借支不經主管審核，也不開放主管代辦；檢視、審核、匯出與活動設定分別授權。', '核准只表示申請通過，不代表已發放或已扣薪。取消也不會自動沖回 ERP 已入帳或已發放的款項。', '每月有效筆數只計待審及已核准；退回、撤回及取消不占有效筆數。總表保留各狀態明細，核准合計排除已取消申請。', '活動設定只影響之後的新申請，舊單保留送件規則快照；更改設定須填原因，不能直接改寫舊單金額。']],
+    'admin.salaryAdvances': ['借支申請管理', '員工登記後直接交管理部審核；依權限管理活動、核准或退回申請，並下載月份總表。', ['選查看登記月份，核對申請金額、狀態與申請備註。', '具審核權限者按審核，選核准或退回；核准時確認不超過申請金額，審核說明可留空後送出。', '待審或已核准申請需要取消時，填原因並確認取消；已發放款項須另行核對。', '具匯出權限者下載所選月份 Excel 總表及明細；具設定權限者可設定開放日期、單筆上限、有效筆數及預計扣回月份。'], ['借支不經主管審核，也不開放主管代辦；檢視、審核、匯出與活動設定分別授權。', '核准只表示申請通過，不代表已發放或已扣薪。取消也不會自動沖回 ERP 已入帳或已發放的款項。', '每月有效筆數只計待審及已核准；退回、撤回及取消不占有效筆數。總表保留各狀態明細，核准合計排除已取消申請。', '活動設定只影響之後的新申請，舊單保留送件規則快照；更改設定須填原因，不能直接改寫舊單金額。']],
+    'salaryAdvances.query': ['借支申請管理', '按登記月份查詢全員名冊及申請狀態。', ['使用月份、部門、人員及狀態條件篩選；同一人多筆申請保留全部狀態。', '灰色為無申請、黃色為待複核、紅色為取消或退回、綠色為已複核或補登記。', '此頁僅查詢；審核請到管理部待複核，直接登記請到紙本核准補登。'], ['金額為新臺幣；已複核與補登記都不代表實際發放或扣薪。']],
+    'salaryAdvances.review': ['借支申請管理', '管理部待複核工作頁，員工申請直接交管理部審核。', ['預設顯示待複核；可切換狀態查看其他申請。', '按審核開啟彈窗，核准或退回，審核說明選填；核准金額不得超過申請金額。', '取消待複核或已複核申請須在彈窗填原因並確認。'], ['取消不會自動沖回 ERP 已入帳或已發放款項。']],
+    'salaryAdvances.paper': ['借支申請管理', '依已核准紙本替員工補登，並保留每次儲存的修改紀錄。', ['選登記月份，在員工列填金額與選填備註，核對後確認儲存。', '已補登資料可再次修改後儲存；同一筆申請累加修訂版本，保留前後值與操作人。', '員工可在自己的借支月份頁查看補登記結果。'], ['需要紙本借支補登與修正權限。可補歷史月份，不受員工登記開放日期限制，但仍受活動金額與新增有效筆數限制。', '修正沿用原單規則快照與預計扣回月份；一般線上申請不能由此直接改金額。']],
+    'salaryAdvances.settings': ['借支申請管理', '依設定權限維護每月借支活動。', ['調整開放日期、單筆金額上限、有效筆數及預計扣回月份。', '填寫設定原因並儲存。'], ['設定只影響之後的新申請；舊單保留送件規則快照。']],
+    'salaryAdvances.reviewDialog': ['管理部審核', '確認這筆借支申請的審核結果。', ['選核准或退回；核准時填大於零且不超過申請金額的整數金額。', '審核說明選填；確認送出後才儲存。'], ['核准不表示實際發放或扣薪。返回不會儲存此次審核。']],
+    'salaryAdvances.cancelDialog': ['取消借支申請', '取消待複核、已複核或紙本補登紀錄。', ['填操作原因，核對後按確認取消申請。'], ['取消保留原始申請與修訂紀錄；不會自動沖回 ERP 已入帳或已發放款項。']],
+    'salaryAdvances.withdrawDialog': ['撤回借支申請', '員工本人撤回尚待管理部審核的申請。', ['填操作原因，核對後確認撤回。'], ['已複核或紙本核准紀錄須聯絡管理部，不能自行撤回。']],
+    'salaryAdvances.paperDialog': ['紙本核准補登確認', '最後核對補登或修改內容，確認後才會儲存。', ['核對畫面上的員工、登記月份、金額及備註。', '按確認儲存寫入；需要修正時按返回修改。'], ['每次儲存保留操作紀錄。修改沿用原單號、規則快照及預計扣回月份，員工可查看更新後的紀錄。']],
     'employee.salaryAdvances': ['我的借支', '查看本人借支申請與審核結果，在活動開放期間直接送交管理部。', ['核對本月登記期間、單筆金額及有效筆數上限。', '填入整數新臺幣金額及選填備註，按送交管理部審核。', '切換登記月份查看本人的申請與狀態；待審單可填原因自行撤回。', '已核准需變更時聯絡管理部；退回、撤回或取消後，如仍在開放期間且符合上限，可重新申請。'], ['借支不經主管審核，也不開放主管代辦；此處只能查看本人的申請。', '核准不代表已領款，實際發放與薪資扣回由公司後續作業處理。', '開放期間以臺北時間計算；送件後保留當時活動規則，後續設定不會自動改變已送出的申請。']],
     'export.databaseBackup': ['完整資料庫備份與還原', '將目前連線主機的資料庫備份到兩個已保存位置之一，並把完整 ZIP 下載到目前操作電腦。從 TC039 連到打卡鐘時，主機存檔與 TC039 下載是兩個步驟。', ['先核對上方「已儲存路徑」。位置 1 保留原打卡鐘備份位置；位置 2 可填指定本機或網路共用路徑，留空停用。修改路徑或保留份數後按儲存。', '在「本次主機端存放位置」選位置 1 或位置 2，再按「立即完整備份並下載」。選擇只影響本次，不更改排程；建立完成後瀏覽器下載 ZIP。', '下載失敗而主機備份成功時，按「再次下載這份備份」，不會重新建立備份。有效期結束或登出後需重新執行。', '要還原先完整解壓 ZIP，將資料庫、manifest 與密碼金鑰附檔保留同一資料夾，核對連線主機與來源，再選資料庫檔並輸入「還原資料庫」。系統先建立緊急備份。'], ['兩個位置都由打卡鐘主機存取；TC039 能開啟 NAS，不代表打卡鐘執行帳戶有寫入權限。無法寫入所選位置會明確失敗，不會默默改存另一位置。', '在主機選位置／選擇備份檔會在主機開啟對話框，不是操作電腦的檔案選擇器；遠端操作可直接輸入主機端路徑。', '瀏覽器可決定下載資料夾或詢問另存位置。畫面「交由瀏覽器下載」不代表已確認使用者磁碟存檔，請核對瀏覽器下載清單。', '最近完整備份只列位置 1；位置 2 請至指定資料夾查看。保留份數分別套用於各位置，執行時只清理本次位置；排程指定路徑不受本次選擇影響。', 'ZIP 含完整業務資料與可用的密碼金鑰，不可公開分享或上傳 Git。此操作不包含自訂背景／音效，亦不會自動建立安全測試環境。']],
     'people.form': ['新增／編輯員工', '維護員工主檔。新增與編輯使用同一表單；編輯時會帶入既有資料，儲存才會寫入。', ['先填工號、姓名、部門及班別，再核對卡號與任職資料。', '感應讀卡只填入卡號，不會產生打卡紀錄。完成後按儲存；取消編輯可回到新增狀態。', '聯絡、家庭、銀行與身分資料屬個人資料，僅填業務所需。'], ['改工號前先確認歷史與關聯資料；不要用刪除再新增代替一般資料修改。', 'CSV 匯出包含完整名冊，不受篩選影響；匯入按工號／卡號合併，不刪除未列出的員工。']],
@@ -17,7 +25,7 @@ const workbenchHelpTopics = {
     'manualPunch.form': ['手動補登', '替指定員工新增缺漏的打卡紀錄。下方只顯示最近 50 筆手動補登。', ['選員工、日期、時間與打卡類型，確認應補的時點後送出。', '送出後核對成功訊息及下方補登紀錄，避免重複送出。'], ['補登打卡與紙本請假／加班核准補登是不同作業。', '歷史記錄區只保留最近 50 筆的畫面呈現，不會因此刪除較舊資料。']],
     reports: ['考勤報表', '依日期與員工查詢考勤，再匯出與目前查詢一致的結果。', ['選起訖日期與員工，按查詢報表。', '查看摘要與考勤明細，再選精簡考勤 CSV 或請假／加班明細 CSV。', '重設條件會清除查詢狀態；更改條件後須重新查詢才是新的結果。'], ['薪資明細列核准請假／加班時數，不代表系統已計算應付薪資。', '資料頁的欄位顯示與匯出模板是不同設定。']],
     'leave.paper': ['紙本核准請假補登', '將已完成紙本核准的請假登錄為正式紀錄；不是一般待審申請。', ['勾選 1 至 100 位員工，選一種假別並填紙本核准人及原因。', '填新增日期區間、每日起訖與實際時數，按加入上方日期區間；可重複加入不同區間或新增單一時段。', '預設 08:20–17:00；完整涵蓋 12:20–13:00 預帶休息 40 分鐘、淨時數 8 小時。休息分鐘可單獨修改，修改後重算淨時數；同日可加另一段但不能重疊。', '同批員工使用相同日期與時數，班表不同請分開送出。', '核對核准依據及確認欄後送出；批量失敗不應只重送部分而造成重複。'], ['已在系統的舊單應用修正功能，維持同一單號；不要重建替代。', '新多時段單修正帶回各段起訖與時數；既有逐日單保留原編輯器，舊範圍單仍須重新勾選確認，不會自動推測時段。', '只計入清單中實際日期與時段；外框起訖不是連續請假。每位員工一張單，審核及作廢處理整張單。']],
-    'leave.audit': ['請假出勤查核', '比對請假與考勤警示，提供人工查核線索。', ['查看人員、請假期間與警示原因；真實起點或終點前後 20 分鐘內（含邊界）為黃色「容許時間範圍」。相接時段內部端點不另算邊界，深入區間的打卡仍為紅色；全天仍有其他打卡及無打卡提醒保留。', '確認後以合適的補登、修正或審核功能處理。'], ['警示不是自動裁定曠職或扣薪；請先查明事實。']],
+    'leave.audit': ['請假出勤查核', '預設查看當月請假與考勤警示，可按月份、部門、人員及警示類型篩選。', ['先選查核月份與篩選條件，再按查詢；匯出使用相同條件，不混列其他月份。', '查看人員、請假期間與警示原因；真實起點或終點前後 20 分鐘內（含邊界）為黃色「容許時間範圍」。相接時段內部端點不另算邊界，深入區間的打卡仍為紅色；全天仍有其他打卡及無打卡提醒保留。', '確認後以合適的補登、修正或審核功能處理。'], ['警示不是自動裁定曠職或扣薪；請先查明事實。']],
     'leave.pending': ['管理部待複核', '管理部處理已完成主管程序的待複核請假。', ['核對人員、假別、所有日期／時段、實際時數與主管審核進度；一次處理整張單。', '填審核備註後選核准或駁回，確認結果。'], ['部分必審主管核准不會提前進入管理部；請勿在這裡代替主管投票。', '核准轉為已用額度；駁回釋放預占。']],
     'leave.records': ['請假紀錄', '用日曆或列表查看請假，依權限審核、修正或作廢。', ['切換日曆／列表、月份與篩選條件；列表可翻頁。', '點原單展開各日期與精確時段、實際時數、狀態與審核進度。', '修正保留同一單號；作廢前確認原因及影響。'], ['新多時段單只在實際請假日期出現；同日多段仍是一張單，不能把日期格數或段數當申請件數。', '待審是預占，終審核准才計為已用。']],
     'leave.types': ['假別設定', '維護假別名稱、單位、附件需求、額度扣抵與給薪標記。', ['新增或編輯假別，核對是否需要附件及是否扣抵額度。', '給薪標記可選全薪、半薪或無薪，完成後儲存設定。'], ['給薪標記只供資訊與 API 輸出；不會自動計算薪資、扣薪或改變薪資匯出金額。', '病假的半薪可能有法定天數與情況限制；此欄不是完整法定病假薪資引擎。', '停用保留歷史引用，與刪除假單不同。']],
@@ -121,11 +129,22 @@ function workbenchHelpContext(includeModal = true) {
     if (role === 'employee' && ['leave', 'overtime'].includes(state.employeeWorkspacePanel)) section = state.employeeWorkspacePanel;
     let sub = state.activeSubSections?.[role]?.[section] || '';
     if (section === 'meals' && typeof mealState !== 'undefined') sub = mealState.panel;
+    if (section === 'salaryAdvances' && role === 'admin' && typeof saState !== 'undefined') sub = saState.page;
     if (section === 'supervisors' && typeof supervisorState !== 'undefined') sub = supervisorState.managementView || 'review';
-    const topic = workbenchHelpTopics[`${role}.${section}`] || workbenchHelpTopics[`${section}.${sub}`] || workbenchHelpTopics[section] || workbenchHelpTopics[role] || workbenchHelpTopics.employee;
+    const salaryDialog = includeModal && salaryVisible && section === 'salaryAdvances' ? salaryRoot.querySelector('.sa-dialog[open]') : null;
+    if (salaryDialog) {
+        const stage = salaryDialog.querySelector('[data-sa-form]')?.dataset.saForm;
+        const topicKey = { review: 'reviewDialog', cancel: 'cancelDialog', withdraw: 'withdrawDialog', 'paper-confirm': 'paperDialog' }[stage];
+        if (topicKey) return { role, section, sub, stage, topic: workbenchHelpTopics[`salaryAdvances.${topicKey}`], root: '#salary-advance-workspace .sa-dialog[open]' };
+    }
+    const topic = (role === 'admin' && workbenchHelpTopics[`${section}.${sub}`]) || workbenchHelpTopics[`${role}.${section}`] || workbenchHelpTopics[`${section}.${sub}`] || workbenchHelpTopics[section] || workbenchHelpTopics[role] || workbenchHelpTopics.employee;
     return { role, section, sub, topic, ...(section === 'salaryAdvances' && salaryVisible ? { root: '#salary-advance-workspace' } : {}) };
 }
 function workbenchControlLabel(node) {
+    if (node.closest('form')?.dataset.saForm === 'paper') {
+        if (node.name === 'requestedAmount') return '補登金額（元）';
+        if (node.name === 'note') return '補登備註（選填）';
+    }
     if (node.matches('[data-al-employee]')) return '選擇員工';
     if (node.matches('summary') && node.closest('#annual-leave-workspace,#annual-leave-detail-dialog')) return '展開來源批次與計算明細';
     const personField = node.name || '';
@@ -149,22 +168,30 @@ function workbenchControlDescription(node, context) {
         const salaryActions = {
             refresh: '重新讀取所選月份的借支申請及活動規則；不會送出申請或儲存目前表單。',
             export: '下載所選登記月份的 Excel 總表及各狀態明細；核准合計排除已取消申請，不代表實際付款或扣薪。',
-            review: '開啟管理部審核表單；核對申請金額、選核准或退回並填說明，再確認送出。借支不經主管審核。',
+            review: '開啟管理部審核表單；核對申請金額、選核准或退回，說明可留空，再確認送出。借支不經主管審核。',
             withdraw: '開啟本人待審申請的撤回表單；填原因並確認後才撤回，已核准請聯絡管理部。',
             cancel: '開啟管理部取消申請表單；待審或已核准申請須填原因並確認。取消不會自動沖回已發放款項。',
-            dismiss: '返回借支清單，不送出此次審核、撤回或取消操作。'
+            dismiss: context.stage === 'paper-confirm' ? '返回紙本補登清單繼續修改，保留欄位草稿，不送出本次補登或修改。' : '返回借支清單，不送出此次審核、撤回或取消操作。',
+            page: '切換借支管理子頁，不送出申請、審核或目前表單。',
+            'reset-filters': '重設目前子頁的部門、人員及狀態條件；待複核頁回到待複核狀態，保留目前月份。'
         };
         const salarySubmits = {
             submit: '送出本人的借支申請，直接交管理部審核；須在開放期間內，並符合金額與有效筆數上限。',
             settings: '保存每月借支活動規則及設定原因，只影響之後的新申請；既有申請保留送件時規則。',
-            review: '確認管理部審核結果與說明；核准金額不能超過申請金額，核准不代表已發放。',
+            review: '確認管理部審核結果（說明選填）；核准金額不能超過申請金額，核准不代表已發放。',
             withdraw: '確認撤回本人待審申請並記錄原因；撤回後不占每月有效筆數。',
-            cancel: '確認取消此筆申請並記錄原因；核准總額排除此筆，若已發放或 ERP 已入帳仍須另行核對。'
+            cancel: '確認取消此筆申請並記錄原因；核准總額排除此筆，若已發放或 ERP 已入帳仍須另行核對。',
+            filters: context.sub === 'paper' ? '套用月份、部門、人員及狀態條件；新增補登將使用已查詢的登記月份，不會直接儲存資料。' : '套用月份、部門、人員及狀態條件，只查詢資料，不修改申請。',
+            paper: '開啟補登確認視窗，先核對員工、月份、金額及備註；此步驟尚未儲存。',
+            'paper-confirm': '確認後儲存新增補登或修改；直接列為紙本已核准，保留操作紀錄，並顯示於員工自己的登記月份。'
         };
         const salaryFields = {
-            applicationMonth: '選擇要查看的借支登記月份；只切換清單與匯出範圍，不變更申請月份或活動規則。',
-            requestedAmount: '本人要借支的新臺幣整數金額，須大於零且不超過活動單筆上限。',
-            note: '選填此次借支申請的補充說明，供管理部審核。',
+            applicationMonth: context.sub === 'paper' ? '選擇補登月份並按查詢套用；新增補登使用此月份。編輯既有紙本紀錄不會改變原登記月份。' : '選擇要查看的借支登記月份；只切換清單與匯出範圍，不變更申請月份或活動規則。',
+            requestedAmount: form?.dataset.saForm === 'paper' ? '替該員工填寫已核准紙本的整數新臺幣金額。新增遵守目前活動上限，修改遵守原單規則快照上限；確認後才儲存。' : '本人要借支的新臺幣整數金額，須大於零且不超過活動單筆上限。',
+            note: form?.dataset.saForm === 'paper' ? '選填紙本核准補登或修改的說明，隨紀錄留存；此筆不再送管理部待複核。' : '選填此次借支申請的補充說明，供管理部審核。',
+            department: '按員工部門篩選，按查詢後套用。',
+            search: '輸入員工工號、姓名或部門文字，按查詢後套用；不修改員工資料。',
+            status: '篩選申請狀態；全員查詢保留符合人員的完整當月申請，無申請表示該月份沒有任何紀錄。',
             enabled: '是否開放每月借支登記；啟用前須設定金額及有效筆數上限，儲存後才生效。',
             startDay: '每月開始登記日；依臺北時間計算，月份沒有指定日期時採該月最後一天。',
             endDay: '每月截止日，包含當日 23:59；月份沒有指定日期時採該月最後一天。',
@@ -173,12 +200,13 @@ function workbenchControlDescription(node, context) {
             deductionMonthOffset: '預計扣回月份相對申請月的差距；可保留尚待確認，此設定不會執行扣薪。',
             decision: '選管理部核准或退回；借支沒有主管審核階段。',
             approvedAmount: '核准的新臺幣整數金額，須大於零且不得超過申請金額；退回時不使用。',
-            reason: '填本次設定、審核、撤回或取消的原因，供操作紀錄與後續查核；送出前核對。'
+            reason: '管理部審核說明可留空；設定、撤回與取消仍須填原因，供操作紀錄與後續查核。'
         };
         if (salaryActions[node.dataset.saAction]) return salaryActions[node.dataset.saAction];
+        if (node.matches('[data-sa-paper-target]')) return '選擇要修改的既有紙本補登，或新增另一筆補登；選擇本身不儲存，不能用此欄修改一般線上申請。';
         if (node.matches('button[type="submit"]') && salarySubmits[form?.dataset.saForm]) return salarySubmits[form.dataset.saForm];
         if (salaryFields[name]) return salaryFields[name];
-        if (label === '活動設定') return '展開每月借支活動規則；只有具活動設定權限者能修改，展開本身不會儲存。';
+        if (label === '活動設定') return '切換每月借支活動設定頁；只有具活動設定權限者能修改，切換本身不會儲存。';
     }
     if (node.dataset.lsAction) return ({ 'add-range': '按上方日期區間及每日起訖，把每個適用日加入清單；相同時數套用至新增列，重複或重疊時不加入。', 'add-one': '新增一列精確日期、起訖與時數；尚未送出申請。', duplicate: '在同日新增另一段，須補結束時間與時數，不能與原段重疊。', remove: '刪除目前草稿中的此段；紙本修正仍須整份儲存才生效。' })[node.dataset.lsAction] || '';
     if (node.dataset.lsField) return ({ date: '這一段實際請假的台北日期；同日可有多段。', startTime: '本段開始時間；按精確時間檢查與其他請假是否重疊。', endTime: '本段結束時間；00:00 表示當日 24:00。跨夜請分兩天填寫。', breakMinutes: '休息整數分鐘；完整涵蓋 12:20–13:00 預帶 40，其他預帶 0。修改後重算淨時數，須小於起訖長度。', hours: '扣除休息後的本段實際請假時數，須大於零、最多兩位小數，且不得超過扣除休息後長度。' })[node.dataset.lsField] || '';
@@ -327,7 +355,7 @@ function workbenchControlInventory(context = workbenchHelpContext()) {
     return entries;
 }
 function installWorkbenchModalHelp() {
-    for (const root of document.querySelectorAll('#admin-directory-dialog[open],#dashboard-metric-settings[open],#dashboard-insight-modal:not(.hidden),#annual-leave-detail-dialog[open]')) {
+    for (const root of document.querySelectorAll('#admin-directory-dialog[open],#dashboard-metric-settings[open],#dashboard-insight-modal:not(.hidden),#annual-leave-detail-dialog[open],#salary-advance-workspace .sa-dialog[open]')) {
         if (root.querySelector('[data-wb-modal-help]')) continue;
         const header = root.querySelector('.modal-header,.ad-dialog-header,.dm-dialog-header,header') || root.firstElementChild;
         if (!header) continue;
@@ -363,7 +391,8 @@ function installWorkbenchPageHelp() {
     if (!state.dashboard) return;
     document.body.dataset.workbenchRole = state.dashboard.role;
     const context = workbenchHelpContext(false);
-    const root = ui.dashboardContent.querySelector('.workspace-subnav-content') || ui.dashboardContent.querySelector('#meal-workspace') || ui.dashboardContent.querySelector('.workspace-shell') || ui.dashboardContent;
+    const moduleRoot = context.root ? document.querySelector(context.root) : null;
+    const root = moduleRoot?.querySelector('.workspace-subnav-content') || moduleRoot || ui.dashboardContent.querySelector('.workspace-subnav-content') || ui.dashboardContent.querySelector('#meal-workspace') || ui.dashboardContent.querySelector('.workspace-shell') || ui.dashboardContent;
     let toolbar = root.querySelector(':scope > .wb-page-toolbar');
     if (!toolbar) { toolbar = document.createElement('div'); toolbar.className = 'wb-page-toolbar'; root.prepend(toolbar); }
     toolbar.innerHTML = `<div><h3>${escapeHtml(context.topic[0])}</h3><span>依目前權限顯示可操作項目</span></div><button type="button" class="outline-btn" data-action="wb-help">操作說明</button>`;
@@ -393,9 +422,10 @@ handleDashboardClick = function handleWorkbenchHelpClick(event) {
     return wbPreviousClick(event);
 };
 // Independent modules repaint their own content without a dashboard render.
-for (const [name, original] of [['mealPaint', typeof mealPaint === 'function' ? mealPaint : null], ['lePaint', typeof lePaint === 'function' ? lePaint : null], ['spPaint', typeof spPaint === 'function' ? spPaint : null]]) {
+for (const [name, original] of [['mealPaint', typeof mealPaint === 'function' ? mealPaint : null], ['lePaint', typeof lePaint === 'function' ? lePaint : null], ['spPaint', typeof spPaint === 'function' ? spPaint : null], ['saPaint', typeof saPaint === 'function' ? saPaint : null]]) {
     if (!original) continue;
     if (name === 'mealPaint') mealPaint = function mealPaintWithHelp() { original(); installWorkbenchPageHelp(); };
     if (name === 'lePaint') lePaint = function lePaintWithHelp() { original(); installWorkbenchPageHelp(); };
     if (name === 'spPaint') spPaint = function spPaintWithHelp() { original(); installWorkbenchPageHelp(); };
+    if (name === 'saPaint') saPaint = function saPaintWithHelp() { original(); installWorkbenchPageHelp(); };
 }

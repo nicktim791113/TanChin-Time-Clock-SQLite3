@@ -102,16 +102,29 @@ function renderMealWorkspace() {
     const data = mealState.data;
     const admin = mealIsAdmin();
     const tabs = [['calendar', '午餐日曆'], ['membership', '參加資格'], ['schedule', '供餐制度']];
-    return `<section id="meal-workspace" class="meal-workspace" aria-label="午餐團膳">
-        <div class="meal-toolbar"><h3>${admin ? '午餐團膳' : '我的午餐團膳'}</h3><div class="meal-month-controls">
-            ${mealButton('month', '←', 'data-offset="-1" aria-label="上個月" title="上個月"')}
-            <input type="month" data-meal-month aria-label="團膳月份" value="${mealEscape(mealState.month)}" min="2000-01" max="2100-12">
-            ${mealButton('month', '→', 'data-offset="1" aria-label="下個月" title="下個月"')}${mealButton('refresh', '重新整理')}
-        </div>${admin ? mealButton('export', '匯出月報') : ''}</div>
-        ${admin ? `<div class="meal-tabs" role="tablist" aria-label="團膳管理項目">${tabs.map(([id, label]) => `<button type="button" role="tab" data-action="meal-panel" data-panel="${id}" aria-selected="${mealState.panel === id}" class="${mealState.panel === id ? 'is-active' : ''}">${label}</button>`).join('')}</div>` : ''}
-        <div class="inline-message" id="meal-message" aria-live="polite">${mealState.pending ? '資料有異動，重新整理後可查看最新餐數。' : ''}</div>
-        ${!data ? '<p role="status">讀取團膳資料中…</p>' : admin && mealState.panel === 'membership' ? renderMealMembers(data) : admin && mealState.panel === 'schedule' ? renderMealSchedule(data) :
-        `${renderMealWarnings(data)}${renderMealCalendar(data)}${renderMealDay(data.days.find((day) => day.date === mealState.selectedDate))}`}
+    if (!tabs.some(([id]) => id === mealState.panel)) mealState.panel = 'calendar';
+    const controls = `<div class="meal-month-controls">
+        ${mealButton('month', '←', 'data-offset="-1" aria-label="上個月" title="上個月"')}
+        <input type="month" data-meal-month aria-label="團膳月份" value="${mealEscape(mealState.month)}" min="2000-01" max="2100-12">
+        ${mealButton('month', '→', 'data-offset="1" aria-label="下個月" title="下個月"')}${mealButton('refresh', '重新整理')}
+    </div>`;
+    const message = `<div class="inline-message" id="meal-message" aria-live="polite">${mealState.loading ? '正在讀取團膳資料…' : mealState.pending ? '資料有異動，重新整理後可查看最新餐數。' : ''}</div>`;
+    const panel = !data ? '<p role="status">讀取團膳資料中…</p>' : admin && mealState.panel === 'membership' ? renderMealMembers(data) : admin && mealState.panel === 'schedule' ? renderMealSchedule(data) :
+        `${renderMealWarnings(data)}${renderMealCalendar(data)}${renderMealDay(data.days.find((day) => day.date === mealState.selectedDate))}`;
+    if (!admin) return `<section id="meal-workspace" class="meal-workspace" aria-label="午餐團膳">
+        <div class="meal-toolbar"><h3>我的午餐團膳</h3>${controls}</div>${message}${panel}</section>`;
+    const sidebar = `<aside class="workspace-subnav-sidebar" aria-label="午餐團膳子導覽"><div class="workspace-subnav-card"><div class="workspace-subnav-group">
+        <p class="workspace-subnav-group-title">午餐團膳</p><div class="workspace-subnav-items">${tabs.map(([id, label]) =>
+            `<button type="button" class="workspace-subnav-item ${mealState.panel === id ? 'is-active' : ''}" data-action="meal-panel" data-panel="${id}" aria-current="${mealState.panel === id ? 'page' : 'false'}"><span>${label}</span></button>`).join('')}</div>
+        </div></div></aside>`;
+    return `<section id="meal-workspace" class="meal-workspace meal-admin-workspace workspace-stack workspace-subnav-stack" data-workspace-role="admin" data-workspace-section="meals" aria-label="午餐團膳">
+        <div class="workspace-subnav-layout">${sidebar}<section class="workspace-subnav-content" aria-live="polite">
+            <article class="table-card meal-admin-panel"><div class="meal-toolbar">
+                ${mealState.panel === 'calendar' ? `${controls}${mealButton('export', '匯出月報')}` : mealButton('refresh', '重新整理')}</div>
+                <p class="helper-text">${mealState.panel === 'calendar' ? '按日期查看登記人員、代登用餐與供應商交單；匯出使用目前月份。' : mealState.panel === 'membership' ? '設定員工參加或退出團膳的生效日期；修改會保留操作紀錄。' : '設定每週供餐日與截止時間；單日供餐例外請至午餐日曆選擇日期。'}</p>
+                ${message}${panel}
+            </article>
+        </section></div>
     </section>`;
 }
 function mealPaint() {
@@ -123,15 +136,18 @@ function mealMessage(text, type = 'error') { setMessage(document.getElementById(
 async function mealLoad() {
     const identity = mealState.identity, month = mealState.month, token = state.token;
     mealState.loading = true;
+    document.getElementById('meal-workspace')?.setAttribute('aria-busy', 'true');
+    mealMessage('正在讀取團膳資料…', 'info');
     try {
         const route = mealIsAdmin() ? 'admin' : 'employee';
         const result = await requestJson(`/api/browser/${route}/meals?month=${encodeURIComponent(month)}`, { auth: true });
         if (identity !== mealState.identity || month !== mealState.month || token !== state.token) return;
         mealState.data = result.meals;
         mealState.pending = false;
+        mealState.loading = false;
         if (!result.meals.days.some((day) => day.date === mealState.selectedDate)) mealState.selectedDate = result.meals.days.find((day) => day.date === result.meals.today)?.date || result.meals.days[0]?.date;
         mealPaint();
-    } finally { if (identity === mealState.identity) mealState.loading = false; }
+    } finally { if (identity === mealState.identity && month === mealState.month && token === state.token) { mealState.loading = false; document.getElementById('meal-workspace')?.removeAttribute('aria-busy'); } }
 }
 function mealDiscard() { return !mealState.dirty || window.confirm('尚有未儲存的團膳修改，確定離開？'); }
 const previousMealRenderDashboard = renderDashboard;

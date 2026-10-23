@@ -4016,3 +4016,10 @@ body::after {
 }
 
 [data-request-history-settings] fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+
+/* Admin lunch uses the same left navigation and content geometry as leave. */
+.meal-admin-workspace { padding: 0; }
+.meal-admin-panel > .meal-settings { margin-top: 0; padding-top: 0; border-top: 0; }
+.meal-admin-panel .meal-toolbar, .meal-admin-workspace .meal-toolbar { min-width: 0; }
+.meal-admin-workspace .meal-month-controls { max-width: 100%; }
+#leave-audit-filter-form .field-grid { grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); }

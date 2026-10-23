@@ -114,9 +114,9 @@ test('actual segment boundaries handle gaps and midnight without suppressing ind
     // actual punch is in range. The widened leave query must still find it.
     create('upcoming-boundary', [[at('2026-10-23', '12:10'), at('2026-10-23', '14:10'), 2]]);
     punch(at('2026-10-23', '11:50'));
-    // The report covers the most recent 60 days. Exactly 20 minutes after a
+    // The report defaults to the current Taipei month. Exactly 20 minutes after a
     // leave's end still qualifies when that punch is the first report instant.
-    const reportStart = Date.now() - 60 * 24 * 60 * minute;
+    const reportStart = at('2026-10-01', '00:00');
     create('report-start-boundary', [[reportStart - 140 * minute, reportStart - 20 * minute, 2]]);
     punch(reportStart);
     create('touching-segments', [[at('2026-10-18', '09:00'), at('2026-10-18', '09:10'), 0.16],

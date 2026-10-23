@@ -145,6 +145,7 @@ async function routeFixture() {
         ['supervisor', { role: 'employee', employeeId: '088', permissions: Object.values(P) }],
         ['view', { role: 'admin', employeeId: 'admin-view', permissions: [P.view] }],
         ['review', { role: 'admin', employeeId: 'admin-review', permissions: [P.review] }],
+        ['paper', { role: 'admin', employeeId: 'admin-paper', permissions: [P.paper] }],
         ['settings', { role: 'admin', employeeId: 'admin-settings', permissions: [P.settings] }],
         ['export', { role: 'admin', employeeId: 'admin-export', permissions: [P.export] }],
         ['developer', { role: 'developer', employeeId: 'developer', permissions: Object.values(P) }],
@@ -196,5 +197,137 @@ test('salary advance routes isolate own records, financial permissions, simulati
     const audits = f.sql.prepare('SELECT data FROM audit_logs').all().map((r) => JSON.parse(r.data));
     assert.equal(audits.find((r) => r.action === 'salary_advance_submitted').actor_id, '085');
     assert.equal(audits.find((r) => r.action === 'salary_advance_approved').actor_id, 'admin-review');
+    assert.equal(f.notices(), 2);
+});
+
+test('paper-approved advances bypass registration dates but enforce confirmed limits, monthly capacity and safe replay', () => {
+    const f = fixture(); try {
+        const body = { ...f.body(), employeeId: '085', confirm: true, applicationMonth: '2026-09', note: '' };
+        assert.throws(() => f.store.paperApproved(body, f.audit, 'paper-admin'), /活動設定/);
+        f.save({ enabled: false }); f.time('2026-10-24T09:00:00+08:00');
+        assert.throws(() => f.store.paperApproved({ ...body, confirm: false }, f.audit, 'paper-admin'), /確認/);
+        assert.throws(() => f.store.paperApproved({ ...body, requestedAmount: 15001 }, f.audit, 'paper-admin'), /不得超過/);
+        assert.throws(() => f.store.paperApproved({ ...body, employeeId: 'MISSING' }, f.audit, 'paper-admin'), /找不到員工/);
+        const record = f.store.paperApproved(body, f.audit, 'paper-admin').request;
+        assert.equal(record.status, 'approved'); assert.equal(record.entryMode, 'admin_paper_approved');
+        assert.equal(record.approvedAmount, 5000); assert.equal(record.reviewerId, 'paper-admin');
+        assert.equal(record.registeredBy, 'paper-admin'); assert.equal(record.note, '');
+        assert.equal(record.paidAt, undefined); assert.equal(record.rulesSnapshot.maxAmount, 15000);
+        assert.equal(f.store.paperApproved(body, f.audit, 'paper-admin').replayed, true);
+        assert.equal(f.store.list().length, 1); assert.equal(f.store.external().data.length, 1);
+        assert.throws(() => f.store.paperApproved({ ...body, requestedAmount: 6000 }, f.audit, 'paper-admin'), /識別碼/);
+        assert.throws(() => f.store.paperApproved({ ...body, idempotencyKey: 'second' }, f.audit, 'paper-admin'), /筆數上限/);
+        assert.throws(() => f.store.paperApproved({ ...body, employeeId: 'EXIT', applicationMonth: '2026-11' }, f.audit, 'paper-admin'), /離職當月/);
+        assert.equal(f.store.paperApproved({ ...body, employeeId: 'EXIT' }, f.audit, 'paper-admin').request.status, 'approved');
+        assert.equal(f.store.employeeState('085', { applicationMonth: '2026-09' }).requests[0].entryMode, 'admin_paper_approved');
+        assert.equal(f.store.employeeState('088').requests.length, 0);
+        f.save({ enabled: true }); f.time('2026-10-15T09:00:00+08:00');
+        f.store.submit('088', f.body(), f.audit);
+        assert.throws(() => f.store.paperApproved({ ...body, employeeId: '088', applicationMonth: '2026-10', idempotencyKey: 'paper-two' }, f.audit, 'paper-admin'), /筆數上限/);
+        assert.throws(() => f.store.paperApproved({ ...body, employeeId: '088', applicationMonth: '2026-10' }, f.audit, 'paper-admin'), /識別碼/);
+    } finally { f.close(); }
+});
+
+test('paper corrections preserve identity and policy, reject stale or non-paper edits, and publish immutable revisions', () => {
+    const f = fixture(); try {
+        f.save();
+        const original = f.store.paperApproved({ ...f.body(), employeeId: '085', confirm: true }, f.audit, 'paper-admin').request;
+        const input = { requestId: original.requestId, revision: 1, requestedAmount: 7000, note: 'Corrected amount', confirm: true };
+        assert.throws(() => f.store.correctPaperApproved({ ...input, confirm: undefined }, f.audit, 'other-admin'), /確認/);
+        f.save({ maxAmount: 2000, deductionMonthOffset: 1 });
+        const corrected = f.store.correctPaperApproved(input, f.audit, 'other-admin');
+        assert.equal(corrected.requestId, original.requestId); assert.equal(corrected.revision, 2);
+        assert.equal(corrected.requestedAmount, 7000); assert.equal(corrected.approvedAmount, 7000);
+        assert.equal(corrected.correctedBy, 'other-admin'); assert.equal(corrected.registeredBy, 'paper-admin');
+        assert.equal(corrected.note, 'Corrected amount'); assert.equal(corrected.deductionMonth, null);
+        assert.deepEqual(corrected.rulesSnapshot, original.rulesSnapshot);
+        assert.throws(() => f.store.correctPaperApproved(input, f.audit, 'other-admin'), /已被更新/);
+        assert.throws(() => f.store.correctPaperApproved({ ...input, revision: 2, requestedAmount: 15001 }, f.audit, 'other-admin'), /不得超過/);
+        const feed = f.store.external().data;
+        assert.deepEqual(feed.map((r) => [r.requestId, r.revision, r.approvedAmount]), [[original.requestId, 1, 5000], [original.requestId, 2, 7000]]);
+        assert.ok(feed.every((r) => r.entryMode === 'admin_paper_approved' && r.note === undefined && r.rulesSnapshot === undefined));
+        assert.equal(f.store.state().summary.approvedAmount, 7000);
+        f.store.cancel({ requestId: original.requestId, revision: 2, reason: 'Paper voided' }, f.audit, 'reviewer');
+        assert.throws(() => f.store.correctPaperApproved({ ...input, revision: 3 }, f.audit, 'other-admin'), /只能修改有效/);
+        const employee = f.store.submit('088', f.body({ requestedAmount: 1000 }), f.audit).request;
+        assert.throws(() => f.store.correctPaperApproved({ ...input, requestId: employee.requestId }, f.audit, 'paper-admin'), /只能修改有效/);
+        const audited = f.sql.prepare('SELECT data FROM audit_logs').all().map((r) => JSON.parse(r.data)).find((r) => r.action === 'salary_advance_paper_corrected');
+        assert.equal(audited.before_data.requestedAmount, 5000); assert.equal(audited.after_data.requestedAmount, 7000);
+        assert.equal(audited.target_id, original.requestId); assert.ok(audited.summary);
+    } finally { f.close(); }
+});
+
+test('paper create and correction roll back the request, event and audit together on failure', () => {
+    const f = fixture(); try {
+        f.save();
+        const body = { ...f.body(), employeeId: '085', confirm: true };
+        f.auditFailure(true);
+        assert.throws(() => f.store.paperApproved(body, f.audit, 'paper-admin'), /audit/);
+        assert.equal(f.store.list().length, 0); assert.equal(f.store.external().data.length, 0);
+        f.auditFailure(false); const original = f.store.paperApproved(body, f.audit, 'paper-admin').request;
+        f.auditFailure(true);
+        assert.throws(() => f.store.correctPaperApproved({ requestId: original.requestId, revision: 1, requestedAmount: 6000, confirm: true }, f.audit, 'paper-admin'), /audit/);
+        assert.equal(f.store.get(original.requestId).requestedAmount, 5000);
+        assert.equal(f.store.get(original.requestId).revision, 1); assert.equal(f.store.external().data.length, 1);
+    } finally { f.close(); }
+});
+
+test('editing a paper record does not consume a new monthly slot after the policy allowed another request', () => {
+    const f = fixture(); try {
+        f.save();
+        const original = f.store.paperApproved({ ...f.body(), employeeId: '085', confirm: true }, f.audit, 'paper-admin').request;
+        f.save({ maxActivePerMonth: 2 });
+        f.store.paperApproved({ ...f.body({ idempotencyKey: 'second-paper' }), employeeId: '085', confirm: true }, f.audit, 'paper-admin');
+        const corrected = f.store.correctPaperApproved({ requestId: original.requestId, revision: 1, requestedAmount: 6000, confirm: true }, f.audit, 'paper-admin');
+        assert.equal(corrected.approvedAmount, 6000); assert.equal(corrected.rulesSnapshot.maxActivePerMonth, 1);
+        assert.equal(f.store.list({ employeeId: '085' }).length, 2);
+        assert.throws(() => f.store.paperApproved({ ...f.body({ idempotencyKey: 'third-paper' }), employeeId: '085', confirm: true }, f.audit, 'paper-admin'), /筆數上限/);
+    } finally { f.close(); }
+});
+
+test('review notes are optional for approve and reject while cancellation still records a reason', () => {
+    const f = fixture(); try {
+        f.save(); const one = f.store.submit('085', f.body(), f.audit).request;
+        const two = f.store.submit('088', f.body(), f.audit).request;
+        assert.equal(f.store.review({ requestId: one.requestId, revision: 1, decision: 'approved' }, f.audit, 'reviewer').reviewNote, '');
+        assert.equal(f.store.review({ requestId: two.requestId, revision: 1, decision: 'rejected', reason: '   ' }, f.audit, 'reviewer').reviewNote, '');
+        assert.throws(() => f.store.cancel({ requestId: one.requestId, revision: 2 }, f.audit, 'reviewer'), /操作原因/);
+        const audits = f.sql.prepare('SELECT data FROM audit_logs').all().map((r) => JSON.parse(r.data));
+        assert.ok(audits.find((r) => r.action === 'salary_advance_approved').summary);
+        assert.ok(audits.find((r) => r.action === 'salary_advance_rejected').summary);
+    } finally { f.close(); }
+});
+
+test('paper routes require separate permission, expose a minimal admin roster and retain employee and ERP scope', async (t) => {
+    const f = await routeFixture(); t.after(f.close);
+    const root = '/api/browser/salary-advances', own = '/api/browser/employee/salary-advances';
+    const body = { ...f.body(), employeeId: '085', confirm: true, actorId: 'forged' };
+    const roster = await f.request(root, 'view');
+    assert.deepEqual(roster.employees.map((r) => r.id), ['085', '088', 'EXIT']);
+    assert.deepEqual(Object.keys(roster.employees[0]).sort(), ['department', 'id', 'name', 'terminationDate']);
+    assert.equal((await f.request(own)).employees, undefined);
+    for (const token of ['view', 'review', 'settings', 'export', 'employee', 'supervisor', 'developer', 'simulation']) {
+        assert.equal((await f.request(`${root}/paper-approved`, token, body)).status, 403, token);
+    }
+    f.sessions.set('simulated-admin', { role: 'admin', employeeId: '085', permissions: [P.paper], impersonation: { active: true } });
+    assert.equal((await f.request(`${root}/paper-approved`, 'simulated-admin', body)).status, 403);
+    const created = await f.request(`${root}/paper-approved`, 'paper', body);
+    assert.equal(created.status, 200); assert.equal(created.request.registeredBy, 'admin-paper');
+    assert.equal((await f.request(`${root}/paper-approved`, 'paper', body)).replayed, true);
+    assert.equal((await f.request(root, 'paper')).permissions.paper, true);
+    assert.equal((await f.request(root, 'paper')).permissions.review, false);
+    const correction = { requestId: created.request.requestId, revision: 1, requestedAmount: 7500, confirm: true };
+    assert.equal((await f.request(`${root}/paper-approved/correct`, 'review', correction)).status, 403);
+    const corrected = await f.request(`${root}/paper-approved/correct`, 'paper', correction);
+    assert.equal(corrected.status, 200); assert.equal(corrected.request.correctedBy, 'admin-paper');
+    assert.equal((await f.request(`${root}/paper-approved/correct`, 'paper', correction)).status, 409);
+    assert.equal((await f.request(`${root}/cancel`, 'paper', { ...correction, revision: 2, reason: 'No review permission' })).status, 403);
+    assert.equal((await f.request(own)).requests[0].approvedAmount, 7500);
+    assert.equal((await f.request(own, 'other')).requests.length, 0);
+    const feed = await f.request('/api/salary-advance-requests', '', undefined, { 'X-API-Key': 'financial-test-scope' });
+    assert.deepEqual(feed.data.map((r) => r.approvedAmount), [5000, 7500]);
+    const excel = await f.request(`${root}/export`, 'export');
+    assert.equal(excel.workbook.Sheets['借支申請明細'].G2.v, '補登記（未表示發放）');
+    assert.equal(excel.workbook.Sheets['借支申請明細'].Q2.v, '紙本核准補登');
     assert.equal(f.notices(), 2);
 });

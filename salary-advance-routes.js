@@ -1,22 +1,22 @@
 'use strict';
 
 const XLSX = require('xlsx');
-const SALARY_ADVANCE_PERMISSIONS = Object.freeze({ view: 'admin.salary_advances.view', review: 'admin.salary_advances.review', settings: 'admin.salary_advances.settings', export: 'admin.salary_advances.export' });
+const SALARY_ADVANCE_PERMISSIONS = Object.freeze({ view: 'admin.salary_advances.view', review: 'admin.salary_advances.review', paper: 'admin.salary_advances.paper', settings: 'admin.salary_advances.settings', export: 'admin.salary_advances.export' });
 const fail = (message, statusCode = 400) => { throw Object.assign(new Error(message), { statusCode }); };
-const statusLabels = { pending_admin: '待管理部審核', approved: '已核准（未表示發放）', rejected: '已退回', withdrawn: '員工已撤回', cancelled: '管理部已取消' };
+const statusLabels = { pending_admin: '待複核', approved: '已複核（未表示發放）', rejected: '已退回', withdrawn: '已取消（員工撤回）', cancelled: '已取消（管理部取消）' };
 function requestBody(request) {
     if (!request.body || typeof request.body !== 'object' || Array.isArray(request.body)) fail('請提供有效的申請資料。');
     return request.body;
 }
 function createSalaryAdvanceWorkbook(rows, applicationMonth) {
     const book = XLSX.utils.book_new();
-    const headers = ['申請單號', '登記月份', '扣回月份（待確認時留白）', '工號', '姓名', '部門', '狀態', '申請金額（TWD）', '核准金額（TWD）', '送出時間', '審核時間', '審核人', '申請備註', '審核說明', '撤回／取消原因', '修訂版號'];
+    const headers = ['申請單號', '登記月份', '扣回月份（待確認時留白）', '工號', '姓名', '部門', '狀態', '申請金額（TWD）', '核准金額（TWD）', '送出時間', '審核時間', '審核人', '申請備註', '審核說明', '撤回／取消原因', '修訂版號', '登記來源'];
     const details = rows.map((r) => [r.requestId, r.applicationMonth, r.deductionMonth || '', r.employeeId, r.employeeName, r.department,
-        statusLabels[r.status] || r.status, r.requestedAmount, r.approvedAmount ?? '', r.submittedAt, r.reviewedAt || '', r.reviewerId || '', r.note, r.reviewNote,
-        r.cancellationReason || r.withdrawalReason || '', r.revision]);
+        r.status === 'approved' && r.entryMode === 'admin_paper_approved' ? '補登記（未表示發放）' : statusLabels[r.status] || r.status, r.requestedAmount, r.approvedAmount ?? '', r.submittedAt, r.reviewedAt || '', r.reviewerId || '', r.note, r.reviewNote,
+        r.cancellationReason || r.withdrawalReason || '', r.revision, r.entryMode === 'admin_paper_approved' ? '紙本核准補登' : '員工自行申請']);
     const ws = XLSX.utils.aoa_to_sheet([headers, ...details]);
     ws['!cols'] = headers.map((_, index) => ({ wch: index === 0 ? 38 : [12, 13, 14].includes(index) ? 36 : 20 }));
-    ws['!autofilter'] = { ref: `A1:P${details.length + 1}` };
+    ws['!autofilter'] = { ref: `A1:Q${details.length + 1}` };
     XLSX.utils.book_append_sheet(book, ws, '借支申請明細');
     const current = rows.filter((r) => ['pending_admin', 'approved'].includes(r.status));
     const summary = [['借支申請總表', applicationMonth || '全部月份'], ['資料性質', '僅申請與審核資料；不表示已發放、已還款或已扣薪。'],
@@ -33,7 +33,7 @@ function attachSalaryAdvanceRoutes(server, { db, requireSession, hasPermission, 
         const simulated = Boolean(session.impersonation?.active);
         const can = (code) => !simulated && (session.role === 'system_admin' || (session.role === 'admin' && hasPermission(session, code)));
         const result = Object.fromEntries(Object.entries(SALARY_ADVANCE_PERMISSIONS).map(([key, code]) => [key, can(code)]));
-        result.view = result.view || result.review || result.settings || result.export;
+        result.view = result.view || result.review || result.paper || result.settings || result.export;
         return result;
     };
     const handle = (callback) => async (request, response) => {
@@ -63,7 +63,7 @@ function attachSalaryAdvanceRoutes(server, { db, requireSession, hasPermission, 
     const filters = (request) => ({ applicationMonth: request.query.applicationMonth, employeeId: request.query.employeeId, status: request.query.status });
     const actor = (request) => String(request.browserSession.realEmployeeId || request.browserSession.employeeId);
     const root = '/api/browser/salary-advances', employeeRoot = '/api/browser/employee/salary-advances';
-    server.get(root, requireSession, permit('view'), handle((req, res) => res.json({ success: true, ...store().state(filters(req)), permissions: permissions(req.browserSession) })));
+    server.get(root, requireSession, permit('view'), handle((req, res) => res.json({ success: true, ...store().state(filters(req)), employees: store().roster(), permissions: permissions(req.browserSession) })));
     server.get(employeeRoot, requireSession, own, handle((req, res) => res.json({ success: true, ...store().employeeState(req.browserSession.employeeId, { applicationMonth: req.query.applicationMonth }), permissions: { own: true } })));
     server.post(`${employeeRoot}/submit`, requireSession, own, handle((req, res) => {
         const result = store().submit(req.browserSession.employeeId, requestBody(req), (entry) => auditEntry(req, entry));
@@ -77,6 +77,16 @@ function attachSalaryAdvanceRoutes(server, { db, requireSession, hasPermission, 
     server.post(`${root}/settings`, requireSession, permit('settings'), handle((req, res) => {
         const result = store().saveSettings(requestBody(req), (entry) => auditEntry(req, entry));
         notify(req, 'salaryAdvances'); res.json({ success: true, settings: result, message: '借支活動設定已儲存；既有申請保留送件時的規則快照。' });
+    }));
+    server.post(`${root}/paper-approved`, requireSession, permit('paper'), handle((req, res) => {
+        const result = store().paperApproved(requestBody(req), (entry) => auditEntry(req, entry), actor(req));
+        if (!result.replayed) notify(req, 'salaryAdvances');
+        res.json({ success: true, ...result, message: result.replayed ? '此紙本紀錄已補登，未重複建立。' : '紙本核准補登已儲存，員工可查看本月紀錄；此動作不會發放款項或扣薪。' });
+    }));
+    server.post(`${root}/paper-approved/correct`, requireSession, permit('paper'), handle((req, res) => {
+        const result = store().correctPaperApproved(requestBody(req), (entry) => auditEntry(req, entry), actor(req));
+        notify(req, 'salaryAdvances');
+        res.json({ success: true, request: result, message: '紙本補登更正已儲存並保留操作紀錄；若 ERP 已處理，請依修訂核對差異。' });
     }));
     for (const action of ['review', 'cancel']) server.post(`${root}/${action}`, requireSession, permit('review'), handle((req, res) => {
         const result = store()[action](requestBody(req), (entry) => auditEntry(req, entry), actor(req));
