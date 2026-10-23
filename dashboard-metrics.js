@@ -9,9 +9,12 @@ const METRIC_GROUPS = [
     { key: 'overtimeReview', label: '加班待審核', items: ['overtimePendingSupervisor'], kind: 'review' },
     { key: 'meals', label: '午餐團膳', items: ['mealToday', 'mealTomorrow', 'mealParticipants'], kind: 'meals' },
     { key: 'schedule', label: '班別與響鈴', items: ['shiftCount', 'bellScheduleCount'], kind: 'settings' },
+    { key: 'salary', label: '借支管理', items: ['salaryPendingCount', 'salaryPendingPeople', 'salaryPendingAmount', 'salaryApprovedAmount'], kind: 'salary' },
     { key: 'appearance', label: '問候語與主題', items: ['greetingCount', 'customThemeCount'], kind: 'settings' }
 ];
-const DEFAULT_CARDS = METRIC_GROUPS.map((group) => group.key);
+const ALL_CARDS = METRIC_GROUPS.map((group) => group.key);
+const DEFAULT_CARDS = ALL_CARDS.filter((key) => key !== 'appearance');
+const salaryAllowed = (can) => ['view', 'review', 'paper', 'settings', 'export'].some((key) => can(`admin.salary_advances.${key}`));
 const relative = ['前3天', '前天', '昨天', '今天', '明天', '後天', '後3天'];
 const dateText = (now) => new Date(now + OFFSET).toISOString().slice(0, 10);
 function fail(message, statusCode = 400) { throw Object.assign(new Error(message), { statusCode }); }
@@ -25,20 +28,21 @@ function createDashboardMetricStore(sql, addAuditLog) {
         let previous = [];
         try { previous = saved ? JSON.parse(saved.cards_json) : []; } catch { /* Recover an invalid old preference using the complete default groups. */ }
         if (!Array.isArray(previous)) previous = [];
-        const migrated = Boolean(saved && saved.layout_version !== 2);
-        const order = migrated ? previous.map((key) => METRIC_GROUPS.find((group) => group.items.includes(key))?.key).filter(Boolean) : previous;
-        const cards = [...new Set([...order, ...DEFAULT_CARDS])].filter((key) => DEFAULT_CARDS.includes(key));
-        return { cardKeys: cards, revision: saved?.revision || 'new', layoutVersion: 2, migrated, density: saved?.density === 'compact' ? 'compact' : 'comfortable' };
+        const migrated = Boolean(saved && saved.layout_version !== 3);
+        let order = saved && saved.layout_version === 1 ? previous.map((key) => METRIC_GROUPS.find((group) => group.items.includes(key))?.key).filter(Boolean) : previous;
+        if (migrated) order = order.map((key) => key === 'appearance' ? 'salary' : key);
+        const cards = [...new Set([...order, ...DEFAULT_CARDS])].filter((key) => ALL_CARDS.includes(key)).slice(0, 8);
+        return { cardKeys: cards, revision: saved?.revision || 'new', layoutVersion: 3, migrated, density: saved?.density === 'compact' ? 'compact' : 'comfortable' };
     };
     const save = (id, body, catalog, audit) => sql.transaction(() => {
         const before = preferences(id, catalog), cards = body.cardKeys, density = body.density || before.density;
         if (body.revision !== before.revision) fail('指標設定已變更，請重新開啟設定。', 409);
-        if (body.confirm !== true || !Array.isArray(cards) || cards.length !== 8 || cards.some((key) => !DEFAULT_CARDS.includes(key)) || new Set(cards).size !== 8) fail('請保留八張不同的分組指標；只能調整順序。');
+        if (body.confirm !== true || !Array.isArray(cards) || cards.length !== 8 || cards.some((key) => !ALL_CARDS.includes(key)) || new Set(cards).size !== 8) fail('請從九張分組指標中選擇八張不同的卡片。');
         if (!['compact', 'comfortable'].includes(density)) fail('指標高度選項不正確。');
         const revision = crypto.randomUUID();
-        sql.prepare('INSERT OR REPLACE INTO dashboard_metric_preferences (employee_id, cards_json, revision, updated_at, layout_version, density) VALUES (?, ?, ?, ?, 2, ?)').run(id, JSON.stringify(cards), revision, Date.now(), density);
-        addAuditLog(audit({ action: 'dashboard_metric_preferences', target_type: 'dashboard_preferences', target_id: id, summary: '更新個人八張分組指標排列與高度', before_data: before, after_data: { cardKeys: cards, density, layoutVersion: 2 } }));
-        return { cardKeys: cards, revision, layoutVersion: 2, migrated: false, density };
+        sql.prepare('INSERT OR REPLACE INTO dashboard_metric_preferences (employee_id, cards_json, revision, updated_at, layout_version, density) VALUES (?, ?, ?, ?, 3, ?)').run(id, JSON.stringify(cards), revision, Date.now(), density);
+        addAuditLog(audit({ action: 'dashboard_metric_preferences', target_type: 'dashboard_preferences', target_id: id, summary: '更新個人八張分組指標選擇、排列與高度', before_data: before, after_data: { cardKeys: cards, density, layoutVersion: 3 } }));
+        return { cardKeys: cards, revision, layoutVersion: 3, migrated: false, density };
     })();
     const removeEmployees = (ids) => ids.forEach((id) => sql.prepare('DELETE FROM dashboard_metric_preferences WHERE employee_id = ?').run(id));
     return { preferences, save, removeEmployees };
@@ -58,7 +62,8 @@ function metricSources(db, can, now) {
         return kind === 'leave' ? leaveOverlapsRange(row, at, at + DAY) : row.start_at < at + DAY && row.end_at > at;
     };
     const meals = can('admin.meals.view') ? { today: db.getMeals().dayState(today, now), tomorrow: db.getMeals().dayState(dateText(start + DAY), now) } : null;
-    return { today, start, leaves, overtime, meals, onDay };
+    const salary = salaryAllowed(can) ? db.getSalaryAdvances?.().list({ applicationMonth: today.slice(0, 7) }) || [] : null;
+    return { today, start, leaves, overtime, meals, salary, onDay };
 }
 function buildDashboardMetrics(db, can, summary = {}, now = Date.now(), suppliedSources = null) {
     const source = suppliedSources || metricSources(db, can, now), catalog = [];
@@ -88,6 +93,9 @@ function buildDashboardMetrics(db, can, summary = {}, now = Date.now(), supplied
         const bellCounts = key === 'bellScheduleCount' ? String(summary[key] ?? '').match(/^(\d+)\/(\d+)$/) : null;
         add(key, label, '系統', can(permission), bellCounts ? Number(bellCounts[2]) : summary[key] ?? 0, bellCounts ? `啟用 ${bellCounts[1]} 組／全部 ${bellCounts[2]} 組` : '');
     }
+    const salary = source.salary || [], pending = salary.filter((row) => row.status === 'pending_admin'), approved = salary.filter((row) => row.status === 'approved');
+    const salaryMonth = source.today.slice(0, 7), salaryAccess = salaryAllowed(can);
+    for (const [key, label, value] of [['salaryPendingCount', '待複核申請', pending.length], ['salaryPendingPeople', '待複核人數', new Set(pending.map((row) => row.employeeId)).size], ['salaryPendingAmount', '待複核金額', pending.reduce((sum, row) => sum + row.requestedAmount, 0)], ['salaryApprovedAmount', '已複核金額', approved.reduce((sum, row) => sum + row.approvedAmount, 0)]]) add(key, label, '借支管理', salaryAccess, value, `${salaryMonth} 登記月份 · ${key === 'salaryApprovedAmount' ? '含有效紙本補登，排除取消；不代表已發放' : '待管理部複核'}`, salaryMonth);
     const groups = METRIC_GROUPS.map((group) => ({ ...group, available: group.items.some((key) => catalog.find((item) => item.key === key)?.available) }));
     return { today: source.today, timeZone: 'Asia/Taipei', catalog, groups,
         roster: roster ? db.loadEmployees().map(({ id, name, department, job_title, termination_date }) => ({ id, name, department, job_title, termination_date })) : [] };
@@ -98,10 +106,10 @@ function attachDashboardMetricRoutes(server, { db, requireSession, requireAdmin,
         if (request.browserSession.impersonation?.active) fail('身份模擬不能修改個人指標設定。', 403);
         const catalog = buildDashboardMetrics(db, (p) => can(request.browserSession, p)).catalog;
         const preferences = db.getDashboardMetrics().save(request.browserSession.employeeId, request.body || {}, catalog, (entry) => auditEntry(request, entry));
-        notify(request); response.json({ success: true, preferences, message: '已儲存個人八張分組指標的排列與高度。' });
+        notify(request); response.json({ success: true, preferences, message: '已儲存個人八張分組指標的選擇、排列與高度。' });
     }));
     server.get('/api/browser/admin/dashboard-metrics/detail', requireSession, requireAdmin, handle((request, response) => {
-        const allowed = (p) => can(request.browserSession, p), now = Date.now(), source = metricSources(db, allowed, now);
+        const allowed = (p) => (!p.startsWith('admin.salary_advances.') || !request.browserSession.impersonation?.active) && can(request.browserSession, p), now = Date.now(), source = metricSources(db, allowed, now);
         const metrics = buildDashboardMetrics(db, allowed, {}, now, source), metric = metrics.catalog.find((c) => c.key === request.query.key);
         if (!metric?.available) fail('沒有此指標的查看權限。', 403);
         if (metric.date && request.query.date !== metric.date) fail('指標日期已變更，請重新整理。', 409);
@@ -112,9 +120,11 @@ function attachDashboardMetricRoutes(server, { db, requireSession, requireAdmin,
         } else if (metric.key.startsWith('meal')) {
             kind = 'meal'; const meal = metric.key === 'mealTomorrow' ? source.meals.tomorrow : source.meals.today;
             rows = meal.rows.filter((r) => metric.key === 'mealParticipants' ? r.eligible : r.eating);
+        } else if (metric.key.startsWith('salary')) {
+            kind = 'salary'; rows = source.salary.filter((row) => row.status === (metric.key === 'salaryApprovedAmount' ? 'approved' : 'pending_admin'));
         } else fail('此指標請使用原明細入口。');
         const employees = new Map(db.loadEmployees().map((employee) => [employee.id, employee]));
-        const identity = (row) => kind === 'meal' ? { id: row.employee_id, name: row.name || '', department: row.department || '' } : { id: row.employee_id, name: employees.get(row.employee_id)?.name || '', department: employees.get(row.employee_id)?.department || '' };
+        const identity = (row) => kind === 'salary' ? { id: row.employeeId, name: row.employeeName || '', department: row.department || '' } : kind === 'meal' ? { id: row.employee_id, name: row.name || '', department: row.department || '' } : { id: row.employee_id, name: employees.get(row.employee_id)?.name || '', department: employees.get(row.employee_id)?.department || '' };
         const departments = [...new Set(rows.map((row) => identity(row).department).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
         const unfilteredRecords = rows.length;
         const keyword = String(request.query.keyword || '').trim().toLocaleLowerCase(), department = String(request.query.department || '').trim();
@@ -122,14 +132,15 @@ function attachDashboardMetricRoutes(server, { db, requireSession, requireAdmin,
         rows = rows.filter((row) => { const person = identity(row); return (!department || person.department === department) && (!keyword || `${person.id} ${person.name} ${person.department}`.toLocaleLowerCase().includes(keyword)); });
         const dayHours = (row) => Math.round(getLeaveDateSegments(row).filter((segment) => segment.date === metric.date).reduce((sum, segment) => sum + segment.hours, 0) * 100) / 100;
         const isLeaveDay = kind === 'leave' && metric.key.includes('Day:');
-        const summary = { people: new Set(rows.map((row) => row.employee_id)).size, requests: rows.length,
-            requestHours: kind === 'meal' ? null : Math.round(rows.reduce((sum, row) => sum + (Number(row.duration_hours) || 0), 0) * 100) / 100,
+        const summary = { people: new Set(rows.map((row) => identity(row).id)).size, requests: rows.length,
+            requestHours: ['meal', 'salary'].includes(kind) ? null : Math.round(rows.reduce((sum, row) => sum + (Number(row.duration_hours) || 0), 0) * 100) / 100,
+            ...(kind === 'salary' ? { requestedAmount: rows.reduce((sum, row) => sum + row.requestedAmount, 0), approvedAmount: rows.reduce((sum, row) => sum + (row.approvedAmount || 0), 0) } : {}),
             ...(isLeaveDay ? { dayHours: Math.round(rows.reduce((sum, row) => sum + dayHours(row), 0) * 100) / 100 } : {}),
             departments: [...new Set(rows.map((row) => identity(row).department).filter(Boolean))].length };
         const page = request.query.page == null ? 1 : Number(request.query.page);
         if (!Number.isSafeInteger(page) || page < 1) fail('頁碼不正確。');
         const totalPages = Math.max(1, Math.ceil(rows.length / 50)), current = Math.min(page, totalPages);
-        response.json({ success: true, detail: { metric, kind, page: current, totalPages, totalRecords: rows.length, unfilteredRecords, summary, departments, filters: { keyword, department }, records: rows.slice((current - 1) * 50, current * 50).map((r) => kind === 'meal' ? ({ employeeId: r.employee_id, employeeName: r.name, employeeDepartment: r.department, eating: r.eating, submittedEating: r.submittedEating }) : ({ ...formatRecord(kind, r), ...(isLeaveDay ? { dayHours: dayHours(r) } : {}) })) } });
+        response.json({ success: true, detail: { metric, kind, page: current, totalPages, totalRecords: rows.length, unfilteredRecords, summary, departments, filters: { keyword, department }, records: rows.slice((current - 1) * 50, current * 50).map((r) => kind === 'salary' ? ({ requestId: r.requestId, employeeId: r.employeeId, employeeName: r.employeeName, employeeDepartment: r.department, applicationMonth: r.applicationMonth, status: r.status, entryMode: r.entryMode, requestedAmount: r.requestedAmount, approvedAmount: r.approvedAmount, revision: r.revision, updatedAt: r.updatedAt }) : kind === 'meal' ? ({ employeeId: r.employee_id, employeeName: r.name, employeeDepartment: r.department, eating: r.eating, submittedEating: r.submittedEating }) : ({ ...formatRecord(kind, r), ...(isLeaveDay ? { dayHours: dayHours(r) } : {}) })) } });
     }));
 }
 module.exports = { DEFAULT_CARDS, METRIC_GROUPS, createDashboardMetricStore, buildDashboardMetrics, attachDashboardMetricRoutes };

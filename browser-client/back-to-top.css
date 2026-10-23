@@ -1,0 +1,27 @@
+.back-to-top {
+    position: fixed;
+    right: max(18px, env(safe-area-inset-right));
+    bottom: max(18px, env(safe-area-inset-bottom));
+    z-index: 50;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 44px;
+    padding: 10px 14px;
+    border: 1px solid #c5d8ed;
+    border-radius: 999px;
+    background: #fff;
+    color: #1e4294;
+    box-shadow: 0 4px 18px #17255426;
+    font: inherit;
+    font-size: .88rem;
+    font-weight: 650;
+    cursor: pointer;
+}
+.back-to-top[hidden] { display: none; }
+.back-to-top:hover { background: #edf5ff; }
+.back-to-top:focus-visible { outline: 3px solid #2563eb; outline-offset: 3px; }
+.back-to-top svg { width: 18px; height: 18px; }
+@media (max-width: 600px) {
+    .back-to-top { right: max(12px, env(safe-area-inset-right)); bottom: max(12px, env(safe-area-inset-bottom)); }
+}

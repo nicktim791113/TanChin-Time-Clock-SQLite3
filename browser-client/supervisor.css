@@ -46,3 +46,7 @@
     .sp-calendar .meal-date-status { font-size: 12px; }
     .sp-calendar .meal-date-deadline { font-size: 10px; }
 }
+.sp-mode-tabs { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px; background: var(--surface-soft, #edf4f8); border-radius: 12px; margin: 16px 0 8px; }
+.sp-mode-tabs button { flex: 1; min-width: 140px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: inherit; padding: 12px 18px; font: inherit; font-weight: 700; cursor: pointer; }
+.sp-mode-tabs button.is-active { background: var(--surface, white); border-color: var(--line, #c7dbe5); box-shadow: 0 2px 5px #153e5612; }
+.sp-mode-description { margin: 0 0 16px; color: var(--text-muted, #576d7b); font-size: 13px; line-height: 1.6; }

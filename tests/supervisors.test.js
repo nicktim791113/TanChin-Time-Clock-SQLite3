@@ -20,6 +20,11 @@ test('supervisor helpers validate personal identity and Taipei periods', () => {
     }
     const body = { startDate: '2026-10-05', startTime: '08:00', endDate: '2026-10-05', endTime: '17:00', durationHours: 8 };
     assert.equal(requestPeriod(body, 'leave').start_at, Date.parse('2026-10-05T08:00:00+08:00'));
+    const defaults = { startDate: '2026-10-05', endDate: '2026-10-05' };
+    assert.equal(requestPeriod(defaults, 'leave').start_at, Date.parse('2026-10-05T08:20:00+08:00'));
+    assert.equal(requestPeriod(defaults, 'leave').end_at, Date.parse('2026-10-05T17:00:00+08:00'));
+    assert.equal(requestPeriod(defaults, 'overtime').start_at, Date.parse('2026-10-05T17:30:00+08:00'));
+    assert.equal(requestPeriod(defaults, 'overtime').end_at, Date.parse('2026-10-05T19:30:00+08:00'));
     for (const change of [{ startDate: '2026-02-30' }, { startTime: '24:00' }, { durationHours: -1 }, { durationHours: 0.001 }, { durationHours: 'NaN' }, { endTime: '07:00' }]) {
         assert.throws(() => requestPeriod({ ...body, ...change }, 'leave'));
     }
@@ -226,7 +231,7 @@ test('card proxy preserves any/required reviews, bound-device revocation, delega
     for (const route of reads) assert.equal((await request(route, null, card.token)).status, 200);
     for (const route of reads) assert.equal((await request(route.replace('E001', 'D001'), null, card.token)).status, 403);
     const period = { employeeId: 'E001', startDate: '2027-03-01', endDate: '2027-03-01', startTime: '18:00', endTime: '20:00', durationHours: 2,
-        leaveTypeId: db.loadLeaveTypes().find((row) => row.enabled).id, proxyReason: 'Authorized card proxy assistance', confirmApproval: true };
+        leaveTypeId: db.loadLeaveTypes().find((row) => row.enabled).id, reason: 'Leave reason from employee', proxyReason: 'Authorized card proxy assistance', confirmApproval: true };
     let lastLeave;
     for (const mode of ['any', 'required']) {
         review.saveBatch({ employeeIds: ['E001'], supervisorIds: ['A001', 'A002'], mode, requiredSupervisorIds: mode === 'required' ? ['A001', 'A002'] : [],

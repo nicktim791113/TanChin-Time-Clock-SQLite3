@@ -21,9 +21,9 @@ test('seven Taipei dates count unique approved people, actual leave days, midnig
         loadEmployees: () => [{ id: 'E1', name: 'Name', card: 'secret-card', salary: 123 }],
         getMeals: () => ({ dayState: (date) => ({ date, serving: date === '2027-01-01', currentCount: date === '2027-01-01' ? 2 : 0, submittedCount: 3, rows: [{ eligible: true }, { eligible: true }, { eligible: false }] }) }) };
     const metrics = buildDashboardMetrics(db, () => true, { bellScheduleCount: '2/3' }, now), get = (key) => metrics.catalog.find((c) => c.key === key);
-    assert.equal(metrics.catalog.length, 27);
-    assert.deepEqual(metrics.groups.map((group) => group.key), DEFAULT_CARDS);
-    assert.equal(metrics.groups.length, 8);
+    assert.equal(metrics.catalog.length, 31);
+    assert.deepEqual(metrics.groups.filter((group) => group.key !== 'appearance').map((group) => group.key), DEFAULT_CARDS);
+    assert.equal(metrics.groups.length, 9);
     assert.equal(metrics.groups.find((group) => group.key === 'people').items.length, 3);
     assert.equal(metrics.groups.find((group) => group.key === 'leaveWeek').items.length, 7);
     assert.deepEqual(metrics.catalog.filter((c) => c.key.startsWith('leaveDay:')).map((c) => c.date), ['2026-12-29', '2026-12-30', '2026-12-31', '2027-01-01', '2027-01-02', '2027-01-03', '2027-01-04']);
@@ -50,7 +50,7 @@ test('legacy cross-day leave keeps its full range even with old first-day accoun
     assert.equal(metrics.catalog.find((entry) => entry.key === 'leaveDay:0').value, 1);
 });
 
-test('eight fixed groups and density persist per account, enforce revision and roll back audit failure', () => {
+test('eight of nine groups and density persist per account, enforce revision and roll back audit failure', () => {
     const sql = new Database(':memory:'); let failAudit = false;
     const store = createDashboardMetricStore(sql, () => { if (failAudit) throw Error('audit failed'); });
     const catalog = METRIC_GROUPS.flatMap((group) => group.items.map((key) => ({ key, available: true })));
@@ -81,14 +81,44 @@ test('legacy individual-card preferences migrate explicitly into eight semantic 
         sql.prepare('INSERT INTO dashboard_metric_preferences VALUES (?, ?, ?, ?)').run('A', JSON.stringify(old), 'old-revision', 1);
         const store = createDashboardMetricStore(sql, () => {}), migrated = store.preferences('A', []);
         assert.equal(migrated.migrated, true);
-        assert.deepEqual(migrated.cardKeys, ['meals', 'people', 'leaveWeek', 'leaveReview', 'appearance', 'schedule', 'overtimeWeek', 'overtimeReview']);
+        assert.deepEqual(migrated.cardKeys, ['meals', 'people', 'leaveWeek', 'leaveReview', 'salary', 'schedule', 'overtimeWeek', 'overtimeReview']);
         assert.equal(migrated.revision, 'old-revision');
         assert.equal(sql.prepare('SELECT cards_json FROM dashboard_metric_preferences').get().cards_json, JSON.stringify(old));
         const saved = store.save('A', { ...migrated, confirm: true }, [], (entry) => entry);
-        assert.equal(saved.migrated, false); assert.equal(saved.layoutVersion, 2);
+        assert.equal(saved.migrated, false); assert.equal(saved.layoutVersion, 3);
         assert.deepEqual(store.preferences('A', []), saved);
         assert.throws(() => store.save('A', { cardKeys: old, revision: saved.revision, confirm: true }, [], (entry) => entry));
     } finally { sql.close(); }
+});
+
+test('v2 preferences replace appearance in place while v3 choices preserve eight of nine independently', () => {
+    const sql = new Database(':memory:');
+    try {
+        const store = createDashboardMetricStore(sql, () => {}), previous = ['appearance', 'meals', 'people', 'leaveWeek', 'leaveReview', 'schedule', 'overtimeWeek', 'overtimeReview'];
+        sql.prepare('INSERT INTO dashboard_metric_preferences(employee_id,cards_json,revision,updated_at,layout_version,density) VALUES (?,?,?,?,?,?)').run('A', JSON.stringify(previous), 'v2-revision', 1, 2, 'compact');
+        const migrated = store.preferences('A', []);
+        assert.deepEqual(migrated.cardKeys, ['salary', ...previous.slice(1)]); assert.equal(migrated.migrated, true);
+        assert.equal(migrated.layoutVersion, 3); assert.equal(migrated.density, 'compact');
+        const saved = store.save('A', { cardKeys: previous, revision: migrated.revision, confirm: true }, [], (e) => e);
+        assert.deepEqual(store.preferences('A', []).cardKeys, previous); assert.equal(saved.migrated, false);
+        assert.equal(sql.prepare('SELECT layout_version FROM dashboard_metric_preferences WHERE employee_id=?').get('A').layout_version, 3);
+        assert.throws(() => store.save('A', { cardKeys: [...previous, 'salary'], revision: saved.revision, confirm: true }, [], (e) => e), /八張/);
+    } finally { sql.close(); }
+});
+
+test('salary overview uses the current Taipei month and approved current snapshots without reading financial data for unauthorized accounts', () => {
+    const rows = [{ employeeId: 'E1', status: 'pending_admin', requestedAmount: 2000 }, { employeeId: 'E1', status: 'pending_admin', requestedAmount: 3000 }, { employeeId: 'E2', status: 'approved', requestedAmount: 7000, approvedAmount: 6000, entryMode: 'admin_paper_approved' }, { employeeId: 'E3', status: 'cancelled', requestedAmount: 10000, approvedAmount: 10000 }];
+    let reads = 0, month;
+    const db = { loadEmployees: () => [], getSalaryAdvances: () => ({ list: (query) => { reads++; month = query.applicationMonth; return rows; } }) };
+    const now = Date.parse('2026-10-31T16:01:00Z'), get = (data, key) => data.catalog.find((row) => row.key === key);
+    const unauthorized = buildDashboardMetrics(db, () => false, {}, now);
+    assert.equal(reads, 0); assert.equal(get(unauthorized, 'salaryApprovedAmount').value, null);
+    for (const permission of ['view', 'review', 'paper', 'settings', 'export']) {
+        const data = buildDashboardMetrics(db, (p) => p === `admin.salary_advances.${permission}`, {}, now);
+        assert.equal(month, '2026-11'); assert.equal(get(data, 'salaryPendingCount').value, 2); assert.equal(get(data, 'salaryPendingPeople').value, 1);
+        assert.equal(get(data, 'salaryPendingAmount').value, 5000); assert.equal(get(data, 'salaryApprovedAmount').value, 6000);
+        assert.equal(get(data, 'salaryApprovedAmount').date, '2026-11'); assert.equal(data.roster.length, 0);
+    }
 });
 
 test('dashboard and detail routes use complete counts, authorized data, pagination and account-owned settings', async (t) => {
@@ -143,6 +173,35 @@ test('dashboard and detail routes use complete counts, authorized data, paginati
     assert.equal(quotaOnly.insights.todayAttendance.records.length, 0);
     assert.ok(quotaOnly.dashboardMetrics.catalog.filter((c) => !c.available).every((c) => c.value === null));
     assert.equal(quotaOnly.dashboardMetrics.groups.filter((group) => group.available).length, 1);
+    const month = today.slice(0, 7), salary = db.getSalaryAdvances(), audit = (entry) => ({ ...entry, actor_id: 'test-metrics' });
+    salary.saveSettings({ ...salary.settings(), enabled: true, startDay: 1, endDay: 31, maxAmount: 15000, maxActivePerMonth: 12, reason: 'Metric fixture' }, audit);
+    const pending = salary.submit('E001', { applicationMonth: month, requestedAmount: 2500, note: 'PRIVATE-FINANCIAL-NOTE', idempotencyKey: 'metric-pending' }, audit).request;
+    salary.paperApproved({ employeeId: 'A001', applicationMonth: month, requestedAmount: 4000, note: 'PRIVATE-PAPER-NOTE', idempotencyKey: 'metric-paper', confirm: true }, audit, 'A001');
+    assert.equal((await request(`/admin/dashboard-metrics/detail?key=salaryPendingAmount&date=${month}`, limited.token)).status, 403);
+    db.saveAccountAccessRecord({ ...db.getAccountAccessRecord('A002'), admin_permissions: ['admin.salary_advances.view'] });
+    const salaryDashboard = (await request('/dashboard', limited.token)).dashboard;
+    assert.equal(salaryDashboard.dashboardMetrics.catalog.find((c) => c.key === 'salaryPendingAmount').value, 2500);
+    const detail = await request(`/admin/dashboard-metrics/detail?key=salaryPendingAmount&date=${month}`, limited.token);
+    assert.equal(detail.status, 200); assert.equal(detail.detail.kind, 'salary'); assert.equal(detail.detail.summary.people, 1); assert.equal(detail.detail.summary.requestedAmount, 2500);
+    assert.equal(detail.detail.records[0].requestId, pending.requestId); assert.equal(detail.detail.records[0].employeeId, 'E001');
+    assert.ok(!JSON.stringify(detail).includes('PRIVATE-FINANCIAL-NOTE'));
+    const salaryFiltered = await request(`/admin/dashboard-metrics/detail?key=salaryApprovedAmount&date=${month}&keyword=nobody`, limited.token);
+    assert.equal(salaryFiltered.detail.totalRecords, 0); assert.equal(salaryFiltered.detail.unfilteredRecords, 1); assert.equal(salaryFiltered.detail.summary.approvedAmount, 0);
+    const paperDetail = await request(`/admin/dashboard-metrics/detail?key=salaryApprovedAmount&date=${month}`, limited.token);
+    assert.equal(paperDetail.detail.summary.approvedAmount, 4000); assert.equal(paperDetail.detail.records[0].entryMode, 'admin_paper_approved');
+    assert.ok(!JSON.stringify(paperDetail).includes('PRIVATE-PAPER-NOTE'));
+    assert.equal((await request('/admin/dashboard-metrics/detail?key=salaryPendingAmount&date=2000-01', limited.token)).status, 409);
+    const developer = await login('D001', 'developer');
+    db.setSetting('developerImpersonationEnabled', true);
+    const simulated = await request('/developer/impersonation/start', developer.token, { targetRole: 'admin', systemPassword: '0000' });
+    assert.equal(simulated.status, 200);
+    const simulatedSalary = simulated.dashboard.dashboardMetrics.catalog.filter((item) => item.key.startsWith('salary'));
+    assert.equal(simulatedSalary.length, 4); assert.ok(simulatedSalary.every((item) => !item.available && item.value === null && item.subtitle === '未授權'));
+    const refreshedSimulation = (await request('/dashboard', developer.token)).dashboard;
+    assert.ok(refreshedSimulation.dashboardMetrics.catalog.filter((item) => item.key.startsWith('salary')).every((item) => !item.available && item.value === null));
+    assert.equal((await request(`/admin/dashboard-metrics/detail?key=salaryPendingAmount&date=${month}`, developer.token)).status, 403);
+
+
 });
 
 test('metric rendering has eight cards, escapes reviewer data, exposes jump controls and rejects stale details', async () => {

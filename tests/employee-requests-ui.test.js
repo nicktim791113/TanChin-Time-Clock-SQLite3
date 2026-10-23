@@ -24,9 +24,51 @@ function input(ui, expression, field, value, row = null) {
     ui.run('erUpdateDraftInput(target)');
 }
 
+test('leave reason is mandatory and lunch options are scoped, default checked, editable and participant-only', async () => {
+    const ui = loadUi();
+    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.rows=[erNewRow(erState('leave').draft,'2035-01-02')]");
+    assert.throws(() => ui.run("erBuildPayload('leave',erState('leave').draft)"), /請填寫請假事由/);
+    input(ui, 'leave', 'reason', 'Family care');
+    const load = ui.run('erLoadMealOptions()');
+    assert.equal(ui.requests[0].route, '/api/browser/employee/leave/meal-options');
+    assert.deepEqual(JSON.parse(JSON.stringify(ui.requests[0].options.body.employeeIds)), ['E001']);
+    ui.pending[0].resolve({ options: [
+        { employeeId: 'E001', date: '2035-01-02', participates: true, serving: true, canChange: true, eating: true },
+        { employeeId: 'E001', date: '2035-01-03', participates: false, serving: true, canChange: false, eating: false },
+        { employeeId: 'E001', date: '2035-01-04', participates: true, serving: true, canChange: false, eating: true, reason: '已截止' }
+    ] }); await load;
+    const html = ui.run("renderLeaveMealOptions(erState('leave').draft)");
+    assert.match(html, /2035-01-02[\s\S]*當天不用餐/); assert.match(html, /checked/); assert.match(html, /leave-meal-choice/);
+    assert.doesNotMatch(html, /2035-01-03/); assert.match(html, /disabled[\s\S]*2035-01-04/);
+    let body = JSON.parse(ui.run("JSON.stringify(erBuildPayload('leave',erState('leave').draft))"));
+    assert.deepEqual(body.mealOptOuts, [{ employeeId: 'E001', date: '2035-01-02' }]);
+    ui.run("leaveMealState(erState('leave').draft).selected['E001/2035-01-02']=false");
+    body = JSON.parse(ui.run("JSON.stringify(erBuildPayload('leave',erState('leave').draft))")); assert.deepEqual(body.mealOptOuts, []);
+    ui.run("state.dashboard.impersonation={active:true}; leaveMealState(erState('leave').draft).selected['E001/2035-01-02']=true");
+    assert.match(ui.run("renderLeaveMealOptions(erState('leave').draft)"), /身份模擬不能修改午餐/);
+    assert.deepEqual(JSON.parse(ui.run("JSON.stringify(erBuildPayload('leave',erState('leave').draft).mealOptOuts)")), []);
+});
+
+test('lunch eligibility ignores stale dates and accounts and preserves an explicit unchecked choice', async () => {
+    const ui = loadUi();
+    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.reason='Care'; erState('leave').draft.rows=[erNewRow(erState('leave').draft,'2035-01-02')]");
+    const first = ui.run('erLoadMealOptions()');
+    ui.run("erState('leave').draft.rows[0].date='2035-01-03'"); const second = ui.run('erLoadMealOptions()');
+    ui.pending[1].resolve({ options: [{ employeeId: 'E001', date: '2035-01-03', participates: true, serving: true, canChange: true, eating: true }] }); await second;
+    ui.pending[0].resolve({ options: [{ employeeId: 'E001', date: '2035-01-02', participates: true, serving: true, canChange: true, eating: true }] }); await first;
+    assert.equal(ui.run("leaveMealState(erState('leave').draft).options[0].date"), '2035-01-03');
+    ui.run("leaveMealState(erState('leave').draft).selected['E001/2035-01-03']=false");
+    const refresh = ui.run('erLoadMealOptions(true)'); ui.pending[2].resolve({ options: [{ employeeId: 'E001', date: '2035-01-03', participates: true, serving: true, canChange: true, eating: true }] }); await refresh;
+    assert.equal(ui.run("erBuildPayload('leave',erState('leave').draft).mealOptOuts.length"), 0);
+    const stale = ui.run('erLoadMealOptions(true)');
+    ui.run("state.token='other'; renderDashboard({...state.dashboard,user:{id:'E002'}}); erState('leave').draft=erNewDraft('leave')");
+    ui.pending[3].resolve({ options: [{ employeeId: 'E001', date: '2035-01-03', participates: true }] }); await stale;
+    assert.equal(ui.run("leaveMealState(erState('leave').draft).options.length"), 0);
+});
+
 test('employee calendar sends disjoint leave segments as one exact request without filling gaps', () => {
     const ui = loadUi();
-    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.rows=[{date:'2026-10-26',startTime:'09:00',endTime:'12:00',hours:'3'},{date:'2026-10-28',startTime:'14:00',endTime:'17:30',hours:'2.5'}]");
+    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.reason='Test leave reason'; erState('leave').draft.rows=[{date:'2026-10-26',startTime:'09:00',endTime:'12:00',hours:'3'},{date:'2026-10-28',startTime:'14:00',endTime:'17:30',hours:'2.5'}]");
     const body = JSON.parse(ui.run("JSON.stringify(erBuildPayload('leave',erState('leave').draft))"));
     assert.equal(body.durationHours, 5.5); assert.equal(body.dateSelectionMode, 'explicit_segments');
     assert.deepEqual(body.dailyHours, [{ date: '2026-10-26', hours: 3 }, { date: '2026-10-28', hours: 2.5 }]);
@@ -42,7 +84,7 @@ test('automatic hours never exceed minute intervals and manual adjustments survi
         assert.ok(hours <= minutes / 60, `${minutes} minutes must not round above the interval`);
         ui.run(`collectLeaveSegments([{date:'2026-10-26',startTime:'09:00',endTime:'09:${text}',hours:'${hours}'}])`);
     }
-    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.rows=[{date:'2026-10-26',startTime:'09:00',endTime:'12:00',hours:'3',manual:false}]");
+    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.reason='Test leave reason'; erState('leave').draft.rows=[{date:'2026-10-26',startTime:'09:00',endTime:'12:00',hours:'3',manual:false}]");
     input(ui, 'leave', 'endTime', '13:00', 0); assert.equal(ui.run("erState('leave').draft.rows[0].hours"), '3.33');
     input(ui, 'leave', 'hours', '2.5', 0); input(ui, 'leave', 'endTime', '14:00', 0);
     assert.equal(ui.run("erState('leave').draft.rows[0].hours"), '2.5');
@@ -54,7 +96,7 @@ test('automatic hours never exceed minute intervals and manual adjustments survi
 
 test('employee defaults separate lunch break from net leave hours and retain overtime two-hour duration', () => {
     const ui = loadUi();
-    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.rows=[erNewRow(erState('leave').draft,'2026-10-26')]; erState('overtime').draft=erNewDraft('overtime')");
+    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.reason='Test leave reason'; erState('leave').draft.rows=[erNewRow(erState('leave').draft,'2026-10-26')]; erState('overtime').draft=erNewDraft('overtime')");
     const leave = ui.run("erState('leave').draft"), overtime = ui.run("erState('overtime').draft");
     assert.equal(leave.rows[0].startTime, '08:20'); assert.equal(leave.rows[0].endTime, '17:00');
     assert.equal(leave.rows[0].breakMinutes, '40'); assert.equal(leave.rows[0].hours, '8');
@@ -67,7 +109,7 @@ test('employee defaults separate lunch break from net leave hours and retain ove
 
 test('leave auto break tracks full lunch boundaries, manual rest persists, and restore auto recalculates net', async () => {
     const ui = loadUi();
-    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.rows=[erNewRow(erState('leave').draft,'2026-10-26')]");
+    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.reason='Test leave reason'; erState('leave').draft.rows=[erNewRow(erState('leave').draft,'2026-10-26')]");
     const row = ui.run("erState('leave').draft.rows[0]");
     input(ui, 'leave', 'endTime', '12:59', 0); assert.equal(row.breakMinutes, '0'); assert.equal(row.hours, '4.65');
     input(ui, 'leave', 'endTime', '13:00', 0); assert.equal(row.breakMinutes, '40'); assert.equal(row.hours, '4');
@@ -119,13 +161,13 @@ test('overtime keeps full continuous end date and manual hours, including more t
 
 test('drafts survive dashboard refresh and kind switches, but logout and account changes clear them', () => {
     const ui = loadUi();
-    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.reason='Confidential'; erState('overtime').draft=erNewDraft('overtime')");
+    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.reason='Test leave reason'; erState('leave').draft.reason='Confidential'; erState('overtime').draft=erNewDraft('overtime')");
     const draft = ui.run("erState('leave').draft");
     ui.run("erState('leave').month='2026-11'; erState('leave').view='list'; state.employeeWorkspacePanel='overtime'; renderDashboard({...state.dashboard})");
     assert.equal(ui.run("erState('leave').draft"), draft); assert.equal(draft.reason, 'Confidential');
     ui.run("state.token='session-E002'; renderDashboard({...state.dashboard,user:{id:'E002'}})");
     assert.equal(ui.run("erState('leave').draft"), null); assert.equal(ui.run("erState('overtime').draft"), null);
-    ui.run("erState('leave').draft=erNewDraft('leave'); handleLogout()");
+    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.reason='Test leave reason'; handleLogout()");
     assert.equal(ui.run('employeeRequests.leave'), null); assert.equal(ui.run('employeeRequests.identity'), '');
 });
 
@@ -145,7 +187,7 @@ test('month loader ignores out-of-order and cross-account responses and passes s
 
 test('request detail uses scoped month endpoint and history clamp without losing a draft', async () => {
     const ui = loadUi();
-    ui.run("Object.assign(erState('leave'),{month:'2025-12',date:'2025-12-01',mode:'record',requestId:'old'}); erState('leave').draft=erNewDraft('leave'); erState('leave').draft.reason='keep'");
+    ui.run("Object.assign(erState('leave'),{month:'2025-12',date:'2025-12-01',mode:'record',requestId:'old'}); erState('leave').draft=erNewDraft('leave'); erState('leave').draft.reason='Test leave reason'; erState('leave').draft.reason='keep'");
     const first = ui.run("erLoad('leave')");
     assert.match(ui.requests[0].route, /month=2026-01/); assert.doesNotMatch(ui.requests[0].route, /requestId=/);
     ui.pending[0].resolve({ calendar: calendar({ month: '2026-01' }) }); await first;
@@ -181,7 +223,7 @@ test('late submit response after account change cannot overwrite the new dashboa
 
 test('server conflict keeps the exact leave draft and inline discard or apply requires explicit confirmation', async () => {
     const ui = loadUi();
-    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.rows=[{date:'2026-10-26',startTime:'09:00',endTime:'12:00',hours:'2.5',manual:true}]; erState('leave').draft.reason='Conflicting requested time'; erState('leave').draft.confirming=true");
+    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.reason='Test leave reason'; erState('leave').draft.rows=[{date:'2026-10-26',startTime:'09:00',endTime:'12:00',hours:'2.5',manual:true}]; erState('leave').draft.reason='Conflicting requested time'; erState('leave').draft.confirming=true");
     const original = ui.run("erState('leave').draft"), submit = ui.run("erSend('leave')");
     const conflict = new Error('這段時間已經有待審或已核准的請假申請。'); conflict.status = 409;
     ui.pending[0].reject(conflict); await submit;
@@ -231,7 +273,7 @@ test('records distinguish precise leave from continuous legacy records and prese
 test('leaving withdrawal confirmation for a new or existing draft does not leave its submit controls locked', async () => {
     for (const action of ['new', 'create-date', 'resume']) {
         const ui = loadUi();
-        ui.run("Object.assign(erState('leave'),{mode:'record',date:'2026-10-26',requestId:'old-request',request:{id:'old-request',calendarActions:{withdraw:true}}}); erState('leave').draft=erNewDraft('leave'); erState('leave').draft.rows=[{date:'2026-10-26',startTime:'09:00',endTime:'12:00',hours:'3'}]; erState('leave').draft.reason='keep this draft'");
+        ui.run("Object.assign(erState('leave'),{mode:'record',date:'2026-10-26',requestId:'old-request',request:{id:'old-request',calendarActions:{withdraw:true}}}); erState('leave').draft=erNewDraft('leave'); erState('leave').draft.reason='Test leave reason'; erState('leave').draft.rows=[{date:'2026-10-26',startTime:'09:00',endTime:'12:00',hours:'3'}]; erState('leave').draft.reason='keep this draft'");
         await ui.run("erWithdraw('leave','old-request')");
         assert.equal(ui.run("erState('leave').confirmation.type"), 'withdraw');
         await ui.run(`erHandleAction({dataset:{kind:'leave',action:'er-${action}'}})`);

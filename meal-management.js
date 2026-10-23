@@ -54,6 +54,8 @@ function createMealStore(sql, addAuditLog) {
     };
     const memberRows = (date) => all(`SELECT m.* FROM meal_memberships m WHERE m.effective_date =
         (SELECT MAX(m2.effective_date) FROM meal_memberships m2 WHERE m2.employee_id = m.employee_id AND m2.effective_date <= ?)`, date);
+    const memberVersion = (employeeId) => crypto.createHash('sha256').update(JSON.stringify(
+        all('SELECT * FROM meal_memberships WHERE employee_id = ? ORDER BY effective_date', employeeId))).digest('hex');
     function audit(context, action, id, before, after, reason) {
         if (!context?.audit) throw new Error('團膳異動缺少稽核操作者。');
         addAuditLog(context.audit({ action: `meal_${action}`, target_type: 'meal', target_id: id,
@@ -141,7 +143,9 @@ function createMealStore(sql, addAuditLog) {
         return { month, today: taipeiDate(now), now, days,
             ...(employeeId ? {} : { schedule: scheduleFor(dates[0]), schedules: all('SELECT * FROM meal_schedules ORDER BY effective_date').map((s) => ({ effectiveDate: s.effective_date, ...JSON.parse(s.data_json) })),
                 employees: [...new Map([...all('SELECT employee_id AS id, name, department FROM meal_memberships ORDER BY effective_date'), ...all('SELECT id, name, department FROM employees ORDER BY id')].map((e) => [e.id, e])).values()],
-                memberships: all('SELECT * FROM meal_memberships ORDER BY employee_id, effective_date') }) };
+                memberships: all('SELECT * FROM meal_memberships ORDER BY employee_id, effective_date'),
+                membershipVersions: Object.fromEntries([...new Set([...all('SELECT id FROM employees').map((e) => e.id),
+                    ...all('SELECT DISTINCT employee_id FROM meal_memberships').map((e) => e.employee_id)])].map((id) => [id, memberVersion(id)])) }) };
     }
     const saveSchedule = (body, context, now = Date.now()) => sql.transaction(() => {
         const date = dateKey(body.effectiveDate); ensureFuture(date, now);
@@ -157,9 +161,10 @@ function createMealStore(sql, addAuditLog) {
         const employee = employeeFor(body.employeeId, body.participating === false);
         const date = dateKey(body.effectiveDate); ensureFuture(date, now);
         if (typeof body.participating !== 'boolean') fail('請指定加入或退出團膳。');
+        if (body.version !== undefined && body.version !== memberVersion(employee.id)) fail('參加資格已變更，請重新整理後再確認。', 409);
         const reason = reasonText(body.reason);
         const before = get('SELECT * FROM meal_memberships WHERE employee_id = ? AND effective_date = ?', employee.id, date) || null;
-        const after = { employee_id: employee.id, effective_date: date, participating: body.participating, name: employee.name || employee.id, department: employee.department || '' };
+        const after = { employee_id: employee.id, effective_date: date, participating: body.participating, name: employee.name || employee.id, department: employee.department || '', updated_at: now };
         run(`INSERT INTO meal_memberships VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(employee_id, effective_date) DO UPDATE SET
             participating = excluded.participating, name = excluded.name, department = excluded.department, updated_at = excluded.updated_at`,
         employee.id, date, Number(body.participating), after.name, after.department, now);
@@ -200,7 +205,61 @@ function createMealStore(sql, addAuditLog) {
         run('INSERT INTO meal_orders VALUES (?, ?, ?, ?, ?, ?)', day.date, day.revision + 1, JSON.stringify(snapshot), now, context.actorId || '', reason);
         audit(context, 'close', day.date, day.orders.at(-1) || null, { revision: day.revision + 1, snapshot }, reason);
     })();
-    return { calendar, dayState, saveSchedule, saveMember, saveDay, saveChoice, closeOrder };
+    function leaveLunchDates(periods) {
+        if (!Array.isArray(periods) || periods.length > 740) fail('請假用餐時段格式不正確。');
+        const dates = new Set();
+        for (const period of periods) {
+            if (!Number.isFinite(period?.startAt) || !Number.isFinite(period?.endAt) || period.startAt >= period.endAt || period.endAt - period.startAt > 370 * 86400000) fail('請假用餐時段格式不正確。');
+            let day = dateKey(taipeiDate(period.startAt));
+            const last = dateKey(taipeiDate(period.endAt - 1));
+            while (day <= last) {
+                if (period.startAt < at(day, '13:00') && period.endAt > at(day, '12:20')) dates.add(day);
+                day = new Date(Date.parse(`${day}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+            }
+        }
+        if (dates.size > 370) fail('請假用餐日期最多 370 天。');
+        return [...dates].sort();
+    }
+    function getLeaveMealOptions(employeeIds, periods, now = Date.now()) {
+        if (!Array.isArray(employeeIds) || employeeIds.length > 500 || employeeIds.some((id) => typeof id !== 'string' || !id)) fail('請選擇有效員工。');
+        const ids = [...new Set(employeeIds)];
+        ids.forEach((id) => employeeFor(id));
+        return leaveLunchDates(periods).flatMap((date) => {
+            const day = dayState(date, now);
+            return ids.map((employeeId) => {
+                const row = day.rows.find((r) => r.employee_id === employeeId);
+                return { employeeId, date, participates: Boolean(row?.eligible), serving: day.serving,
+                    canChange: Boolean(row?.eligible && day.serving && !day.locked), eating: Boolean(row?.eating), version: day.version,
+                    reason: !row?.eligible ? '本日未參加團膳' : !day.serving ? '本日未供餐' : !row.eating ? '本日已登記不用餐' : day.locked ? '已截止或已結單，請聯絡團膳管理者' : '' };
+            });
+        });
+    }
+    const applyLeaveMealOptOut = (body, context, now = Date.now()) => sql.transaction(() => {
+        const { employeeIds, periods, requestId, selections = [] } = body;
+        if (!Array.isArray(selections) || selections.length > 370 * 500) fail('不用餐日期格式不正確。');
+        if (!selections.length) return [];
+        if (typeof requestId !== 'string' || !requestId.trim() || requestId.length > 128) fail('請假用餐異動缺少申請單號。');
+        const options = new Map(getLeaveMealOptions(employeeIds, periods, now).map((row) => [`${row.employeeId}/${row.date}`, row]));
+        const selected = new Map();
+        for (const selection of selections) {
+            const key = `${selection?.employeeId}/${selection?.date}`;
+            const option = options.get(key);
+            if (!option) fail('不用餐日期不在這次請假的午休時段或員工範圍內。');
+            if (!option.participates || !option.serving) fail(`${option.employeeId} ${option.date} 團膳資格或供餐狀態已變更，請重新確認不用餐選項。`, 409);
+            if (option.eating && !option.canChange) fail(`${option.employeeId} ${option.date} 午餐已截止或已結單，請取消該日不用餐勾選後再送出，並聯絡團膳管理者。`, 409);
+            selected.set(key, option);
+        }
+        const changed = [];
+        for (const option of selected.values()) {
+            if (!option.eating) continue;
+            saveChoice({ employeeId: option.employeeId, date: option.date, eating: false,
+                version: dayState(option.date, now).version, reason: `請假申請 ${requestId}：申請人勾選當日不用餐` },
+            { ...context, manager: false }, now);
+            changed.push({ employeeId: option.employeeId, date: option.date });
+        }
+        return changed;
+    })();
+    return { calendar, dayState, saveSchedule, saveMember, saveDay, saveChoice, closeOrder, getLeaveMealOptions, applyLeaveMealOptOut };
 }
 
 module.exports = { createMealStore, taipeiDate, monthDates };

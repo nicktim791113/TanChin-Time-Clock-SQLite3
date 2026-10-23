@@ -53,7 +53,9 @@ function erDraftSummary(kind, draft) {
 function erBuildPayload(kind, draft) {
     if (kind === 'leave') {
         if (!(state.dashboard?.leave?.leaveTypes || []).some((type) => type.id === draft.leaveTypeId)) throw new Error('請選擇目前可用的假別。');
-        return { leaveTypeId: draft.leaveTypeId, ...collectLeaveSegments(draft.rows), reason: draft.reason.trim() };
+        const body = { leaveTypeId: draft.leaveTypeId, ...collectLeaveSegments(draft.rows), reason: draft.reason.trim() };
+        if (!body.reason) throw new Error('請填寫請假事由。');
+        return { ...body, mealOptOuts: collectLeaveMealChoices(draft, { ...body, employeeIds: [state.dashboard.user.id] }) };
     }
     const wall = Number(erWallHours(draft.startDate, draft.startTime, draft.endDate, draft.endTime));
     if (!wall) throw new Error('請填完整起訖日期與時間，結束必須晚於開始。跨夜時請設定完整結束日期。');
@@ -141,7 +143,7 @@ function erSummary(kind, draft) { return `<strong data-er-summary>${erDraftSumma
 function erConfirmation(kind, draft) {
     const type = state.dashboard?.leave?.leaveTypes?.find((row) => row.id === draft.leaveTypeId);
     return `<div class="er-confirmation"><h4>送出前核對整張申請</h4>${kind === 'leave' ? `<p><strong>${erEscape(type?.name || draft.leaveTypeId)}</strong></p><ol class="er-confirm-periods">${draft.rows.map((row) => `<li><strong>${erEscape(row.date)}</strong><span>${erEscape(row.startTime)}–${row.endTime === '00:00' ? '24:00' : erEscape(row.endTime)} · ${erEscape(row.hours)} 小時</span>${row.breakMinutes !== undefined ? `<span>休息 ${erEscape(row.breakMinutes)} 分鐘，已從請假時數扣除</span>` : ''}</li>`).join('')}</ol>` : `<p>${erEscape(draft.startDate)} ${erEscape(draft.startTime)}<br>至 ${erEscape(draft.endDate)} ${erEscape(draft.endTime)}</p>`}
-        <h4>事由</h4><p class="er-reason">${erEscape(draft.reason || '未填寫')}</p><p class="er-note">${kind === 'leave' ? '送出後依指定主管審核規則，再交管理部終審。' : '送出後交指定主管審核，本人的申請不會自動核准。'}實際審核主管與進度可在送出後的整單詳情查看。</p></div>`;
+        <h4>事由</h4><p class="er-reason">${erEscape(draft.reason || '未填寫')}</p>${kind === 'leave' ? `<div data-er-leave-meals>${renderLeaveMealOptions(draft)}</div>` : ''}<p class="er-note">${kind === 'leave' ? '送出後依指定主管審核規則，再交管理部終審。' : '送出後交指定主管審核，本人的申請不會自動核准。'}實際審核主管與進度可在送出後的整單詳情查看。</p></div>`;
 }
 function erEditor(kind) {
     const current = erState(kind), draft = current.draft, label = erLabels[kind];
@@ -156,7 +158,8 @@ function erEditor(kind) {
                 ${draft.rows.length ? `<div class="er-periods">${draft.rows.map((row, index) => `<section class="er-period"><div class="er-period-heading"><strong>第 ${index + 1} 段</strong>${erButton(kind, 'remove-row', '移除', `data-row="${index}" aria-label="移除第 ${index + 1} 段"`)}</div>${erInput(kind, 'date', '日期', row.date, 'date', 'required', index)}<div class="er-input-grid">${erInput(kind, 'startTime', '開始', row.startTime, 'time', 'required', index)}${erInput(kind, 'endTime', '結束', row.endTime, 'time', 'required', index)}${erInput(kind, 'breakMinutes', '休息時間（分鐘）', row.breakMinutes ?? '0', 'number', 'min="0" max="1439" step="1" required', index)}${erInput(kind, 'hours', '扣除休息後（小時）', row.hours, 'number', 'min="0.01" max="24" step="0.01" required', index)}</div><div class="er-inline-actions">${erButton(kind, 'auto-break', '恢復自動休息與時數', `data-row="${index}"`)}${erButton(kind, 'duplicate-row', '＋ 同日另一時段', `data-row="${index}"`)}</div><small>結束 00:00 表示該日 24:00；跨夜請拆成兩天。</small></section>`).join('')}</div>` : '<p class="er-empty">先在日曆選取日期，可選多個不連續日期；或按下方新增日期。</p>'}
                 ${erButton(kind, 'add-row', '＋ 新增日期／時段')}<p class="er-note">已選 ${dates.size} 日。完整涵蓋 12:20–13:00 時預帶休息 40 分鐘，其他時段預帶 0 分鐘，可自行調整。修改休息會重新計算淨時數；手動休息或淨時數不會被時間變更覆蓋，可按「恢復自動休息與時數」重新帶入。最多 740 段，日期範圍最多 370 日。</p>`
                 : `<p class="er-note">本人：${erEscape(state.dashboard?.user?.id)} ${erEscape(state.dashboard?.user?.name)}</p><h4>1　連續加班區間</h4><div class="er-input-grid">${erInput(kind, 'startDate', '開始日期', draft.startDate, 'date', 'required')}${erInput(kind, 'startTime', '開始時間', draft.startTime, 'time', 'required')}${erInput(kind, 'endDate', '結束日期', draft.endDate, 'date', 'required')}${erInput(kind, 'endTime', '結束時間', draft.endTime, 'time', 'required')}</div><div class="er-inline-actions">${erButton(kind, 'same-day', '結束在當日')}${erButton(kind, 'next-day', '結束在隔日')}</div>${erInput(kind, 'durationHours', '扣除休息後時數（小時）', draft.durationHours, 'number', 'min="0.01" step="0.01" required')}<p class="er-note">可直接修改完整結束日期。時數依起訖帶入，手動調整後保留；不連續日期請分筆申請。</p>`}
-            <label class="er-field er-reason-field"><span>${kind === 'leave' ? '3' : '2'}　${label}事由</span><textarea data-er-field="reason" data-er-focus="reason" data-kind="${kind}" rows="3" placeholder="請簡述${label}原因">${erEscape(draft.reason)}</textarea></label>
+            ${kind === 'leave' ? `<div data-er-leave-meals>${renderLeaveMealOptions(draft)}</div>` : ''}
+            <label class="er-field er-reason-field"><span>${kind === 'leave' ? '3' : '2'}　${label}事由${kind === 'leave' ? '（必填）' : ''}</span><textarea data-er-field="reason" data-er-focus="reason" data-kind="${kind}" rows="3" ${kind === 'leave' ? 'required' : ''} placeholder="請簡述${label}原因">${erEscape(draft.reason)}</textarea></label>
             <p class="er-note">${kind === 'leave' ? '同一假別的所有時段一起送出，依既有指定主管與管理部終審規則處理。' : '指定主管依既有規則審核；核准不會直接修改打卡或出勤時間。'}</p></div>`}
         </fieldset><div class="er-form-error" data-er-form-error role="alert">${erEscape(draft.error)}</div>
         <footer class="er-editor-footer">${current.confirmation && current.confirmation.type !== 'withdraw' ? erActionConfirmation(kind) : ''}<div class="er-total">${erSummary(kind, draft)}</div><div class="er-footer-actions">${erButton(kind, draft.confirming ? 'edit-again' : 'discard', draft.confirming ? '返回修改' : '放棄草稿', current.busy || current.confirmation ? 'disabled' : '')}${draft.confirming ? erButton(kind, 'send', current.busy ? '送出中…' : `確認送出${label}`, current.busy || current.confirmation ? 'disabled' : '', true) : `<button type="submit" class="er-button er-primary" ${current.busy || current.confirmation || (kind === 'leave' && !draft.rows.length) ? 'disabled' : ''}>下一步確認</button>`}</div></footer></form></div>`;
@@ -206,6 +209,22 @@ function erRestoreFocus(snapshot) {
 function erSetupDialogs() {
     for (const dialog of document.querySelectorAll('[data-er-dialog]')) if (!dialog.open) dialog.showModal();
 }
+function erPaintMealOptions(draft) {
+    const host = document.getElementById('er-leave')?.querySelector('[data-er-leave-meals]');
+    if (host && erState('leave').draft === draft) host.innerHTML = renderLeaveMealOptions(draft);
+}
+async function erLoadMealOptions(force = false) {
+    const current = erState('leave'), draft = current.draft, identity = employeeRequests.identity;
+    if (!draft || !erLive(identity, current, 'leave')) return;
+    let body;
+    try { body = { ...collectLeaveSegments(draft.rows), employeeIds: [state.dashboard.user.id] }; }
+    catch (error) {
+        const meals = leaveMealState(draft); meals.sequence += 1; meals.key = ''; meals.options = []; meals.loading = false; meals.error = ''; erPaintMealOptions(draft);
+        if (force) throw error; return;
+    }
+    await loadLeaveMealOptions(draft, body, '/api/browser/employee/leave/meal-options',
+        () => erLive(identity, current, 'leave') && current.draft === draft, () => erPaintMealOptions(draft), force);
+}
 function erPaint(kind, { focus = '', preserveFocus = true } = {}) {
     const root = document.getElementById(`er-${kind}`); if (!root || state.dashboard?.role !== 'employee') return;
     const snapshot = preserveFocus ? erFocusSnapshot() : null;
@@ -215,6 +234,7 @@ function erPaint(kind, { focus = '', preserveFocus = true } = {}) {
     if (commonOpen && replacement.querySelector('.er-common')) replacement.querySelector('.er-common').open = true;
     erRestoreFocus(snapshot);
     if (focus) { const element = [...replacement.querySelectorAll('[data-er-focus]')].find((node) => node.dataset.erFocus === focus); element?.focus({ preventScroll: true }); }
+    if (kind === 'leave') erLoadMealOptions().catch(() => {});
 }
 async function erLoad(kind) {
     if (state.dashboard?.role !== 'employee') return;
@@ -277,6 +297,7 @@ function erUpdateDraftInput(target) {
     draft.error = ''; draft.confirming = false;
     for (const summary of document.querySelectorAll(`#er-${kind} [data-er-summary]`)) summary.textContent = erDraftSummary(kind, draft);
     for (const message of document.querySelectorAll(`#er-${kind} [data-er-form-error]`)) message.textContent = '';
+    if (kind === 'leave' && document.getElementById('er-leave')) erLoadMealOptions().catch(() => {});
 }
 function erOpenDraft(kind, date = '') {
     const current = erState(kind); current.draft ||= erNewDraft(kind); current.mode = 'edit'; current.requestId = ''; current.request = null; current.confirmation = null; current.view = 'calendar'; current.error = ''; current.draft.confirming = false;
@@ -297,7 +318,7 @@ async function erSend(kind) {
     const current = erState(kind), draft = current.draft, identity = employeeRequests.identity;
     if (!draft || current.busy || !draft.confirming || !erLive(identity, current, kind)) return;
     let body;
-    try { body = erBuildPayload(kind, draft); } catch (error) { draft.error = error.message; draft.confirming = false; erPaint(kind); return; }
+    try { body = erBuildPayload(kind, draft); if (kind === 'leave') requireLeaveMealOptionsReady(draft, { ...body, employeeIds: [state.dashboard.user.id] }); } catch (error) { draft.error = error.message; draft.confirming = false; erPaint(kind); return; }
     current.busy = true; draft.error = ''; erPaint(kind);
     try {
         const result = await requestJson(`/api/browser/employee/${kind}/request`, { method: 'POST', auth: true, body });
@@ -306,7 +327,7 @@ async function erSend(kind) {
         current.date = body.startDate; current.month = body.startDate.slice(0, 7); current.filters = {}; current.page = 1; current.requestId = ''; current.request = null; current.data = null;
         current.notice = result.message || `${erLabels[kind]}申請已送出。請點紀錄查看整張申請及審核進度。`;
         renderDashboard(result.data.dashboard); setMessage(ui.dashboardMessage, current.notice, 'success');
-    } catch (error) { if (erLive(identity, current, kind) && current.draft === draft) draft.error = error.message; }
+    } catch (error) { if (erLive(identity, current, kind) && current.draft === draft) { draft.error = error.message; if (kind === 'leave') { draft.confirming = false; erLoadMealOptions(true).catch(() => {}); } } }
     finally { if (erLive(identity, current, kind)) { current.busy = false; erPaint(kind); } }
 }
 async function erWithdraw(kind, id, confirmed = false) {
@@ -398,6 +419,7 @@ postRenderSetup = function setupEmployeeRequests() {
     erSetupDialogs();
     for (const kind of ['leave', 'overtime']) { const current = employeeRequests[kind]; if (document.getElementById(`er-${kind}`) && current && !current.data && !current.loading && !current.error) erLoad(kind); }
     erLoadBalances();
+    if (document.getElementById('er-leave')) erLoadMealOptions().catch(() => {});
 };
 const erPreviousClick = handleDashboardClick;
 handleDashboardClick = async function clickEmployeeRequests(event) {
@@ -410,8 +432,14 @@ handleDashboardSubmit = async function submitEmployeeRequestDraft(event) {
     const form = event.target.closest?.('[data-er-form]'); if (!form) return erPreviousSubmit(event);
     event.preventDefault(); const kind = form.dataset.erForm, current = erState(kind);
     if (!erLive(employeeRequests.identity, current, kind) || current.busy || current.confirmation || !current.draft) return;
-    try { erBuildPayload(kind, current.draft); current.draft.error = ''; current.draft.confirming = true; }
-    catch (error) { current.draft.error = error.message; }
+    const draft = current.draft, identity = employeeRequests.identity;
+    try {
+        erBuildPayload(kind, draft); if (kind === 'leave') await erLoadMealOptions();
+        if (!erLive(identity, current, kind) || current.draft !== draft) return;
+        const body = erBuildPayload(kind, draft); if (kind === 'leave') requireLeaveMealOptionsReady(draft, { ...body, employeeIds: [state.dashboard.user.id] });
+        draft.error = ''; draft.confirming = true;
+    }
+    catch (error) { if (erLive(identity, current, kind) && current.draft === draft) draft.error = error.message; }
     erPaint(kind);
 };
 const erPreviousLogout = handleLogout;
@@ -419,12 +447,19 @@ handleLogout = function logoutEmployeeRequests(...args) { erReset(); return erPr
 document.addEventListener('input', (event) => { if (event.target.matches?.('[data-er-field], [data-er-row-field]')) erUpdateDraftInput(event.target); });
 document.addEventListener('change', (event) => {
     const target = event.target;
+    if (target.matches?.('[data-leave-meal-choice]') && target.closest?.('[data-er-kind="leave"]')) {
+        const current = erState('leave'); if (current.busy || !current.draft) return;
+        leaveMealState(current.draft).selected[target.dataset.leaveMealChoice] = target.checked; return;
+    }
     if (target.matches?.('[data-er-field], [data-er-row-field]')) { erUpdateDraftInput(target); if (target.dataset.erRowField === 'date') erPaint(target.dataset.kind); return; }
     if (!target.matches?.('[data-er-filter], [data-er-month]')) return;
     const kind = target.dataset.kind, current = erState(kind); if (!erLive(employeeRequests.identity, current, kind) || current.busy) return;
     if (target.hasAttribute('data-er-month')) { if (!/^(20\d{2}|2100)-(0[1-9]|1[0-2])$/.test(target.value) || target.value < erMinimum(kind)) { erPaint(kind); return; } current.month = target.value; current.date = `${target.value}-01`; }
     else current.filters[target.dataset.erFilter] = target.value;
     current.page = 1; current.requestId = ''; current.request = null; current.confirmation = null; if (current.mode === 'record') current.mode = 'browse'; erLoad(kind);
+});
+document.addEventListener('click', (event) => {
+    if (event.target.closest?.('[data-leave-meal-retry]') && event.target.closest?.('[data-er-kind="leave"]')) { event.preventDefault(); erLoadMealOptions(true).catch(() => {}); }
 });
 document.addEventListener('toggle', (event) => { if (event.target.matches?.('[data-er-balances]')) employeeRequests.balancesOpen = event.target.open; }, true);
 document.addEventListener('cancel', (event) => { const kind = event.target.dataset?.erDialog; if (!kind) return; event.preventDefault(); erCloseEditor(kind); }, true);

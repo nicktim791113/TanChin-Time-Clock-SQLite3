@@ -384,6 +384,8 @@ const API_ROUTE_CATALOG = [
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/employee/workspace-nav-order', auth: '員工', description: '讀取本人工作台功能順序；不改變功能權限' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/workspace-nav-order/save', auth: '員工本人', description: '儲存個人工作台功能順序，跨裝置保留，禁止身份模擬' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/workspace-nav-order/reset', auth: '員工本人', description: '還原本人預設功能順序，不影響其他員工或全域排序' },
+  { category: '請假 API', method: 'POST', path: '/api/browser/employee/leave/meal-options', auth: '員工本人', description: '核對本人請假午休重疊日期的團膳資格與取消期限，唯讀不改午餐' },
+  { category: '請假 API', method: 'POST', path: '/api/browser/employee/supervisor/leave/meal-options', auth: '指定代辦主管', description: '核對本次授權代辦員工請假日期的不用餐選項' },
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/employee/leave/calendar?month=YYYY-MM', auth: '員工', description: '本人請假月曆／指定主管待審，台北日期、月份重疊與明細分頁' },
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/employee/overtime/calendar?month=YYYY-MM', auth: '員工', description: '本人與本人代申請加班月曆／指定主管待審，完整月份查詢' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/leave/withdraw', auth: '員工', description: '員工撤回尚未終審的請假申請' },
@@ -3486,7 +3488,8 @@ function buildManagerDashboard(employee, session = {}) {
   const adminSections = getAdminSectionAccess(session);
   const canAttendance = hasAnyAdminPermission(session, ['admin.reports.view', 'admin.manualPunch.create']);
   if (!canAttendance) insights.todayAttendance = { records: [], normalRecords: [], abnormalRecords: [], normalEmployeeIds: [], abnormalEmployeeIds: [], failureLogs: [] };
-  const dashboardMetrics = buildDashboardMetrics(dbModule, (p) => hasAdminPermission(session, p), {
+  const dashboardMetrics = buildDashboardMetrics(dbModule, (p) =>
+    (!p.startsWith('admin.salary_advances.') || !session.impersonation?.active) && hasAdminPermission(session, p), {
     todayPunchCount: insights.todayAttendance.normalEmployeeIds.length, todayAbnormalPunchCount: canAttendance ? todayAbnormalPunchCount : 0,
     shiftCount: datasets.shifts.length, bellScheduleCount: `${insights.bells.enabledCount}/${insights.bells.totalCount}`,
     greetingCount: datasets.greetings.length, customThemeCount: datasets.customThemes.length
@@ -5505,10 +5508,20 @@ function attachBrowserRoutes(server) {
     }
   });
 
+  server.post('/api/browser/employee/leave/meal-options', requireBrowserSession, requireBrowserRole('employee'), (request, response) => {
+    try {
+      const employee = getEmployeeById(request.browserSession.employeeId);
+      if (!employee) throw createHttpError('登入帳號對應的員工資料已不存在，請重新登入。', 401);
+      const { startAt, endAt, selection } = resolveSubmittedLeavePeriod(request.body);
+      response.json({ success: true, options: dbModule.getMeals().getLeaveMealOptions([employee.id], getLeaveDateSegments({ ...selection, start_at: startAt, end_at: endAt })) });
+    } catch (error) { response.status(error.statusCode || error.status || 500).json({ success: false, error: error.message }); }
+  });
+
   server.post('/api/browser/employee/leave/request', requireBrowserSession, requireBrowserRole('employee'), (request, response) => {
     try {
       const employee = getEmployeeById(request.browserSession.employeeId);
       if (!employee) throw createHttpError('登入帳號對應的員工資料已不存在，請重新登入。', 401);
+      if (typeof request.body?.reason !== 'string' || !request.body.reason.trim()) throw createHttpError('請填寫請假事由。', 400);
 
       const leaveTypes = dbModule.loadLeaveTypes();
       const leaveTypeId = String(request.body?.leaveTypeId || request.body?.leave_type_id || '').trim();
@@ -5548,6 +5561,13 @@ function attachBrowserRoutes(server) {
       };
       dbModule.getSupervisors().transaction(() => {
       const savedLeaveRequest = dbModule.createLeaveRequest(leaveRequest);
+      if (request.body.mealOptOuts !== undefined) {
+        if (request.body.mealOptOuts?.length && request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能修改午餐安排。', 403);
+        if (!Array.isArray(request.body.mealOptOuts) || request.body.mealOptOuts.some((item) => !item || item.employeeId !== employee.id)) throw createHttpError('只能設定本人這次請假日期的不用餐選項。', 403);
+        dbModule.getMeals().applyLeaveMealOptOut({ employeeIds: [employee.id], periods: getLeaveDateSegments(leaveRequest),
+          selections: request.body.mealOptOuts, requestId: leaveRequest.id },
+          { actorId: employee.id, label: '員工請假並取消午餐', audit: (entry) => buildBrowserAuditLogEntry(request, entry) }, now);
+      }
       dbModule.addAuditLog(buildBrowserAuditLogEntry(request, {
         action: 'create',
         target_type: 'leave_request',
@@ -5557,13 +5577,14 @@ function attachBrowserRoutes(server) {
       }));
       });
       notifyDesktop('leaveRequests', getBrowserSyncMeta(request));
+      if (request.body.mealOptOuts?.length) notifyDesktop('meals', getBrowserSyncMeta(request));
       response.json({
         success: true,
         message: '請假申請已送出，等待主管審核。',
         data: { dashboard: buildDashboardForSession(request.browserSession) }
       });
     } catch (error) {
-      response.status(error.statusCode || 500).json({ success: false, error: error.message });
+      response.status(error.statusCode || error.status || 500).json({ success: false, error: error.message });
     }
   });
 

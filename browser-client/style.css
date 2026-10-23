@@ -4020,6 +4020,32 @@ body::after {
 /* Admin lunch uses the same left navigation and content geometry as leave. */
 .meal-admin-workspace { padding: 0; }
 .meal-admin-panel > .meal-settings { margin-top: 0; padding-top: 0; border-top: 0; }
+.meal-member-filters { grid-template-columns: repeat(3, minmax(100px, 1fr)) auto auto; max-width: none; align-items: end; gap: 10px; padding: 12px; border-radius: 10px; background: #f3f6f8; }
+.meal-member-filters .field { flex: 1 1 150px; margin: 0; }
+.meal-members-table { min-width: 830px; font-size: 13px; }
+.meal-members-table td { padding: 8px 10px; }
+.meal-members-table td:first-child { white-space: nowrap; }
+.meal-member-status { display: inline-flex; padding: 3px 9px; border-radius: 99px; background: #e8edf1; color: #475569; white-space: nowrap; font-weight: 700; }
+.meal-member-status.is-joined { background: #dcf4e7; color: #166534; }
+.meal-member-actions { display: flex; gap: 5px; white-space: nowrap; }
+.meal-member-actions .outline-btn { padding: 6px 10px; min-width: 56px; }
+.meal-mobile-table-hint { display: none; }
+.meal-member-history { margin-top: 5px; font-size: 12px; }
+.meal-member-history summary { cursor: pointer; color: #345f7b; }
+.meal-member-history small { display: block; color: #617386; }
+.meal-member-history > div { padding: 5px 0; }
+.meal-member-dialog { width: min(520px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); overflow: auto; box-sizing: border-box; border: 1px solid #c8d8e5; border-radius: 16px; padding: 20px; color: #17314a; background: #fff; box-shadow: 0 20px 80px #102d4b44; }
+.meal-member-dialog::backdrop { background: #10283d88; }
+.meal-member-dialog .field input { width: 100%; box-sizing: border-box; }
+.meal-member-dialog .meal-section-heading { align-items: start; }
+.meal-member-dialog .meal-section-heading h3 { margin: 0; }
+.meal-member-dialog-actions { display: flex; justify-content: end; gap: 8px; flex-wrap: wrap; }
+@media (max-width: 600px) {
+    .meal-member-filters { display: grid; grid-template-columns: 1fr; }
+    .meal-member-dialog { padding: 16px; }
+    .meal-members-table td:last-child, .meal-members-table th:last-child { position: static; }
+    .meal-mobile-table-hint { display: block; margin-top: 6px; color: #345f7b; }
+}
 .meal-admin-panel .meal-toolbar, .meal-admin-workspace .meal-toolbar { min-width: 0; }
 .meal-admin-workspace .meal-month-controls { max-width: 100%; }
 #leave-audit-filter-form .field-grid { grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); }

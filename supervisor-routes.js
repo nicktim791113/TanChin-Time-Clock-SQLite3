@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 const { monthRange, buildCalendar } = require('./request-calendar');
 const { proxyReason, requirePersonalSupervisor } = require('./supervisor-management');
-const { normalizeLeaveDateSelection, leaveOverlapsRange } = require('./leave-date-selection');
+const { normalizeLeaveDateSelection, leaveOverlapsRange, getLeaveDateSegments } = require('./leave-date-selection');
 
 function fail(message, status = 400) { throw Object.assign(new Error(message), { status }); }
 function requestPeriod(body, kind) {
@@ -13,8 +13,8 @@ function requestPeriod(body, kind) {
             typeof time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) fail('請輸入有效日期與時間。');
         return Date.parse(`${date}T${time}:00+08:00`);
     };
-    const start = parse(body.startDate, body.startTime || (kind === 'leave' ? '09:00' : '18:00'));
-    const end = parse(body.endDate, body.endTime || (kind === 'leave' ? '18:00' : '20:00'));
+    const start = parse(body.startDate, body.startTime || (kind === 'leave' ? '08:20' : '17:30'));
+    const end = parse(body.endDate, body.endTime || (kind === 'leave' ? '17:00' : '19:30'));
     if (end <= start) fail('結束時間必須晚於開始時間。');
     if (kind === 'leave' && body.dateSelectionMode === 'explicit_dates') {
         return { start_at: start, end_at: end, ...normalizeLeaveDateSelection({ start_at: start, end_at: end,
@@ -108,11 +108,17 @@ function attachSupervisorRoutes(server, context) {
             leaveBalances: db.getLeaveEntitlements().balances([employeeId], Number(range.month.slice(0, 4))).map(({ records, updated_by, revision, ...row }) => row),
             meals: db.getMeals().calendar({ month: range.month, employeeId }) } });
     }));
+    server.post('/api/browser/employee/supervisor/leave/meal-options', requireSession, requireRole('employee'), handle((request, response) => {
+        const targets = targetsFor(request, request.body || {});
+        const period = requestPeriod(request.body || {}, 'leave');
+        response.json({ success: true, options: db.getMeals().getLeaveMealOptions(targets.map((row) => row.id), getLeaveDateSegments(period)) });
+    }));
     for (const kind of ['leave', 'overtime']) {
         server.post(`/api/browser/employee/supervisor/${kind}`, requireSession, requireRole('employee'), handle((request, response) => {
             const body = request.body || {};
             const targets = targetsFor(request, body);
             const reason = proxyReason(body.proxyReason);
+            if (kind === 'leave' && (typeof body.reason !== 'string' || !body.reason.trim())) fail('請填寫請假事由。');
             if (body.confirmApproval !== true) fail('請確認主管代申請並核准。');
             const period = requestPeriod(body, kind);
             const type = kind === 'leave' ? db.loadLeaveTypes().find((row) => row.id === body.leaveTypeId && row.enabled) : null;
@@ -142,6 +148,12 @@ function attachSupervisorRoutes(server, context) {
                 if (conflicts.length) fail(`${conflicts.map((e) => `${e.id} ${e.name}`).join('、')} 這段時間已有待審或已核准的申請；整批未建立。`, 409);
                 records.forEach((record, index) => {
                     (kind === 'leave' ? db.createLeaveRequest : db.createOvertimeRequest)(record);
+                    if (kind === 'leave' && body.mealOptOuts !== undefined) {
+                        if (!Array.isArray(body.mealOptOuts) || body.mealOptOuts.some((item) => !item || !targets.some((target) => target.id === item.employeeId))) fail('不用餐對象必須是本次授權代辦的員工。', 403);
+                        db.getMeals().applyLeaveMealOptOut({ employeeIds: [record.employee_id], periods: getLeaveDateSegments(period),
+                            selections: body.mealOptOuts.filter((item) => item.employeeId === record.employee_id), requestId: record.id },
+                            { actorId, label: '指定主管代請假並取消午餐', audit: (entry) => auditEntry(request, entry) }, now);
+                    }
                     const target = targets[index];
                     db.addAuditLog(auditEntry(request, { action: 'supervisor_proxy_create', target_type: `${kind}_request`, target_id: record.id,
                         summary: `指定主管代 ${target.id} ${target.name} 申請${kind === 'leave' ? '請假' : '加班'}（${record.status === 'pending_supervisor' ? '依多主管規則送審' : record.status === 'pending_admin' ? '送管理部終審' : '已核准'}）：${reason}`,
@@ -149,6 +161,7 @@ function attachSupervisorRoutes(server, context) {
                 });
             });
             notify(request, kind === 'leave' ? 'leaveRequests' : 'overtimeRequests');
+            if (kind === 'leave' && body.mealOptOuts?.length) notify(request, 'meals');
             response.json({ success: true, requestId: records[0].id, requestIds: records.map((row) => row.id), createdCount: records.length,
                 message: `${records.length} 位員工的代辦${kind === 'leave' ? '請假' : '加班'}已依各人審核規則建立。` });
         }));

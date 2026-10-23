@@ -11,9 +11,10 @@ const dmGroupsFallback = [
     { key: 'overtimeReview', label: '加班待審核', kind: 'review', items: ['overtimePendingSupervisor'] },
     { key: 'meals', label: '午餐團膳', kind: 'meals', items: ['mealToday', 'mealTomorrow', 'mealParticipants'] },
     { key: 'schedule', label: '班別與響鈴', kind: 'settings', items: ['shiftCount', 'bellScheduleCount'] },
+    { key: 'salary', label: '借支管理', kind: 'salary', items: ['salaryPendingCount', 'salaryPendingPeople', 'salaryPendingAmount', 'salaryApprovedAmount'] },
     { key: 'appearance', label: '問候語與主題', kind: 'settings', items: ['greetingCount', 'customThemeCount'] }
 ];
-const dmPaths = { people: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M17 3a4 4 0 0 1 0 8M22 21v-2a4 4 0 0 0-3-3.87', week: 'M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2', review: 'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11', meals: 'M3 2v7a3 3 0 0 0 6 0V2M6 2v20M19 2c-4 3-4 9 0 10v10M19 2v10', settings: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2', arrow: 'M9 5l7 7-7 7', up: 'M5 15l7-7 7 7', down: 'M5 9l7 7 7-7', close: 'M6 6l12 12M18 6L6 18', order: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01' };
+const dmPaths = { salary: 'M12 2v20M17 5H9a4 4 0 0 0 0 8h6a3 3 0 0 1 0 6H6', people: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M17 3a4 4 0 0 1 0 8M22 21v-2a4 4 0 0 0-3-3.87', week: 'M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2', review: 'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11', meals: 'M3 2v7a3 3 0 0 0 6 0V2M6 2v20M19 2c-4 3-4 9 0 10v10M19 2v10', settings: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2', arrow: 'M9 5l7 7-7 7', up: 'M5 15l7-7 7 7', down: 'M5 9l7 7 7-7', close: 'M6 6l12 12M18 6L6 18', order: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01' };
 function dmIcon(name) { return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${dmPaths[name] || dmPaths.settings}"/></svg>`; }
 function dmGroups(data = state.dashboard?.dashboardMetrics) { return data?.groups || dmGroupsFallback; }
 function dmItem(key, dashboard = state.dashboard) { return dashboard?.dashboardMetrics?.catalog.find((item) => item.key === key); }
@@ -23,14 +24,14 @@ function dmValue(item, dashboard) {
         const attendance = getScopedAttendanceSummary(dashboard);
         return item.key === 'todayPunchCount' ? attendance.normalEmployees.length : attendance.abnormalRecords.length + attendance.failureLogs.length;
     }
-    return item.value;
+    return item.key.startsWith('salary') && item.key.endsWith('Amount') ? `NT$ ${Number(item.value).toLocaleString('zh-TW')}` : item.value;
 }
 function dmShortLabel(item) {
     return ({ leavePendingSupervisor: '待主管審核', leavePendingAdmin: '待管理部複核', overtimePendingSupervisor: '待主管審核', mealParticipants: '參加團膳人數' })[item.key] || item.label;
 }
 function dmItemButton(item, dashboard) {
     const tone = item.key === 'todayAbnormalPunchCount' ? 'danger' : item.key.includes('Pending') ? 'warning' : item.key === 'todayPunchCount' ? 'success' : '';
-    const unit = item.key.includes('Pending') || item.key === 'todayAbnormalPunchCount' ? '筆' : item.key.startsWith('meal') && item.key !== 'mealParticipants' ? '份' : ['employeeCount', 'todayPunchCount', 'mealParticipants'].includes(item.key) ? '人' : '';
+    const unit = item.key === 'salaryPendingPeople' ? '人' : item.key.endsWith('Amount') ? '' : item.key.includes('Pending') || item.key === 'todayAbnormalPunchCount' ? '筆' : item.key.startsWith('meal') && item.key !== 'mealParticipants' ? '份' : ['employeeCount', 'todayPunchCount', 'mealParticipants'].includes(item.key) ? '人' : '';
     return `<button type="button" class="dm-metric-row ${tone}" data-action="dm-insight" data-key="${dmEscape(item.key)}" ${item.available ? '' : 'disabled'} title="${dmEscape(item.available ? `${item.label}：${item.subtitle || '檢視資訊與設定入口'}` : '未授權查看此項目')}"><span>${dmEscape(dmShortLabel(item))}</span><strong>${dmEscape(dmValue(item, dashboard))}<small>${unit}</small></strong>${dmIcon('arrow')}</button>`;
 }
 function dmWeek(group, dashboard, selected = '') {
@@ -44,13 +45,13 @@ function dmWeek(group, dashboard, selected = '') {
 function renderDashboardMetricStrip(dashboard) {
     const data = dashboard.dashboardMetrics;
     if (!data) return '';
-    const groups = dmGroups(data), ordered = [...new Set([...(data.cardKeys || []), ...groups.map((group) => group.key)])].map((key) => groups.find((group) => group.key === key)).filter(Boolean);
-    return `<section class="dm-strip dm-density-${data.density === 'compact' ? 'compact' : 'comfortable'}" aria-label="管理者八張分組指標"><div class="dm-toolbar"><div><h2>工作台總覽</h2><span>${dmEscape(data.today)} · 台北時間</span></div><button type="button" class="outline-btn dm-order-button" data-action="dm-settings">${dmIcon('order')}調整排列與高度</button></div>
-        ${data.migrated ? '<p class="dm-migration" role="status">已將舊版單項指標合併為八張分組卡，沿用可對應的先後順序；可在「調整排列與高度」檢視並儲存。</p>' : ''}
+    const groups = dmGroups(data), ordered = [...new Set([...(data.cardKeys || []), ...groups.map((group) => group.key)])].map((key) => groups.find((group) => group.key === key)).filter(Boolean).slice(0, 8);
+    return `<section class="dm-strip dm-density-${data.density === 'compact' ? 'compact' : 'comfortable'}" aria-label="管理者八張分組指標"><div class="dm-toolbar"><div><h2>工作台總覽</h2><span>${dmEscape(data.today)} · 台北時間</span></div><button type="button" class="outline-btn dm-order-button" data-action="dm-settings">${dmIcon('order')}選擇卡片與排列</button></div>
+        ${data.migrated ? '<p class="dm-migration" role="status">新增「借支管理」卡片，沿用原有順序並替換「問候語與主題」。可從九張卡片中選擇八張並調整順序。</p>' : ''}
         <div class="dm-cards">${ordered.map((group, index) => {
             const items = group.items.map((key) => dmItem(key, dashboard)).filter(Boolean), available = items.some((item) => item.available);
-            const footer = group.kind === 'week' ? '點選日期查看人員與申請明細' : group.kind === 'review' ? '全部日期 · 依申請單計數' : group.kind === 'settings' ? '查看配置概況與設定入口' : group.kind === 'meals' ? '目前預訂 · 交單份數請見明細' : '異常含打卡紀錄與失敗稽核';
-            return `<article class="dm-card ${available ? '' : 'dm-locked'}" data-metric-slot="${index}" data-metric-group="${group.key}"><header><h3>${dmIcon(group.kind)}${dmEscape(group.label)}</h3>${group.kind === 'week' ? '<span>已核准人數</span>' : ''}</header><div class="dm-card-body">${group.kind === 'week' ? dmWeek(group, dashboard) : items.map((item) => dmItemButton(item, dashboard)).join('')}</div><p class="dm-card-note">${available ? footer : '目前帳號未授權此分組的資料'}</p></article>`;
+            const footer = group.kind === 'salary' ? `${data.today?.slice(0, 7) || ''} 登記月 · 已複核含補登，非已發放` : group.kind === 'week' ? '點選日期查看人員與申請明細' : group.kind === 'review' ? '全部日期 · 依申請單計數' : group.kind === 'settings' ? '查看配置概況與設定入口' : group.kind === 'meals' ? '目前預訂 · 交單份數請見明細' : '異常含打卡紀錄與失敗稽核';
+            return `<article class="dm-card ${group.kind === 'salary' ? 'dm-salary-card' : ''} ${available ? '' : 'dm-locked'}" data-metric-slot="${index}" data-metric-group="${group.key}"><header><h3>${dmIcon(group.kind)}${dmEscape(group.label)}</h3>${group.kind === 'week' ? '<span>已核准人數</span>' : ''}</header><div class="dm-card-body">${group.kind === 'week' ? dmWeek(group, dashboard) : items.map((item) => dmItemButton(item, dashboard)).join('')}</div><p class="dm-card-note">${available ? footer : '目前帳號未授權此分組的資料'}</p></article>`;
         }).join('')}</div></section>`;
 }
 function dmSummary(items) { return `<div class="dm-summary">${items.map(([value, label, tone = '']) => `<div class="${tone}"><strong>${dmEscape(value)}</strong><span>${dmEscape(label)}</span></div>`).join('')}</div>`; }
@@ -76,14 +77,14 @@ function dmClose(force = false) {
     dialog.close(); dialog.remove(); dmState.draft = null; dmState.dirty = false; dmState.previousFocus?.focus?.();
 }
 function dmSettingsRows() {
-    return dmState.draft.map((key, index) => { const group = dmGroups().find((item) => item.key === key); return `<li><span class="dm-position">${index + 1}</span><div><strong>${dmEscape(group.label)}</strong><small>${group.items.map((item) => dmItem(item)).filter(Boolean).map((item) => dmShortLabel(item)).join('、')}</small></div><button type="button" class="dm-move" data-dm-move="${index}" data-direction="-1" ${index === 0 ? 'disabled' : ''} aria-label="${dmEscape(group.label)}往前移">${dmIcon('up')}</button><button type="button" class="dm-move" data-dm-move="${index}" data-direction="1" ${index === 7 ? 'disabled' : ''} aria-label="${dmEscape(group.label)}往後移">${dmIcon('down')}</button></li>`; }).join('');
+    return dmState.draft.map((key, index) => { const group = dmGroups().find((item) => item.key === key); return `<li><span class="dm-position">${index + 1}</span><div><label class="dm-card-choice"><span class="dm-sr-only">第 ${index + 1} 張卡片</span><select data-dm-card-index="${index}" aria-label="第 ${index + 1} 張卡片">${dmGroups().filter((item) => item.key === key || !dmState.draft.includes(item.key)).map((item) => `<option value="${dmEscape(item.key)}" ${item.key === key ? 'selected' : ''}>${dmEscape(item.label)}</option>`).join('')}</select></label><small>${group.items.map((item) => dmItem(item)).filter(Boolean).map((item) => dmEscape(dmShortLabel(item))).join('、')}</small></div><button type="button" class="dm-move" data-dm-move="${index}" data-direction="-1" ${index === 0 ? 'disabled' : ''} aria-label="${dmEscape(group.label)}往前移">${dmIcon('up')}</button><button type="button" class="dm-move" data-dm-move="${index}" data-direction="1" ${index === 7 ? 'disabled' : ''} aria-label="${dmEscape(group.label)}往後移">${dmIcon('down')}</button></li>`; }).join('');
 }
 function dmOpenSettings() {
     if (dmDialog()) return;
     const data = state.dashboard.dashboardMetrics; dmState.draft = [...data.cardKeys]; dmState.density = data.density || 'comfortable'; dmState.dirty = false; dmState.previousFocus = document.activeElement;
     const dialog = document.createElement('dialog'); dialog.id = 'dashboard-metric-settings'; dialog.className = 'dm-dialog'; dialog.setAttribute('aria-label', '個人指標排列與高度');
-    dialog.innerHTML = `<div class="modal-header"><div><h3>個人指標排列與高度</h3><p>八張卡保留完整資訊，調整只套用於您的帳號。</p></div><button class="ghost-btn dm-icon" type="button" data-dm-close aria-label="關閉">${dmIcon('close')}</button></div><form data-dm-settings-form><fieldset class="dm-density-picker"><legend>卡片高度</legend><label><input type="radio" name="density" value="comfortable" ${dmState.density === 'comfortable' ? 'checked' : ''}>標準</label><label><input type="radio" name="density" value="compact" ${dmState.density === 'compact' ? 'checked' : ''}>緊湊</label><span>僅改變間距，所有資料仍會保留。</span></fieldset><ol class="dm-order-list" data-dm-order>${dmSettingsRows()}</ol>
-        <p class="dm-helper">使用上下箭頭調整閱讀順序。未授權的項目顯示「—」，排列不會增加查看權限。</p><div class="inline-message" data-dm-message aria-live="polite"></div><div class="dm-save-row"><button class="outline-btn" type="button" data-dm-reset>恢復預設</button><button class="primary-btn" type="submit">儲存排列與高度</button></div>
+    dialog.innerHTML = `<div class="modal-header"><div><h3>個人指標排列與高度</h3><p>從九張卡片中選擇八張；調整只套用於您的帳號。</p></div><button class="ghost-btn dm-icon" type="button" data-dm-close aria-label="關閉">${dmIcon('close')}</button></div><form data-dm-settings-form><fieldset class="dm-density-picker"><legend>卡片高度</legend><label><input type="radio" name="density" value="comfortable" ${dmState.density === 'comfortable' ? 'checked' : ''}>標準</label><label><input type="radio" name="density" value="compact" ${dmState.density === 'compact' ? 'checked' : ''}>緊湊</label><span>僅改變間距，所有資料仍會保留。</span></fieldset><ol class="dm-order-list" data-dm-order>${dmSettingsRows()}</ol>
+        <p class="dm-helper">使用選單更換卡片，上下箭頭調整閱讀順序。未授權的項目顯示「—」，排列不會增加查看權限。</p><div class="inline-message" data-dm-message aria-live="polite"></div><div class="dm-save-row"><button class="outline-btn" type="button" data-dm-reset>恢復預設</button><button class="primary-btn" type="submit">儲存排列與高度</button></div>
         <div class="dm-discard" data-dm-discard-panel hidden><p>有尚未儲存的設定。</p><button type="button" class="outline-btn" data-dm-keep>繼續編輯</button><button type="button" class="outline-btn" data-dm-discard>捨棄並關閉</button></div></form>`;
     dialog.addEventListener('cancel', (event) => { event.preventDefault(); dmClose(); });
     dialog.addEventListener('click', (event) => {
@@ -93,20 +94,24 @@ function dmOpenSettings() {
         if (dmState.busy) return;
         const move = event.target.closest('[data-dm-move]');
         if (move) { const index = Number(move.dataset.dmMove), target = index + Number(move.dataset.direction); [dmState.draft[index], dmState.draft[target]] = [dmState.draft[target], dmState.draft[index]]; dmState.dirty = true; dialog.querySelector('[data-dm-order]').innerHTML = dmSettingsRows(); dialog.querySelector(`[data-dm-move="${target}"][data-direction="${move.dataset.direction}"]:not([disabled])`)?.focus(); }
-        if (event.target.closest('[data-dm-reset]')) { dmState.draft = dmGroups().map((group) => group.key); dmState.density = 'comfortable'; dmState.dirty = true; dialog.querySelector('[data-dm-order]').innerHTML = dmSettingsRows(); dialog.querySelector('[name="density"][value="comfortable"]').checked = true; }
+        if (event.target.closest('[data-dm-reset]')) { dmState.draft = dmGroups().filter((group) => group.key !== 'appearance').map((group) => group.key).slice(0, 8); dmState.density = 'comfortable'; dmState.dirty = true; dialog.querySelector('[data-dm-order]').innerHTML = dmSettingsRows(); dialog.querySelector('[name="density"][value="comfortable"]').checked = true; }
     });
-    dialog.addEventListener('change', (event) => { if (!dmState.busy && event.target.name === 'density') { dmState.density = event.target.value; dmState.dirty = true; } });
+    dialog.addEventListener('change', (event) => {
+        if (dmState.busy) return;
+        if (event.target.name === 'density') { dmState.density = event.target.value; dmState.dirty = true; }
+        if (event.target.matches('[data-dm-card-index]')) { const index = Number(event.target.dataset.dmCardIndex), key = event.target.value; if (index >= 0 && index < 8 && dmGroups().some((group) => group.key === key) && !dmState.draft.includes(key)) { dmState.draft[index] = key; dmState.dirty = true; dialog.querySelector('[data-dm-order]').innerHTML = dmSettingsRows(); } }
+    });
     dialog.querySelector('form').addEventListener('submit', async (event) => {
         event.preventDefault(); if (dmState.busy) return;
         const identity = dmState.identity, body = { cardKeys: [...dmState.draft], density: dmState.density, revision: data.revision, confirm: true };
-        dmState.busy = true; dialog.querySelectorAll('input, button').forEach((control) => { control.dataset.dmWasDisabled = String(control.disabled); control.disabled = true; });
+        dmState.busy = true; dialog.querySelectorAll('input, select, button').forEach((control) => { control.dataset.dmWasDisabled = String(control.disabled); control.disabled = true; });
         try {
             const result = await requestJson('/api/browser/admin/dashboard-metrics/preferences', { auth: true, method: 'POST', body });
             if (identity !== dmState.identity) return;
             Object.assign(state.dashboard.dashboardMetrics, result.preferences); dmState.dirty = false; dmState.busy = false; dmClose(true);
             renderDashboard(state.dashboard); setMessage(ui.dashboardMessage, result.message, 'success');
         } catch (error) { if (identity === dmState.identity) dmMessage(error.message); }
-        finally { if (identity === dmState.identity) { dmState.busy = false; dialog.querySelectorAll('input, button').forEach((control) => { control.disabled = control.dataset.dmWasDisabled === 'true'; }); } }
+        finally { if (identity === dmState.identity) { dmState.busy = false; dialog.querySelectorAll('input, select, button').forEach((control) => { control.disabled = control.dataset.dmWasDisabled === 'true'; }); } }
     });
     document.body.append(dialog); dialog.showModal();
 }
@@ -139,12 +144,17 @@ renderAdminDashboardInsightContent = function metricInsightContent(key, dashboar
     if (!data || data.metric.key !== key) return `<div class="dm-detail">${tabs}<p class="dm-empty-state" role="status">讀取完整指標明細中…</p></div>`;
     if (data.error) return `<div class="dm-detail">${tabs}<p class="inline-message error">${dmEscape(data.error)}</p><button class="outline-btn" data-dm-retry>重新讀取</button></div>`;
     const meal = data.kind === 'meal', summary = data.summary || {}, filters = data.filters || {}, details = data.records || [];
+    if (data.kind === 'salary') return dmSalaryDetail(data, tabs, item);
     const summaryItems = meal ? [[summary.people ?? data.totalRecords, '符合條件人數'], [summary.departments || 0, '部門']] : [[summary.people || 0, '符合條件人數'], [data.totalRecords, '申請單數'], ...(data.kind === 'leave' && summary.dayHours != null ? [[summary.dayHours, '當日請假時數']] : []), [summary.requestHours || 0, '整張申請合計時數']];
     return `<div class="dm-detail">${tabs}${dmSummary(summaryItems)}<div class="dm-detail-heading"><div><h3>${dmEscape(item.label)}</h3><p>${dmEscape(item.date || '全部日期')} · ${dmEscape(item.subtitle)}${!meal ? data.kind === 'leave' && summary.dayHours != null ? ' · 當日時數只計本日；整筆時數包含其他實際請假日。' : ' · 同人多單分別列出；整筆時數包含整張申請。' : ''}</p></div></div>
         <form class="dm-filters" data-dm-filter><label><span>搜尋人員</span><input name="keyword" maxlength="100" value="${dmEscape(filters.keyword || '')}" placeholder="工號、姓名、部門"></label><label><span>部門</span><select name="department"><option value="">全部部門</option>${(data.departments || []).map((department) => `<option value="${dmEscape(department)}" ${filters.department === department ? 'selected' : ''}>${dmEscape(department)}</option>`).join('')}</select></label><button type="submit" class="primary-btn">查詢</button><button type="button" class="outline-btn" data-dm-clear>清除篩選</button></form>
         ${renderInsightTable(meal ? ['工號', '姓名', '部門', '目前用餐', '供應商交單'] : ['人員', '部門', '申請時段', data.kind === 'leave' && summary.dayHours != null ? '當日／整筆時數' : '整筆時數', '狀態', '申請內容'], details.map((row) => meal ? `<tr><td>${dmEscape(row.employeeId)}</td><td>${dmEscape(row.employeeName)}</td><td>${dmEscape(row.employeeDepartment || '—')}</td><td><span class="dm-status ${row.eating ? 'success' : ''}">${row.eating ? '用餐' : '不用餐'}</span></td><td>${row.submittedEating == null ? '未交單' : row.submittedEating ? '已交單・用餐' : '已交單・不用餐'}</td></tr>` : `<tr><td><strong>${dmEscape(row.employeeName)}</strong><small class="dm-cell-secondary">${dmEscape(row.employeeId)}</small></td><td>${dmEscape(row.employeeDepartment || '—')}</td><td>${dmEscape(row.startText)}<small class="dm-cell-secondary">至 ${dmEscape(row.endText)}</small></td><td>${data.kind === 'leave' && row.dayHours != null ? `${dmEscape(row.dayHours)}<small class="dm-cell-secondary">整筆 ${dmEscape(row.duration_hours)} 小時</small>` : dmEscape(row.duration_hours)}</td><td><span class="dm-status ${row.status === 'approved' ? 'success' : 'warning'}">${dmEscape(row.statusText)}</span></td><td><details class="dm-request-detail"><summary>${dmEscape(row.leaveTypeName || (data.kind === 'leave' ? '請假內容' : '加班內容'))}</summary><p>${dmEscape(row.reason || '未填寫原因')}</p>${data.kind === 'leave' ? renderLeaveDaysSummary(row) : ''}${renderRequestReviewProgress(row)}</details></td></tr>`), '目前沒有符合條件的資料。')}
         <footer class="dm-pagination"><span>顯示 ${data.totalRecords ? (data.page - 1) * 50 + 1 : 0}–${Math.min(data.page * 50, data.totalRecords)} 筆，共 ${data.totalRecords} 筆${data.unfilteredRecords !== data.totalRecords ? `（篩選前 ${data.unfilteredRecords} 筆）` : ''}</span><div><button type="button" class="outline-btn" data-dm-page="${data.page - 1}" ${data.page <= 1 ? 'disabled' : ''}>上一頁</button><span>${data.page} / ${data.totalPages}</span><button type="button" class="outline-btn" data-dm-page="${data.page + 1}" ${data.page >= data.totalPages ? 'disabled' : ''}>下一頁</button></div></footer></div>`;
 };
+function dmSalaryDetail(data, tabs, item) {
+    const money = (amount) => `NT$ ${Number(amount || 0).toLocaleString('zh-TW')}`, summary = data.summary, filters = data.filters || {};
+    return `<div class="dm-detail">${tabs}${dmSummary([[summary.people, '符合條件人數'], [summary.requests, '申請筆數'], [money(summary.requestedAmount), '申請金額'], [money(summary.approvedAmount), '已複核金額']])}<div class="dm-detail-heading"><div><h3>${dmEscape(item.label)}</h3><p>${dmEscape(item.date)} 登記月份 · ${dmEscape(item.subtitle)}。同一人多筆申請分別計數。</p></div></div><form class="dm-filters" data-dm-filter><label><span>搜尋人員</span><input name="keyword" maxlength="100" value="${dmEscape(filters.keyword || '')}" placeholder="工號、姓名、部門"></label><label><span>部門</span><select name="department"><option value="">全部部門</option>${data.departments.map((department) => `<option value="${dmEscape(department)}" ${filters.department === department ? 'selected' : ''}>${dmEscape(department)}</option>`).join('')}</select></label><button type="submit" class="primary-btn">查詢</button><button type="button" class="outline-btn" data-dm-clear>清除篩選</button></form>${renderInsightTable(['工號／姓名', '部門', '申請金額', '已複核金額', '狀態', '日期／版本'], data.records.map((row) => `<tr><td>${dmEscape(row.employeeId)} ${dmEscape(row.employeeName)}</td><td>${dmEscape(row.employeeDepartment || '—')}</td><td>${money(row.requestedAmount)}</td><td>${row.approvedAmount == null ? '—' : money(row.approvedAmount)}</td><td><span class="dm-status ${row.status === 'approved' ? 'success' : 'warning'}">${row.status === 'approved' ? row.entryMode === 'admin_paper_approved' ? '補登記' : '已複核' : '待複核'}</span></td><td>${dmEscape(new Date(row.updatedAt).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false }))}<small class="dm-cell-secondary">v${row.revision} · ${dmEscape(row.requestId)}</small></td></tr>`), '目前沒有符合條件的資料。')}<footer class="dm-pagination"><span>共 ${data.totalRecords} 筆（篩選前 ${data.unfilteredRecords} 筆）</span><div><button type="button" class="outline-btn" data-dm-page="${data.page - 1}" ${data.page <= 1 ? 'disabled' : ''}>上一頁</button><span>${data.page} / ${data.totalPages}</span><button type="button" class="outline-btn" data-dm-page="${data.page + 1}" ${data.page >= data.totalPages ? 'disabled' : ''}>下一頁</button></div></footer></div>`;
+}
 async function dmLoadDetail(key, page = 1, filters = null) {
     const item = dmItem(key); if (!item?.available) return;
     if (dmLegacy.includes(key)) { ++dmState.sequence; dmState.detail = null; dmState.filters = {}; openAdminDashboardInsight(key); return; }
@@ -214,7 +224,9 @@ handleRealtimeSyncMessage = async function syncMetricDashboard(payload) {
         if (dmState.busy || dmState.dirty) return;
         return reloadDashboard();
     }
-    if (payload?.type === 'meals' && state.dashboard?.role === 'admin') return reloadDashboard();
+    if (payload?.type === 'meals' && state.dashboard?.role === 'admin' && typeof mealActive === 'function' && mealActive() &&
+        (mealState.busy || mealState.dirty || mealState.memberEdit || document.activeElement?.closest('[data-meal-form]'))) return dmPreviousSync(payload);
+    if (['meals', 'salaryAdvances'].includes(payload?.type) && state.dashboard?.role === 'admin') return reloadDashboard();
     return dmPreviousSync(payload);
 };
 const dmPreviousLogout = handleLogout;

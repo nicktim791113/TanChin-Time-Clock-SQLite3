@@ -155,6 +155,61 @@ function leaveSegmentNetHours(startTime, endTime, breakMinutes) {
     if (!/^\d+$/.test(String(breakMinutes)) || !Number.isSafeInteger(rest) || rest < 0 || rest >= elapsed) return '';
     return String(Math.floor((elapsed - rest) * 100 / 60) / 100);
 }
+// A leave draft owns its meal choices. Never derive another employee's choice from the visible calendar.
+function leaveMealRequestKey(body) {
+    return JSON.stringify([body.employeeIds || [], (body.leaveSegments || []).map((row) => [row.startAt, row.endAt])]);
+}
+function leaveHasLunchOverlap(body) {
+    return (body.leaveSegments || []).some((row) => {
+        const date = new Date(Number(row.startAt) + 8 * 3600000).toISOString().slice(0, 10);
+        return Number(row.startAt) < Date.parse(`${date}T13:00:00+08:00`) && Number(row.endAt) > Date.parse(`${date}T12:20:00+08:00`);
+    });
+}
+function leaveMealSelectionKey(row) { return `${row.employeeId}/${row.date}`; }
+function leaveMealState(holder) { return holder.leaveMeals ||= { key: '', sequence: 0, options: [], selected: {}, loading: false, error: '', promise: null }; }
+function renderLeaveMealOptions(holder, employees = []) {
+    const meals = leaveMealState(holder), options = meals.options.filter((row) => row.participates);
+    if (meals.loading) return '<p class="ld-note" role="status">正在確認請假日期的團膳資格與截止時間…</p>';
+    if (meals.error) return `<p class="ld-message" role="alert">${ldEscape(meals.error)}<button type="button" class="outline-btn" data-leave-meal-retry>重試午餐資格</button></p>`;
+    if (!options.length) return '';
+    const impersonating = Boolean(state.dashboard?.impersonation?.active);
+    return `<fieldset class="leave-meal-options"><legend>午餐安排</legend><p>請假時段與 12:20–13:00 重疊，預設勾選有參加團膳且仍可取消的日期。送出請假時即取消午餐；請假退回或撤回不會自動恢復。</p>${options.map((row) => {
+        const key = leaveMealSelectionKey(row), editable = !impersonating && row.serving && row.canChange && row.eating;
+        const employee = employees.find((item) => item.id === row.employeeId);
+        return `<label class="leave-meal-choice ${editable ? '' : 'is-disabled'}"><input type="checkbox" data-leave-meal-choice="${ldEscape(key)}" ${editable && meals.selected[key] !== false ? 'checked' : ''} ${editable ? '' : 'disabled'}><span><strong>${ldEscape(row.date)}${employees.length > 1 ? ` · ${ldEscape(row.employeeId)} ${ldEscape(employee?.name || '')}` : ''}　當天不用餐</strong><small>${impersonating ? '身份模擬不能修改午餐安排' : !row.serving ? '本日未供餐' : !row.eating ? '目前已登記不用餐，無須重複取消' : row.canChange ? '可取消勾選，保留原本的午餐安排' : ldEscape(row.reason || '已截止或結單，請聯絡團膳管理者')}</small></span></label>`;
+    }).join('')}</fieldset>`;
+}
+function collectLeaveMealChoices(holder, body) {
+    const meals = leaveMealState(holder);
+    if (state.dashboard?.impersonation?.active) return [];
+    if (meals.key !== leaveMealRequestKey(body) || meals.loading || meals.error) return [];
+    return meals.options.filter((row) => row.participates && row.serving && row.canChange && row.eating && meals.selected[leaveMealSelectionKey(row)] !== false)
+        .map(({ employeeId, date }) => ({ employeeId, date }));
+}
+function requireLeaveMealOptionsReady(holder, body) {
+    if (!leaveHasLunchOverlap(body)) return;
+    const meals = leaveMealState(holder);
+    if (meals.error) throw new Error(meals.error);
+    if (meals.key !== leaveMealRequestKey(body) || meals.loading) throw new Error('午餐資格仍在更新，請確認日期與員工後再送出。');
+}
+async function loadLeaveMealOptions(holder, body, route, isCurrent, paint, force = false) {
+    const meals = leaveMealState(holder), key = leaveMealRequestKey(body);
+    if (!force && meals.key === key) { if (meals.promise) await meals.promise; if (meals.error) throw new Error(meals.error); return; }
+    const sequence = ++meals.sequence;
+    meals.key = key; meals.error = ''; meals.options = [];
+    if (!leaveHasLunchOverlap(body)) { meals.loading = false; meals.promise = null; paint(); return; }
+    meals.loading = true; paint();
+    meals.promise = (async () => {
+        try {
+            const result = await requestJson(route, { method: 'POST', auth: true, body });
+            if (!isCurrent() || sequence !== meals.sequence) return;
+            meals.options = result.options || [];
+        } catch (error) { if (isCurrent() && sequence === meals.sequence) meals.error = `無法確認午餐安排：${error.message}`; }
+        finally { if (isCurrent() && sequence === meals.sequence) { meals.loading = false; meals.promise = null; paint(); } }
+    })();
+    await meals.promise;
+    if (isCurrent() && sequence === meals.sequence && meals.error) throw new Error(meals.error);
+}
 function collectLeaveSegments(rows) {
     if (!rows.length || rows.length > 740) throw new Error('請先加入至少 1 段請假時段，最多 740 段。');
     const segments = rows.map((row, index) => {

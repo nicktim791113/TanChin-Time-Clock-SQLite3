@@ -1,4 +1,4 @@
-const mealState = { identity: '', month: '', selectedDate: '', data: null, panel: 'calendar', employeeId: '', loading: false, busy: false, dirty: false, pending: false, dashboard: null };
+const mealState = { identity: '', month: '', selectedDate: '', data: null, panel: 'calendar', employeeId: '', loading: false, busy: false, dirty: false, pending: false, dashboard: null, sequence: 0, memberFilters: { query: '', department: '', status: '' }, memberEdit: null };
 const mealWeekLabels = ['日', '一', '二', '三', '四', '五', '六'];
 Object.assign(auditActionLabels, { meal_choice: '午餐登記／修正', meal_membership: '團膳參加資格', meal_schedule: '供餐制度', meal_day: '每日供餐設定', meal_close: '供應商交單', meal_export: '團膳月報匯出' });
 auditTargetTypeLabels.meal = '午餐團膳';
@@ -7,6 +7,8 @@ function mealIsAdmin() { return state.dashboard?.role === 'admin'; }
 function mealCan(permission) { return mealIsAdmin() && getAdminPermissionSet().has(`admin.meals.${permission}`); }
 function mealActive() { return mealIsAdmin() ? state.activeSections.admin === 'meals' : state.dashboard?.role === 'employee' && state.employeeWorkspacePanel === 'meals'; }
 function mealToday() { return mealState.data?.today || state.dashboard?.meals?.today || new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); }
+function mealNextMonth() { const date = new Date(`${mealToday().slice(0, 7)}-01T00:00:00Z`); date.setUTCMonth(date.getUTCMonth() + 1); return date.toISOString().slice(0, 10); }
+function mealTimestamp(value) { return value ? new Date(value).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false }) : '—'; }
 function mealButton(action, label, attributes = '', disabled = false) {
     return `<button type="button" class="outline-btn" data-action="meal-${action}" ${attributes} ${disabled || mealState.busy ? 'disabled' : ''}>${label}</button>`;
 }
@@ -82,12 +84,41 @@ function renderMealDay(day) {
 }
 function mealEmployeeOptions(data) { return data.employees.map((e) => `<option value="${mealEscape(e.id)}">${mealEscape(e.id)} ${mealEscape(e.name)} · ${mealEscape(e.department)}</option>`).join(''); }
 function renderMealMembers(data) {
+    const filters = mealState.memberFilters;
+    const roster = [...data.employees].sort((a, b) => String(a.id).localeCompare(String(b.id), 'zh-TW', { numeric: true })).map((employee) => {
+        const history = data.memberships.filter((m) => m.employee_id === employee.id).sort((a, b) => a.effective_date.localeCompare(b.effective_date));
+        return { ...employee, history, current: history.filter((m) => m.effective_date <= mealToday()).at(-1), future: history.filter((m) => m.effective_date > mealToday()), latestEdit: [...history].sort((a, b) => b.updated_at - a.updated_at)[0] };
+    });
+    const rows = roster.filter((row) => (!filters.query || `${row.id} ${row.name}`.toLocaleLowerCase().includes(filters.query.toLocaleLowerCase())) &&
+        (!filters.department || row.department === filters.department) && (!filters.status || (filters.status === 'joined' ? Boolean(row.current?.participating) : filters.status === 'not-joined' ? !row.current?.participating : row.future.length > 0)));
+    const departments = [...new Set(roster.map((e) => e.department).filter(Boolean))].sort();
     return `<section class="meal-settings"><h3>參加資格</h3>
-        ${mealCan('manage') ? `<form class="meal-form meal-inline-form" data-meal-form="membership"><label class="field"><span>員工</span><select name="employeeId" required>${mealEmployeeOptions(data)}</select></label>
-            ${mealField('生效日期', 'effectiveDate', 'date', mealToday(), `min="${mealToday()}"`)}
-            <label class="field"><span>參加狀態</span><select name="participating"><option value="true">加入團膳</option><option value="false">退出團膳</option></select></label>${mealReason()}${mealSubmit('儲存參加資格')}</form>` : ''}
-        <div class="meal-table-scroll"><table class="meal-table"><thead><tr><th>工號／姓名</th><th>部門</th><th>生效日</th><th>參加狀態</th></tr></thead><tbody>
-        ${data.memberships.map((row) => `<tr><td>${mealEscape(row.employee_id)} ${mealEscape(row.name)}</td><td>${mealEscape(row.department)}</td><td>${row.effective_date}</td><td>${row.participating ? '加入' : '退出'}</td></tr>`).join('') || '<tr><td colspan="4">尚未設定參加資格。</td></tr>'}</tbody></table></div></section>`;
+        <form class="meal-form meal-inline-form meal-member-filters" data-meal-form="member-filter">
+            <label class="field"><span>工號／姓名</span><input name="query" type="search" value="${mealEscape(filters.query)}" placeholder="搜尋員工"></label>
+            <label class="field"><span>部門</span><select name="department"><option value="">全部部門</option>${departments.map((d) => `<option value="${mealEscape(d)}" ${filters.department === d ? 'selected' : ''}>${mealEscape(d)}</option>`).join('')}</select></label>
+            <label class="field"><span>目前參加狀態</span><select name="status">${[['', '全部員工'], ['joined', '目前加入'], ['not-joined', '目前不加入'], ['scheduled', '有預定異動']].map(([v, label]) => `<option value="${v}" ${filters.status === v ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+            <button type="submit" class="outline-btn">套用篩選</button>${mealButton('clear-member-filters', '清除篩選')}
+        </form><p class="helper-text">共 ${rows.length}／${roster.length} 人；目前狀態依 ${mealToday()} 判定。點選加入或不加入後，預設從下個月 1 日生效；修改日期由系統記錄。<span class="meal-mobile-table-hint">清單可左右滑動，查看參加狀態、生效日期與操作按鈕。</span></p>
+        <div class="meal-table-scroll"><table class="meal-table meal-members-table"><thead><tr><th>工號／姓名</th><th>部門</th><th>目前狀態</th><th>生效日期</th><th>修改日期</th><th>預定異動／紀錄</th><th>調整參加狀態</th></tr></thead><tbody>
+        ${rows.map((row) => `<tr><td><strong>${mealEscape(row.id)} ${mealEscape(row.name)}</strong></td><td>${mealEscape(row.department) || '—'}</td>
+            <td><span class="meal-member-status ${row.current?.participating ? 'is-joined' : ''}">${row.current?.participating ? '加入' : '不加入'}</span></td><td>${row.current?.effective_date || '尚未設定'}</td><td>${mealEscape(mealTimestamp(row.latestEdit?.updated_at))}</td>
+            <td>${row.future.length ? row.future.map((m) => `<div>${m.effective_date} <strong>${m.participating ? '加入' : '不加入'}</strong></div>`).join('') : '無預定異動'}${row.history.length ? `<details class="meal-member-history"><summary>歷次設定（${row.history.length}）</summary>${row.history.map((m) => `<div>${m.effective_date} 生效 · ${m.participating ? '加入' : '不加入'}<small>修改：${mealEscape(mealTimestamp(m.updated_at))}</small></div>`).join('')}</details>` : ''}</td>
+            <td><div class="meal-member-actions">${[true, false].map((participating) => mealButton('member-edit', participating ? '加入' : '不加入', `data-employee="${mealEscape(row.id)}" data-participating="${participating}"`, !mealCan('manage'))).join('')}</div></td></tr>`).join('') || '<tr><td colspan="7">沒有符合篩選條件的員工。</td></tr>'}</tbody></table></div></section>`;
+}
+function renderMealMemberDialog() {
+    const edit = mealState.memberEdit;
+    if (!edit || !mealCan('manage')) return '';
+    const employee = mealState.data?.employees.find((e) => e.id === edit.employeeId);
+    if (!employee) return '';
+    return `<dialog id="meal-member-dialog" class="meal-member-dialog" aria-labelledby="meal-member-dialog-title"><form data-meal-form="membership" class="meal-form">
+        <div class="meal-section-heading"><h3 id="meal-member-dialog-title">${edit.participating ? '加入團膳' : '不加入團膳'}</h3>${mealButton('member-cancel', '關閉', 'aria-label="關閉參加資格修改"')}</div>
+        <p><strong>${mealEscape(employee.id)} ${mealEscape(employee.name)}</strong> · ${mealEscape(employee.department)}</p>
+        <input type="hidden" name="employeeId" value="${mealEscape(edit.employeeId)}"><input type="hidden" name="participating" value="${edit.participating}"><input type="hidden" name="version" value="${mealEscape(edit.version)}">
+        <label class="field"><span>修改日期（系統記錄）</span><input type="text" value="${mealEscape(mealTimestamp(edit.openedAt))}" readonly><small>儲存時記錄實際時間，不會改變生效日期。</small></label>
+        ${mealField('生效日期', 'effectiveDate', 'date', edit.effectiveDate, `min="${mealToday()}"`)}
+        <p class="helper-text">預設 ${mealNextMonth()} 起生效。既有日期前的餐數與交單紀錄保持原樣；其他預定異動仍依各自生效日期執行。</p>
+        ${mealField('異動原因', 'reason', 'text', edit.reason || '', 'maxlength="500"')}<div id="meal-member-error" class="inline-message" aria-live="polite"></div><div class="meal-member-dialog-actions">${mealButton('member-cancel', '取消')}${mealSubmit('確認儲存參加資格')}</div>
+    </form></dialog>`;
 }
 function renderMealSchedule(data) {
     const config = [...data.schedules].reverse().find((row) => row.effectiveDate <= mealToday()) || data.schedule;
@@ -99,6 +130,7 @@ function renderMealSchedule(data) {
         <div class="meal-table-scroll"><table class="meal-table"><thead><tr><th>生效日</th><th>供餐星期</th><th>截止時間</th><th>全日請假提醒區間</th></tr></thead><tbody>${data.schedules.map((s) => `<tr><td>${s.effectiveDate}</td><td>${s.weekdays.map((i) => `週${mealWeekLabels[i]}`).join('、') || '不供餐'}</td><td>${s.cutoff}</td><td>${s.leaveStart}–${s.leaveEnd}</td></tr>`).join('') || '<tr><td colspan="4">尚未設定供餐日。</td></tr>'}</tbody></table></div></section>`;
 }
 function renderMealWorkspace() {
+    if (!/^\d{4}-\d{2}$/.test(mealState.month)) mealState.month = mealToday().slice(0, 7);
     const data = mealState.data;
     const admin = mealIsAdmin();
     const tabs = [['calendar', '午餐日曆'], ['membership', '參加資格'], ['schedule', '供餐制度']];
@@ -119,35 +151,39 @@ function renderMealWorkspace() {
         </div></div></aside>`;
     return `<section id="meal-workspace" class="meal-workspace meal-admin-workspace workspace-stack workspace-subnav-stack" data-workspace-role="admin" data-workspace-section="meals" aria-label="午餐團膳">
         <div class="workspace-subnav-layout">${sidebar}<section class="workspace-subnav-content" aria-live="polite">
-            <article class="table-card meal-admin-panel"><div class="meal-toolbar">
+            <article class="table-card meal-admin-panel" data-no-collapsible="true"><div class="meal-toolbar">
                 ${mealState.panel === 'calendar' ? `${controls}${mealButton('export', '匯出月報')}` : mealButton('refresh', '重新整理')}</div>
                 <p class="helper-text">${mealState.panel === 'calendar' ? '按日期查看登記人員、代登用餐與供應商交單；匯出使用目前月份。' : mealState.panel === 'membership' ? '設定員工參加或退出團膳的生效日期；修改會保留操作紀錄。' : '設定每週供餐日與截止時間；單日供餐例外請至午餐日曆選擇日期。'}</p>
                 ${message}${panel}
             </article>
-        </section></div>
+        </section></div>${renderMealMemberDialog()}
     </section>`;
 }
 function mealPaint() {
     const root = document.getElementById('meal-workspace');
     if (root) root.outerHTML = renderMealWorkspace();
+    const dialog = document.getElementById('meal-member-dialog');
+    if (dialog && !dialog.open) dialog.showModal();
     mealState.dirty = false;
 }
 function mealMessage(text, type = 'error') { setMessage(document.getElementById('meal-message') || ui.dashboardMessage, text, type); }
 async function mealLoad() {
-    const identity = mealState.identity, month = mealState.month, token = state.token;
+    if (!/^\d{4}-\d{2}$/.test(mealState.month)) mealState.month = mealToday().slice(0, 7);
+    const identity = mealState.identity, month = mealState.month, token = state.token, sequence = ++mealState.sequence;
     mealState.loading = true;
     document.getElementById('meal-workspace')?.setAttribute('aria-busy', 'true');
     mealMessage('正在讀取團膳資料…', 'info');
     try {
         const route = mealIsAdmin() ? 'admin' : 'employee';
         const result = await requestJson(`/api/browser/${route}/meals?month=${encodeURIComponent(month)}`, { auth: true });
-        if (identity !== mealState.identity || month !== mealState.month || token !== state.token) return;
+        if (identity !== mealState.identity || month !== mealState.month || token !== state.token || sequence !== mealState.sequence) return;
         mealState.data = result.meals;
+        mealState.month = result.meals.month;
         mealState.pending = false;
         mealState.loading = false;
         if (!result.meals.days.some((day) => day.date === mealState.selectedDate)) mealState.selectedDate = result.meals.days.find((day) => day.date === result.meals.today)?.date || result.meals.days[0]?.date;
         mealPaint();
-    } finally { if (identity === mealState.identity && month === mealState.month && token === state.token) { mealState.loading = false; document.getElementById('meal-workspace')?.removeAttribute('aria-busy'); } }
+    } finally { if (identity === mealState.identity && token === state.token && sequence === mealState.sequence) { mealState.loading = false; document.getElementById('meal-workspace')?.removeAttribute('aria-busy'); } }
 }
 function mealDiscard() { return !mealState.dirty || window.confirm('尚有未儲存的團膳修改，確定離開？'); }
 const previousMealRenderDashboard = renderDashboard;
@@ -155,7 +191,7 @@ renderDashboard = function renderDashboardWithMeals(dashboard) {
     const identity = `${state.token}/${dashboard.role}/${dashboard.user?.id || ''}`;
     const initial = dashboard.role === 'employee' ? dashboard.meals : dashboard.datasets?.meals;
     if (mealState.identity !== identity) {
-        Object.assign(mealState, { identity, month: initial?.month || '', data: initial || null, selectedDate: initial?.today || '', panel: 'calendar', employeeId: '', busy: false, dirty: false, pending: false, loading: false });
+        Object.assign(mealState, { identity, month: initial?.month || new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 7), data: initial || null, selectedDate: initial?.today || '', panel: 'calendar', employeeId: '', busy: false, dirty: false, pending: false, loading: false, memberFilters: { query: '', department: '', status: '' }, memberEdit: null });
     } else if (mealState.dashboard !== dashboard && initial) {
         mealState.data = initial.month === mealState.month ? initial : null;
     }
@@ -174,6 +210,8 @@ renderAdminPermissionAwareContent = function renderAdminContentWithMeals(section
 const previousMealPostRender = postRenderSetup;
 postRenderSetup = function postRenderWithMeals() {
     previousMealPostRender();
+    const dialog = document.getElementById('meal-member-dialog');
+    if (dialog && !dialog.open) dialog.showModal();
     if (mealActive() && !mealState.data && !mealState.loading) mealLoad().catch((error) => mealMessage(error.message));
 };
 const previousMealClick = handleDashboardClick;
@@ -184,6 +222,13 @@ handleDashboardClick = async function handleMealsClick(event) {
     event.preventDefault();
     if (mealState.busy) return;
     try {
+        if (action === 'meal-member-cancel') { mealState.memberEdit = null; mealState.dirty = false; mealPaint(); return; }
+        if (action === 'meal-member-edit') {
+            if (!mealCan('manage')) return;
+            mealState.memberEdit = { employeeId: button.dataset.employee, participating: button.dataset.participating === 'true', effectiveDate: mealNextMonth(), openedAt: Date.now(), version: mealState.data?.membershipVersions?.[button.dataset.employee] || '' };
+            mealPaint(); return;
+        }
+        if (action === 'meal-clear-member-filters') { mealState.memberFilters = { query: '', department: '', status: '' }; mealPaint(); return; }
         if (action === 'meal-export') {
             const token = state.token, identity = mealState.identity, month = mealState.month;
             const response = await fetch(`/api/browser/admin/meals/export?month=${encodeURIComponent(month)}`, { headers: { Authorization: `Bearer ${token}` } });
@@ -195,7 +240,7 @@ handleDashboardClick = async function handleMealsClick(event) {
             return;
         }
         if (!mealDiscard()) return;
-        if (action === 'meal-refresh') return await mealLoad();
+        if (action === 'meal-refresh') { await mealLoad(); if (mealIsAdmin()) await reloadDashboard(); return; }
         if (action === 'meal-month') {
             const date = new Date(`${mealState.month}-01T00:00:00Z`); date.setUTCMonth(date.getUTCMonth() + Number(button.dataset.offset));
             mealState.month = date.toISOString().slice(0, 7); mealState.employeeId = ''; return await mealLoad();
@@ -221,7 +266,7 @@ handleDashboardChange = async function handleMealsChange(event) {
         mealState.month = event.target.value; mealState.employeeId = '';
         try { await mealLoad(); } catch (error) { mealMessage(error.message); } return;
     }
-    if (event.target.closest('[data-meal-form]')) { mealState.dirty = true; return; }
+    if (event.target.closest('[data-meal-form]')) { if (!event.target.closest('[data-meal-form="member-filter"]')) mealState.dirty = true; return; }
     return previousMealChange(event);
 };
 async function mealSave(operation, body) {
@@ -234,7 +279,10 @@ async function mealSave(operation, body) {
         if (identity !== mealState.identity) return;
         mealState.dirty = false;
         mealState.busy = false;
-        await mealLoad(); mealMessage(result.message, 'success');
+        if (operation === 'membership') mealState.memberEdit = null;
+        await mealLoad();
+        if (mealIsAdmin()) await reloadDashboard();
+        mealMessage(result.message, 'success');
     } finally {
         if (identity === mealState.identity) {
             mealState.busy = false;
@@ -251,13 +299,15 @@ handleDashboardSubmit = async function handleMealsSubmit(event) {
     const operation = form.dataset.mealForm;
     const fields = new FormData(form);
     const body = Object.fromEntries(fields);
+    if (operation === 'member-filter') { mealState.memberFilters = { query: String(body.query || '').trim(), department: body.department || '', status: body.status || '' }; mealPaint(); return; }
     for (const key of ['participating', 'serving', 'eating']) if (key in body) body[key] = body[key] === 'true';
     if (operation === 'schedule') body.weekdays = fields.getAll('weekdays').map(Number);
     if (operation === 'choice' || operation === 'close') body.version = mealState.data.days.find((d) => d.date === body.date)?.version;
     if (operation === 'close' && !window.confirm(`確認已將 ${body.date} 的 ${mealState.data.days.find((d) => d.date === body.date).currentCount} 份午餐訂單交給供應商？`)) return;
     try { await mealSave(operation, body); }
     catch (error) {
-        mealMessage(error.message);
+        if (operation === 'membership') setMessage(document.getElementById('meal-member-error'), error.message, 'error');
+        else mealMessage(error.message);
         if (error.message.includes('重新整理')) mealState.pending = true;
     }
 };
@@ -265,7 +315,7 @@ const previousMealSync = handleRealtimeSyncMessage;
 handleRealtimeSyncMessage = async function handleMealsSync(payload) {
     if (['meals', 'leaveRequests', 'employees'].includes(payload?.type) && mealActive()) {
         if (payload.sessionToken === state.token || mealState.busy) return;
-        if (mealState.dirty || document.activeElement?.closest('[data-meal-form]')) { mealState.pending = true; mealMessage('資料有異動，請先保存內容或重新整理後確認最新餐數。', 'info'); return; }
+        if (mealState.dirty || mealState.memberEdit || document.activeElement?.closest('[data-meal-form]')) { mealState.pending = true; mealMessage('資料有異動，請先保存內容或重新整理後確認最新餐數。', 'info'); return; }
         try { await mealLoad(); } catch (error) { mealMessage(error.message); } return;
     }
     if (payload?.type === 'meals') {
@@ -276,9 +326,13 @@ handleRealtimeSyncMessage = async function handleMealsSync(payload) {
     }
     return previousMealSync(payload);
 };
-document.addEventListener('input', (event) => { if (event.target.closest('[data-meal-form]')) mealState.dirty = true; });
+document.addEventListener('input', (event) => {
+    if (event.target.closest('[data-meal-form]') && !event.target.closest('[data-meal-form="member-filter"]')) mealState.dirty = true;
+    if (mealState.memberEdit && event.target.closest('[data-meal-form="membership"]') && ['effectiveDate', 'reason'].includes(event.target.name)) mealState.memberEdit[event.target.name] = event.target.value;
+});
+document.addEventListener('cancel', (event) => { if (event.target.id === 'meal-member-dialog') { event.preventDefault(); if (!mealState.busy) { mealState.memberEdit = null; mealState.dirty = false; mealPaint(); } } }, true);
 const previousMealLogout = handleLogout;
 handleLogout = function logoutWithMealCleanup(...args) {
-    Object.assign(mealState, { identity: '', month: '', data: null, dashboard: null, dirty: false, pending: false, loading: false, busy: false });
+    Object.assign(mealState, { identity: '', month: '', data: null, dashboard: null, dirty: false, pending: false, loading: false, busy: false, memberEdit: null, memberFilters: { query: '', department: '', status: '' } });
     return previousMealLogout(...args);
 };

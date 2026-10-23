@@ -150,16 +150,21 @@ test('select visible skips unavailable and hidden staff, clear covers hidden sel
 
 test('proxy leave and overtime forms appear immediately; meal and assignment pickers retain eligibility and contracts', () => {
     const context = setup();
-    vm.runInContext(`Object.assign(supervisorState, { employeeId: 'E1', date: '2026-10-05', month: '2026-10', form: '',
+    vm.runInContext(`Object.assign(supervisorState, { employeeId: 'E1', date: '2026-10-05', month: '2026-10', form: '', proxyView: 'create',
         data: { employees: [{ id: 'E1', name: 'One', department: 'A' }, { id: 'E2', name: 'Two', department: 'B' }],
             leaveTypes: [{ id: 'annual', name: 'Annual' }], batchMeal: { employees: [{ id: 'E1', canChange: true }, { id: 'E2', canChange: false }] },
-            calendar: { detail: { records: [], totalPages: 1 } } } });`, context);
+            calendar: { days: [], detail: { records: [], totalPages: 1 } } } }); state.dashboard.supervisorProxy = { canUse: true };`, context);
     for (const kind of ['leave', 'overtime']) {
         context.kind = kind;
-        const html = vm.runInContext('supervisorState.kind = kind; spRequestDetail()', context);
+        const html = vm.runInContext('supervisorState.kind = kind; renderSupervisorWorkspace()', context);
         assert.ok(html.includes(`data-sp-form="${kind}"`)); assert.ok(html.includes('name="proxyReason"'));
         assert.ok(html.includes('data-paper-selection-limit="100"')); assert.ok(!html.includes('data-action="sp-create"'));
         assert.ok(html.includes('data-action="sp-reset-form"')); assert.equal((html.match(/name="startDate"/g) || []).length, 1);
+        assert.ok(!html.includes('name="viewEmployeeId"'), 'creation must not show a second employee record selector');
+        const records = vm.runInContext("supervisorState.proxyView='records'; renderSupervisorWorkspace()", context);
+        assert.ok(records.includes('name="viewEmployeeId"')); assert.ok(records.includes('紀錄查詢對象'));
+        assert.ok(!records.includes('name="employeeIds"')); assert.ok(!records.includes(`data-sp-form="${kind}"`));
+        vm.runInContext("supervisorState.proxyView='create'", context);
     }
     const meal = vm.runInContext('spTargets(true)', context);
     assert.ok(meal.includes('value="E2" data-paper-employee-checkbox  disabled'));

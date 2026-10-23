@@ -98,18 +98,41 @@ function testRequest(overrides = {}) {
 }
 function submission(form) { return { target: { closest: () => form }, preventDefault() {} }; }
 
-test('monthly query lists every employee and preserves each monthly request with distinct pills and no management actions', () => {
+test('monthly query uses one latest row per employee, filters that status and deliberately expands all historical records', async () => {
     const f = adminFixture();
-    f.data.requests = [testRequest(), testRequest({ requestId: 'request-cancelled', status: 'withdrawn', approvedAmount: null }), testRequest({ requestId: 'request-paper', entryMode: 'admin_paper_approved' }), testRequest({ requestId: 'request-pending', status: 'pending_admin', approvedAmount: null }), testRequest({ requestId: 'request-rejected', status: 'rejected', approvedAmount: null })];
+    f.data.requests = [testRequest({ requestId: 'request-cancelled', status: 'withdrawn', approvedAmount: null, createdAt: 1 }), testRequest({ requestId: 'request-paper', entryMode: 'admin_paper_approved', createdAt: 2 }), testRequest({ requestId: 'request-pending', status: 'pending_admin', approvedAmount: null, createdAt: 3 })];
     const html = vm.runInContext('renderSalaryAdvanceWorkspace("admin")', f.context);
-    for (const label of ['員工甲', '員工乙', '主管丙', '無申請', '待複核 NT$ 5,000', '已複核 NT$ 5,000', '補登記 NT$ 5,000', '已取消（員工撤回） NT$ 5,000', '已退回 NT$ 5,000', 'request-cancelled', 'request-paper']) assert.ok(html.includes(label), label);
+    for (const label of ['員工甲', '員工乙', '主管丙', '無申請', '待複核 NT$ 5,000', '更新日期', '全部展開明細', '有申請紀錄']) assert.ok(html.includes(label), label);
+    for (const hidden of ['request-cancelled', 'request-paper', 'request-pending', '補登記 NT$ 5,000']) assert.ok(!html.includes(hidden), hidden);
+    assert.equal((html.match(/data-sa-person=/g) || []).length, 3);
     assert.doesNotMatch(html, /data-sa-action="(?:review|cancel)"/);
-    assert.match(html, /workspace-subnav-layout/);
     vm.runInContext('saState.filters.query = { search: "", department: "", status: "none" }', f.context);
     assert.deepEqual(JSON.parse(vm.runInContext('JSON.stringify(saFilteredRoster().map(e => e.id))', f.context)), ['088', '112']);
     vm.runInContext('saState.filters.query.status = "paper"', f.context);
-    const filtered = vm.runInContext('saRosterTable()', f.context);
-    assert.match(filtered, /request-cancelled/); assert.match(filtered, /request-paper/); assert.doesNotMatch(filtered, /員工乙/);
+    assert.equal(vm.runInContext('saFilteredRoster().length', f.context), 0);
+    vm.runInContext('saState.filters.query.status = "has_application"', f.context);
+    assert.equal(vm.runInContext('saFilteredRoster().length', f.context), 1);
+    await f.listeners.click({ target: { closest: () => ({ dataset: { saAction: 'toggle-all-details' } }) } });
+    let expanded = vm.runInContext('saRosterTable()', f.context);
+    for (const id of ['request-cancelled', 'request-paper', 'request-pending']) assert.ok(expanded.includes(id));
+    assert.match(expanded, /全部收合明細/);
+    await f.listeners.click({ target: { closest: () => ({ dataset: { saAction: 'toggle-details', saEmployee: '085' } }) } });
+    assert.doesNotMatch(vm.runInContext('saRosterTable()', f.context), /request-cancelled/);
+});
+
+test('all three operational salary pages place four relevant metrics before the content card and paper rows stay dense', () => {
+    const f = adminFixture(); f.data.requests = [testRequest({ entryMode: 'admin_paper_approved', revision: 7 })];
+    for (const page of ['query', 'review', 'paper']) {
+        vm.runInContext(`saState.page = "${page}"`, f.context);
+        const html = vm.runInContext('saAdminContent()', f.context);
+        assert.match(html, /workspace-subnav-content"><div class="sa-summary"/);
+        assert.ok(html.indexOf('class="sa-summary"') < html.indexOf('class="sa-card"'));
+    }
+    const html = vm.runInContext('saPaperTable()', f.context);
+    for (const heading of ['編輯紀錄／版本', '補登金額', '備註', '儲存', '更新日期']) assert.ok(html.includes(`<th>${heading}</th>`));
+    assert.match(html, /v7 · NT\$ 5,000 · request-085/);
+    assert.match(html, /form="sa-paper-085" name="requestedAmount"/);
+    assert.doesNotMatch(html, /<th>紀錄版本<\/th>/);
 });
 
 test('salary subpages follow granular permissions and work page defaults to pending with optional review notes in dialogs', () => {
@@ -133,6 +156,13 @@ test('salary subpages follow granular permissions and work page defaults to pend
     html = vm.runInContext('saAdminContent()', f.context);
     for (const page of ['review', 'paper', 'settings']) assert.doesNotMatch(html, new RegExp(`data-sa-page="${page}"`));
     assert.equal(vm.runInContext('saState.page', f.context), 'query');
+});
+
+test('dense paper fields outside the form retain amount and note drafts before changing panels', () => {
+    const f = adminFixture();
+    const form = { dataset: { saForm: 'paper', saEmployee: '085', saId: 'request-paper', saRevision: '4' }, values: { requestedAmount: '6250', note: 'keep external fields' } };
+    f.listeners.input({ target: { closest: () => null, form } });
+    assert.deepEqual(JSON.parse(vm.runInContext('JSON.stringify(saState.draft.paper["2026-10/085/request-paper"])', f.context)), { requestedAmount: '6250', note: 'keep external fields', revision: 4, idempotencyKey: '' });
 });
 
 test('paper roster confirms before creating, retains the HTTP idempotency key on retry and preserves other drafts', async () => {

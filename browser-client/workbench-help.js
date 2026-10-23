@@ -2,7 +2,7 @@
  * Never copy field values, employee names, credentials, or record contents into help. */
 const workbenchHelpTopics = {
     'admin.salaryAdvances': ['借支申請管理', '員工登記後直接交管理部審核；依權限管理活動、核准或退回申請，並下載月份總表。', ['選查看登記月份，核對申請金額、狀態與申請備註。', '具審核權限者按審核，選核准或退回；核准時確認不超過申請金額，審核說明可留空後送出。', '待審或已核准申請需要取消時，填原因並確認取消；已發放款項須另行核對。', '具匯出權限者下載所選月份 Excel 總表及明細；具設定權限者可設定開放日期、單筆上限、有效筆數及預計扣回月份。'], ['借支不經主管審核，也不開放主管代辦；檢視、審核、匯出與活動設定分別授權。', '核准只表示申請通過，不代表已發放或已扣薪。取消也不會自動沖回 ERP 已入帳或已發放的款項。', '每月有效筆數只計待審及已核准；退回、撤回及取消不占有效筆數。總表保留各狀態明細，核准合計排除已取消申請。', '活動設定只影響之後的新申請，舊單保留送件規則快照；更改設定須填原因，不能直接改寫舊單金額。']],
-    'salaryAdvances.query': ['借支申請管理', '按登記月份查詢全員名冊及申請狀態。', ['使用月份、部門、人員及狀態條件篩選；同一人多筆申請保留全部狀態。', '灰色為無申請、黃色為待複核、紅色為取消或退回、綠色為已複核或補登記。', '此頁僅查詢；審核請到管理部待複核，直接登記請到紙本核准補登。'], ['金額為新臺幣；已複核與補登記都不代表實際發放或扣薪。']],
+    'salaryAdvances.query': ['借支申請管理', '按登記月份查詢全員名冊及申請狀態。', ['使用月份、部門、人員及狀態條件篩選；每人只顯示最新申請的狀態，日期另列。', '灰色為無申請、黃色為待複核、紅色為取消或退回、綠色為已複核或補登記。', '點人員展開單號及歷次內容，也可按全部展開；「有申請紀錄」排除無申請人員。審核與補登請至對應子頁。'], ['金額為新臺幣；已複核與補登記都不代表實際發放或扣薪。']],
     'salaryAdvances.review': ['借支申請管理', '管理部待複核工作頁，員工申請直接交管理部審核。', ['預設顯示待複核；可切換狀態查看其他申請。', '按審核開啟彈窗，核准或退回，審核說明選填；核准金額不得超過申請金額。', '取消待複核或已複核申請須在彈窗填原因並確認。'], ['取消不會自動沖回 ERP 已入帳或已發放款項。']],
     'salaryAdvances.paper': ['借支申請管理', '依已核准紙本替員工補登，並保留每次儲存的修改紀錄。', ['選登記月份，在員工列填金額與選填備註，核對後確認儲存。', '已補登資料可再次修改後儲存；同一筆申請累加修訂版本，保留前後值與操作人。', '員工可在自己的借支月份頁查看補登記結果。'], ['需要紙本借支補登與修正權限。可補歷史月份，不受員工登記開放日期限制，但仍受活動金額與新增有效筆數限制。', '修正沿用原單規則快照與預計扣回月份；一般線上申請不能由此直接改金額。']],
     'salaryAdvances.settings': ['借支申請管理', '依設定權限維護每月借支活動。', ['調整開放日期、單筆金額上限、有效筆數及預計扣回月份。', '填寫設定原因並儲存。'], ['設定只影響之後的新申請；舊單保留送件規則快照。']],
@@ -54,10 +54,10 @@ const workbenchHelpTopics = {
 };
 
 Object.assign(workbenchHelpTopics, {
-    'employee.leave': ['我的請假', '同一內頁選日期、填申請、查看本人紀錄及整張單的審核進度。', ['瀏覽日曆時點日期查看當日紀錄，或切月內清單；點紀錄可看整張單及全部時段。', '按新增申請選一種假別，勾選實際日期；可選不連續日期、套用共用時段，再逐段調整或同日新增另一段。', '預設 08:20–17:00；完整涵蓋 12:20–13:00 時預帶休息 40 分鐘，其他時段為 0。可逐段修改休息分鐘，修改後重算淨時數；手動值不被時間變更覆蓋，可恢復自動。部分重疊午休時請自行核對。', '填事由並核對日數、段數與總時數，一次送出整張單；不同假別請分單。', '手機先選日期，再進入全高編輯面板；底部核對摘要及送出結果。', '看紀錄後可返回未送出的草稿。需要撤回時先核對整張單所有日期與時數，再依畫面確認。'], ['保留指定主管及任一／必審等原審核規則，主管通過後仍須管理部終審；待主管或待管理部時才可依原流程撤回。', '同一登入期間保留請假草稿，切月份、頁面或資料更新可接續；送出失敗保留輸入。重整／關頁不保存，登出或切換身份清除。', '只能查看本人及政策允許月份；額度、歷史日期語意、ERP輸出與已核准單修改權限不變。結束00:00表示該日24:00，跨夜須分日期列時段。']],
+    'employee.leave': ['我的請假', '同一內頁選日期、填申請、查看本人紀錄及整張單的審核進度。', ['瀏覽日曆時點日期查看當日紀錄，或切月內清單；點紀錄可看整張單及全部時段。', '按新增申請選一種假別，勾選實際日期；可選不連續日期、套用共用時段，再逐段調整或同日新增另一段。', '預設 08:20–17:00；完整涵蓋 12:20–13:00 時預帶休息 40 分鐘，其他時段為 0。可逐段修改休息分鐘，修改後重算淨時數；手動值不被時間變更覆蓋，可恢復自動。部分重疊午休時請自行核對。', '請假事由必填。核對日數、段數與總時數，一次送出整張單；不同假別請分單。', '參加團膳者的請假時段與 12:20–13:00 重疊時，預設勾選紅字「當天不用餐」。送出請假即取消所選日午餐；退回或撤回不會自動恢復，請本人另行確認。已截止或結單請聯絡團膳管理者。', '看紀錄後可返回未送出的草稿。需要撤回時先核對整張單所有日期與時數，再依畫面確認。'], ['保留指定主管及任一／必審等原審核規則，主管通過後仍須管理部終審；待主管或待管理部時才可依原流程撤回。', '同一登入期間保留請假草稿，切月份、頁面或資料更新可接續；送出失敗保留輸入。重整／關頁不保存，登出或切換身份清除。', '只能查看本人及政策允許月份；額度、歷史日期語意、ERP輸出與已核准單修改權限不變。結束00:00表示該日24:00，跨夜須分日期列時段。']],
     'employee.overtime': ['我的加班', '同一內頁申請本人加班，查看日曆、清單與整張單的審核進度。', ['瀏覽日曆點日期查看當日紀錄，或切月內清單；查看舊代申請紀錄時核對申請對象。', '按新增申請，起訖預設 17:30–19:30；選開始日期與完整結束日期時間，跨午夜可用隔日快捷操作，再核對完整起訖。', '填扣除休息後的實際時數與事由，時數不能超過起訖差值；人工調整後修改時間仍須自行核對。', '確認摘要後送出，留在同頁查看審核進度。分開日期的獨立加班須逐筆建立。', '手機在全高編輯面板填寫，底部核對摘要；送出失敗保留內容，修正後再送。'], ['加班仍是一組連續起訖，不採請假多日期合一張單的模式；核准仍由指定主管依原規則處理，僅待主管時可撤回整張單。', '新申請只限本人；替他人辦理仍須到主管代辦並有明確授權。舊本人／我代申請的可見範圍及歷史月份限制保留。', '同一登入期間分別保留加班草稿，切月份、頁面或資料更新可接續；重整／關頁不保存，登出或切換身份清除。', '本次只整合操作介面，不改考勤、ERP輸出、審核權限或已核准紀錄。']],
     'employee.order': ['調整我的功能順序', '排列本人員工工作台的入口，儲存後同一帳號跨裝置沿用。', ['逐列按上移／下移，把常用功能移到前面。', '按恢復預設只更新草稿；確認後按儲存排序才保存。', '有未存異動時關閉，可選繼續編輯或捨棄並關閉。'], ['排序不改資料與功能權限，也不改其他員工或管理者／開發人員工作台的全域導覽。', '身份模擬不能保存個人偏好。新功能依可用權限補入入口。']],
-    'metrics.settings': ['指標排列與高度', '八張卡保留固定資訊群組，可調整個人排列順序與顯示高度。', ['逐列用向上／向下按鈕調整順序，選擇顯示高度並查看預覽。', '確認設定後儲存；關閉若有未存內容，可繼續編輯或捨棄。'], ['設定只影響目前帳號的呈現，不改統計資料或其他管理者。', '舊單項設定轉換為八個群組；請依遷移提示核對並保存。']],
+    'metrics.settings': ['指標排列與高度', '九種資訊卡中選八張顯示，可調整個人排列順序與高度；借支卡依財務權限顯示當月統計。', ['選擇要顯示的八張卡，逐列調整順序、選擇高度並查看預覽。', '確認設定後儲存；關閉若有未存內容，可繼續編輯或捨棄。'], ['設定只影響目前帳號的呈現，不改統計資料或其他管理者。', '首次更新以借支卡取代問候語與主題，其餘順序保留；之後可自行選回，仍維持八張。']],
     'metrics.detail': ['指標明細與統計範圍', '核對卡片的統計口徑、彙總與人員明細，再進入有權限的設定。', ['七日卡可切換日期；待審卡可切不同審核階段。', '以人員關鍵字及部門縮小清單，查詢後核對總數與分頁。', '出勤統計範圍可選全部、在職、部門或手動人員；設定頁入口另以按鈕標示。'], ['每日人數是當日不重複員工，跨日同一人可能出現在多日，不可直接相加當七日不重複人數。', '待審依申請件數；正常打卡依人數，異常打卡含紀錄與失敗稽核，不能將不同口徑相除當出勤率。', '沒有權限顯示不可查看，不應當作零；篩選不修改原始紀錄。']],
     'security.deviceDialog': ['裝置明細與解除確認', '查看一位員工的裝置及最近使用情形，只解除已核對的指定範圍。', ['先核對裝置名稱／ID、平台、綁定與最後登入時間、IP 及 GPS 資訊。', '解除此裝置只處理單一裝置；危險操作區的解除全部只限這位員工。', '確認頁列出受影響裝置；勾選影響確認，全部解除另需輸入該工號，再按確認解除。', '返回裝置清單或關閉不執行解除；確認期間名單已變動會拒絕，重新檢查後再操作。'], ['解除綁定不刪除打卡歷史，且不會清除全體員工。', 'IP、GPS 及最後使用時間是當時記錄，不表示裝置現在的位置。']],
     'security.remoteDialog': ['遠端打卡個人明細', '查看該人最近兩週的完整遠端打卡紀錄。', ['核對期間、時間、上下班類型、考勤狀態與裝置。', '逐項查 GPS／精度與風險資訊，關閉回到人員彙總。'], ['風險標記供查核，不直接認定違規或計算薪資。', '紀錄數、出勤日數及裝置數有不同口徑。']]
@@ -111,6 +111,14 @@ const annualHelpFields = {
     year: '試算的配置年度或結算的來源年度；離職結算年度自動依基準日帶入並唯讀。', alYear: '切換要查看的配置年度，不發給額度。', asOf: '判斷資格或是否可結算的基準日；未來日期僅能試算，不能提前確認。', policyId: '選已建立、適用資格日期的制度版本。', allocationId: '選擇本次調整的精確來源批次，不直接覆寫整人全年餘額。', quantity: '正數加額度，負數減尚未使用的額度；單位小時，支援小數或分數。', closureType: '年度終結處理所選來源年度；契約終止核對該人全部已取得來源。', closeEmployeeId: '選已離職員工，列出所有已取得來源，包含後續年度配置。'
 };
 
+
+Object.assign(workbenchHelpTopics, {
+    'meals.membership': ['團膳參加資格', '全員名冊顯示目前參加狀態與預定異動，修改日期與生效日期分開。', ['以人員、部門及狀態篩選清單，未設定者也會列出。', '按該員工的加入或不加入，在彈窗核對生效日期並填異動原因。', '生效日期預設下個月一日；修改日期由系統在儲存時記錄。既有預定異動仍依日期生效。'], ['資格只影響生效日後的預設用餐；不刪除歷史交單快照。', '送出前若其他人已改資格，必須重新整理後核對，不能覆蓋對方修改。']],
+    'meals.memberDialog': ['修改團膳參加資格', '為選定員工設定加入或不加入團膳的生效日期。', ['核對員工與要變更的參加狀態。', '生效日期預設下月一日，填寫必填異動原因後確認儲存。'], ['修改日期是本次實際儲存時間，不能代替生效日期；歷史日期不能改寫。', '確認後才寫入，關閉或取消會放棄本次尚未儲存的輸入。']],
+    'proxy.create': ['主管代辦：建立申請', '先選作業與日期，再在申請表勾選這次的代辦員工。', ['請假預設 08:20–17:00，加班預設 17:30–19:30；核對實際時段、休息與時數。', '請假事由必填；參加團膳且午休重疊的日期，紅字預設勾選當天不用餐。', '送出請假時同步取消所選日午餐；退回或撤回不會自動恢復。', '查舊單請切到查看代辦紀錄，該頁的人員篩選不會改變申請對象。'], ['只能代辦明確授權的員工；保留原審核路徑與操作人紀錄。', '午餐已截止或結單無法由此取消；如送出前狀態改變，整次申請不寫入，請核對提示後重新送出。']],
+    'proxy.records': ['主管代辦：查看紀錄', '此頁只查詢指定員工的既有資料，與新增申請的人員選擇分開。', ['選紀錄查詢對象、月份及作業種類，再點日期與紀錄查看。', '要替人新增申請請切換建立代辦申請，並在表單勾選本次代辦對象。'], ['只顯示授權範圍；紀錄查詢不會送出申請或更改用餐。']]
+});
+
 function workbenchHelpContext(includeModal = true) {
     if (includeModal && document.querySelector('#employee-order-dialog[open]')) return { role: 'employee', section: 'employeeOrder', sub: 'settings', topic: workbenchHelpTopics['employee.order'], root: '#employee-order-dialog' };
     if (includeModal && document.querySelector('#annual-leave-detail-dialog[open]')) return { role: state.dashboard?.role, section: 'annual', sub: 'detail', topic: workbenchHelpTopics['annual.detail'], root: '#annual-leave-detail-dialog' };
@@ -120,7 +128,10 @@ function workbenchHelpContext(includeModal = true) {
     if (includeModal && document.querySelector('#dashboard-insight-modal:not(.hidden)')) return { role: 'admin', section: 'metrics', sub: 'detail', topic: workbenchHelpTopics['metrics.detail'], root: '#dashboard-insight-content' };
     const annualRoot = document.getElementById('annual-leave-workspace');
     if (annualRoot && !annualRoot.closest('.hidden,[hidden]')) { const sub = annualRoot.querySelector('[data-al-context]')?.dataset.alContext || 'overview'; return { role: state.dashboard?.role, section: 'annual', sub, topic: workbenchHelpTopics[`annual.${sub}`], root: '#annual-leave-workspace' }; }
+    if (includeModal && document.querySelector('#meal-member-dialog[open]')) return { role: 'admin', section: 'meals', sub: 'membership', topic: workbenchHelpTopics['meals.memberDialog'], root: '#meal-member-dialog' };
     const role = state.dashboard?.role || 'employee';
+    const proxyRoot = document.getElementById('supervisor-workspace');
+    if (role === 'employee' && proxyRoot && !proxyRoot.closest('.hidden,[hidden]')) { const sub = typeof supervisorState !== 'undefined' ? supervisorState.proxyView || 'create' : 'create'; return { role, section: 'proxy', sub, topic: workbenchHelpTopics[`proxy.${sub}`], root: '#supervisor-workspace' }; }
     const salaryRoot = document.getElementById('salary-advance-workspace');
     const salaryVisible = salaryRoot && !salaryRoot.closest('.hidden,[hidden]');
     let section = state.activeSections[role] || '';
@@ -141,7 +152,12 @@ function workbenchHelpContext(includeModal = true) {
     return { role, section, sub, topic, ...(section === 'salaryAdvances' && salaryVisible ? { root: '#salary-advance-workspace' } : {}) };
 }
 function workbenchControlLabel(node) {
-    if (node.closest('form')?.dataset.saForm === 'paper') {
+    if (node.dataset.saAction === 'toggle-details') return '展開或收合人員明細';
+    if (node.matches('[data-leave-meal-choice]')) return '當天不用餐';
+    if (node.matches('[data-meal-member-employee]')) return '選擇團膳資格員工';
+    if (node.matches('[data-sa-paper-target]')) return '編輯紀錄與版本';
+    const form = node.form || node.closest('form');
+    if (form?.dataset.saForm === 'paper') {
         if (node.name === 'requestedAmount') return '補登金額（元）';
         if (node.name === 'note') return '補登備註（選填）';
     }
@@ -163,9 +179,17 @@ function workbenchControlLabel(node) {
     return node.title || node.placeholder || node.name || node.id || '選項';
 }
 function workbenchControlDescription(node, context) {
-    const name = node.name, label = workbenchControlLabel(node), action = node.dataset.action || '', form = node.closest('form');
+    const name = node.name, label = workbenchControlLabel(node), action = node.dataset.action || '', form = node.form || node.closest('form');
+    if (node.matches('[data-leave-meal-choice]')) return '勾選後在送出請假時同步取消所列日期的午餐；只限有參加且尚可修改的用餐日，退回或撤回不自動恢復訂餐。';
+    if (context.section === 'meals') {
+        if (name === 'effectiveDate' && context.sub === 'membership') return '參加資格預設下月一日生效；請核對既有預定異動，不能回寫歷史。';
+        if (label === '修改日期') return '系統記錄實際儲存時間，唯讀；與參加資格開始適用的生效日期分開。';
+        if (action === 'meal-member-edit') return '開啟所選員工的資格修改彈窗，核對加入或不加入、生效日期與原因後儲存。';
+    }
     if (context.section === 'salaryAdvances') {
         const salaryActions = {
+            'toggle-details': '展開或收合這位員工當月的歷次申請、單號與詳細說明；收合列表僅顯示最新一筆。',
+            'toggle-all-details': '展開或收合目前篩選清單中所有人員的歷次明細。',
             refresh: '重新讀取所選月份的借支申請及活動規則；不會送出申請或儲存目前表單。',
             export: '下載所選登記月份的 Excel 總表及各狀態明細；核准合計排除已取消申請，不代表實際付款或扣薪。',
             review: '開啟管理部審核表單；核對申請金額、選核准或退回，說明可留空，再確認送出。借支不經主管審核。',
@@ -355,9 +379,9 @@ function workbenchControlInventory(context = workbenchHelpContext()) {
     return entries;
 }
 function installWorkbenchModalHelp() {
-    for (const root of document.querySelectorAll('#admin-directory-dialog[open],#dashboard-metric-settings[open],#dashboard-insight-modal:not(.hidden),#annual-leave-detail-dialog[open],#salary-advance-workspace .sa-dialog[open]')) {
+    for (const root of document.querySelectorAll('#admin-directory-dialog[open],#dashboard-metric-settings[open],#dashboard-insight-modal:not(.hidden),#annual-leave-detail-dialog[open],#salary-advance-workspace .sa-dialog[open],#meal-member-dialog[open]')) {
         if (root.querySelector('[data-wb-modal-help]')) continue;
-        const header = root.querySelector('.modal-header,.ad-dialog-header,.dm-dialog-header,header') || root.firstElementChild;
+        const header = root.querySelector('.modal-header,.ad-dialog-header,.dm-dialog-header,.meal-section-heading,header') || root.firstElementChild;
         if (!header) continue;
         const button = document.createElement('button'); button.type = 'button'; button.className = 'outline-btn'; button.dataset.wbModalHelp = ''; button.textContent = '操作說明';
         button.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); openWorkbenchHelp(); }); header.append(button);

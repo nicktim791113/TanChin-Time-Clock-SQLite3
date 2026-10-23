@@ -30,9 +30,10 @@ function loadHelp({ role = 'admin', section = 'salaryAdvances', salaryVisible = 
         toolbar: () => toolbar,
         paints: () => paints,
         setDialog: (stage) => { activeStage = stage; },
-        describe({ label, name = '', action, form, submit = false, paperTarget = false, modal = false }) {
+        describe({ label, name = '', action, form, linkedForm, submit = false, paperTarget = false, modal = false }) {
             context.helpControl = {
                 name, dataset: action ? { saAction: action } : {},
+                form: linkedForm ? { dataset: { saForm: linkedForm }, querySelector: () => null } : null,
                 getAttribute: (attribute) => attribute === 'aria-label' ? label : null,
                 matches: (selector) => (selector === 'button[type="submit"]' && submit) || (selector === '[data-sa-paper-target]' && paperTarget),
                 closest: (selector) => selector === 'form' && form ? { dataset: { saForm: form }, querySelector: () => null } : null,
@@ -139,6 +140,26 @@ test('paper help normalizes row labels without exposing employee identifiers or 
         assert.equal(ui.run('workbenchControlLabel(helpControl)'), '補登金額（元）');
         ui.describe({ label: `${employee} 補登備註（選填）`, name: 'note', form: 'paper' });
         assert.equal(ui.run('workbenchControlLabel(helpControl)'), '補登備註（選填）');
+    }
+});
+
+test('paper help follows the associated form for dense row fields and hides identity from record selectors', () => {
+    const ui = loadHelp({ page: 'paper' });
+    for (const ancestorForm of [undefined, 'filters']) {
+        const amount = ui.describe({ label: 'PRIVATE-EMPLOYEE 補登金額（元）', name: 'requestedAmount', linkedForm: 'paper', form: ancestorForm });
+        assert.equal(ui.run('workbenchControlLabel(helpControl)'), '補登金額（元）');
+        assert.match(amount, /原單規則快照上限/);
+        assert.doesNotMatch(amount, /本人要借支|PRIVATE-EMPLOYEE/);
+        const note = ui.describe({ label: 'PRIVATE-EMPLOYEE 補登備註（選填）', name: 'note', linkedForm: 'paper', form: ancestorForm });
+        assert.equal(ui.run('workbenchControlLabel(helpControl)'), '補登備註（選填）');
+        assert.match(note, /不再送管理部待複核/);
+        assert.doesNotMatch(note, /此次借支申請的補充說明|PRIVATE-EMPLOYEE/);
+    }
+    for (const employee of ['085', 'PRIVATE-EMPLOYEE']) {
+        const description = ui.describe({ label: `${employee} 編輯紀錄與版本`, paperTarget: true });
+        assert.equal(ui.run('workbenchControlLabel(helpControl)'), '編輯紀錄與版本');
+        assert.match(description, /既有紙本補登/);
+        assert.doesNotMatch(description, /085|PRIVATE-EMPLOYEE/);
     }
 });
 

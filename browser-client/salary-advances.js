@@ -1,7 +1,7 @@
 'use strict';
 
 const saToday = () => new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
-const saState = { identity: '', role: '', month: saToday().slice(0, 7), page: 'query', filters: {}, paperTargets: {}, data: null, loading: false, busy: false, sequence: 0, message: '', error: false, action: null, draft: {}, submitKey: '' };
+const saState = { identity: '', role: '', month: saToday().slice(0, 7), page: 'query', filters: {}, expanded: {}, paperTargets: {}, data: null, loading: false, busy: false, sequence: 0, message: '', error: false, action: null, draft: {}, submitKey: '' };
 const saEsc = (value) => escapeHtml(String(value ?? ''));
 const saStatus = (status) => ({ pending_admin: '待複核', approved: '已複核', rejected: '已退回', withdrawn: '已取消（員工撤回）', cancelled: '已取消' }[status] || status);
 const saPaper = (row) => row?.entryMode === 'admin_paper_approved';
@@ -24,7 +24,7 @@ function saNewSubmissionKey() {
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 function saReset(identity = '') {
-    Object.assign(saState, { identity, role: '', month: saToday().slice(0, 7), page: 'query', filters: {}, paperTargets: {}, data: null, loading: false, busy: false, sequence: saState.sequence + 1, message: '', error: false, action: null, draft: {}, submitKey: '' });
+    Object.assign(saState, { identity, role: '', month: saToday().slice(0, 7), page: 'query', filters: {}, expanded: {}, paperTargets: {}, data: null, loading: false, busy: false, sequence: saState.sequence + 1, message: '', error: false, action: null, draft: {}, submitKey: '' });
 }
 function saHelp() {
     return `<details class="sa-help"><summary>借支申請操作說明</summary><ol><li>在活動開放期間填入整數新臺幣金額，核對後送交管理部；不經主管審核，也不開放主管代辦。</li><li>每月有效筆數只計待審及已核准申請；退回、撤回及取消不占有效筆數。未過截止時間時可重新送出。</li><li>待審申請可自行撤回；已核准需聯絡管理部。既有申請保留送件時的活動規則，不因後續設定變更而自動改額。管理者代為紙本核准補登的紀錄也會顯示於你的登記月份，並標示「補登記」。</li><li>管理部核准只表示申請通過，實際發放與薪資扣回須依公司後續作業；此頁不會發放款項或扣薪。</li><li>管理者總表包含各狀態明細，核准總額排除已取消申請；ERP 可讀取修訂與取消紀錄，管理部仍須核對實際發放。</li></ol></details>`;
@@ -67,6 +67,8 @@ function saFilter() {
 }
 function saMatchesStatus(row, status) {
     if (!status) return true;
+    if (status === 'has_application') return Boolean(row);
+    if (!row) return status === 'none';
     if (status === 'paper') return row.status === 'approved' && saPaper(row);
     if (status === 'approved') return row.status === 'approved' && !saPaper(row);
     if (status === 'cancelled') return ['cancelled', 'withdrawn'].includes(row.status);
@@ -82,24 +84,31 @@ function saEmployeeMatches(employee) {
     const filter = saFilter(), query = filter.search.trim().toLocaleLowerCase();
     return (!filter.department || employee.department === filter.department) && (!query || `${employee.id} ${employee.name} ${employee.department || ''}`.toLocaleLowerCase().includes(query));
 }
+function saEmployeeRows(employeeId) {
+    const time = (row) => Number(new Date(row.createdAt || row.submittedAt || row.updatedAt || 0)) || 0;
+    return saState.data.requests.filter((row) => row.employeeId === employeeId).sort((a, b) => time(b) - time(a) || String(b.requestId).localeCompare(String(a.requestId)));
+}
 function saFilteredRoster() {
     const filter = saFilter();
     return saAllEmployees().filter((e) => {
-        const rows = saState.data.requests.filter((r) => r.employeeId === e.id);
-        return saEmployeeMatches(e) && (!filter.status || (filter.status === 'none' ? !rows.length : rows.some((r) => saMatchesStatus(r, filter.status))));
+        const rows = saEmployeeRows(e.id);
+        return saEmployeeMatches(e) && saMatchesStatus(rows[0], filter.status);
     });
 }
 function saFilterBar(paper = false) {
     const filter = saFilter(), departments = [...new Set(saAllEmployees().map((e) => e.department).filter(Boolean))].sort();
-    const options = [['', '全部狀態'], ...(saState.page !== 'review' ? [['none', '無申請']] : []), ['pending_admin', '待複核'], ['approved', '已複核'], ['paper', '補登記'], ['rejected', '已退回'], ['cancelled', '已取消／員工撤回']];
+    const options = [['', '全部狀態'], ...(saState.page !== 'review' ? [['has_application', '有申請紀錄'], ['none', '無申請']] : []), ['pending_admin', '待複核'], ['approved', '已複核'], ['paper', '補登記'], ['rejected', '已退回'], ['cancelled', '已取消／員工撤回']];
     return `<form data-sa-form="filters" class="sa-filters">${saInput(paper ? '補登月份' : '登記月份', 'applicationMonth', saState.month, 'month', 'required min="2020-01" max="2100-12"')}<label class="field"><span>部門</span><select name="department"><option value="">全部部門</option>${departments.map((d) => `<option value="${saEsc(d)}" ${filter.department === d ? 'selected' : ''}>${saEsc(d)}</option>`).join('')}</select></label>${saInput('員工工號／姓名', 'search', filter.search, 'search', 'placeholder="搜尋人員"')}<label class="field"><span>申請狀態</span><select name="status">${options.map(([value, label]) => `<option value="${value}" ${filter.status === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="sa-actions"><button class="primary-btn" type="submit">查詢</button>${saButton('reset-filters', '重設')}</div></form>`;
 }
+function saHistory(rows) {
+    return rows.map((r) => `<div class="sa-record-detail"><strong>${saEsc(saRowStatus(r))} · 申請 ${saMoney(r.requestedAmount)}${r.approvedAmount == null ? '' : `／核准 ${saMoney(r.approvedAmount)}`}</strong><small>申請單號 ${saEsc(r.requestId)} · v${r.revision}</small><small>送出 ${saEsc(saTime(r.submittedAt || r.createdAt))} · 更新 ${saEsc(saTime(r.updatedAt))}</small>${r.note ? `<small>備註：${saEsc(r.note)}</small>` : ''}${r.reviewNote ? `<small>審核：${saEsc(r.reviewNote)}</small>` : ''}${r.cancellationReason || r.withdrawalReason ? `<small>取消：${saEsc(r.cancellationReason || r.withdrawalReason)}</small>` : ''}</div>`).join('');
+}
 function saRosterTable() {
-    const employees = saFilteredRoster();
-    return `<p class="sa-note">共 ${employees.length} 位人員。此頁僅供查詢，同一人當月的歷次申請分別保留；狀態篩選符合的人員仍顯示其完整當月紀錄。</p><div class="sa-table-wrap"><table class="sa-table sa-roster-table"><thead><tr><th>工號／姓名</th><th>部門</th><th>本月申請狀態</th><th>紀錄明細</th></tr></thead><tbody>${employees.map((e) => {
-        const rows = saState.data.requests.filter((r) => r.employeeId === e.id);
-        return `<tr><td>${saEsc(e.id)} ${saEsc(e.name)}${saEmployeeNote(e)}</td><td>${saEsc(e.department || '—')}</td><td><div class="sa-status-list">${rows.length ? rows.map(saPill).join('') : saPill(null)}</div></td><td>${rows.length ? rows.map((r) => `<div class="sa-record-detail"><strong>${saEsc(saRowStatus(r))} · 申請 ${saMoney(r.requestedAmount)}${r.approvedAmount == null ? '' : `／核准 ${saMoney(r.approvedAmount)}`}</strong><small>${saEsc(r.requestId)} · v${r.revision} · ${saEsc(saTime(r.updatedAt))}</small>${r.note ? `<small>備註：${saEsc(r.note)}</small>` : ''}${r.reviewNote ? `<small>審核：${saEsc(r.reviewNote)}</small>` : ''}${r.cancellationReason || r.withdrawalReason ? `<small>取消：${saEsc(r.cancellationReason || r.withdrawalReason)}</small>` : ''}</div>`).join('') : '尚無登記紀錄'}</td></tr>`;
-    }).join('') || '<tr><td colspan="4" class="sa-empty">沒有符合條件的人員。</td></tr>'}</tbody></table></div>`;
+    const employees = saFilteredRoster(), expandable = employees.filter((e) => saEmployeeRows(e.id).length), allExpanded = expandable.length && expandable.every((e) => saState.expanded[`${saState.month}/${e.id}`]);
+    return `<div class="sa-roster-toolbar"><p class="sa-note">共 ${employees.length} 位人員；每人顯示最新一筆申請。點選人員可查看當月歷次明細。</p>${saButton('toggle-all-details', allExpanded ? '全部收合明細' : '全部展開明細', expandable.length ? '' : 'disabled')}</div><div class="sa-table-wrap"><table class="sa-table sa-roster-table"><thead><tr><th>工號／姓名</th><th>部門</th><th>本月申請狀態</th><th>更新日期</th><th>紀錄明細</th></tr></thead><tbody>${employees.map((e) => {
+        const rows = saEmployeeRows(e.id), latest = rows[0], expanded = Boolean(saState.expanded[`${saState.month}/${e.id}`]), detailId = `sa-history-${encodeURIComponent(e.id)}`;
+        return `<tr data-sa-person="${saEsc(e.id)}"><td>${rows.length ? saButton('toggle-details', `${e.id} ${e.name}`, `data-sa-employee="${saEsc(e.id)}" aria-expanded="${expanded}" aria-controls="${saEsc(detailId)}"`) : `${saEsc(e.id)} ${saEsc(e.name)}`}${saEmployeeNote(e)}</td><td>${saEsc(e.department || '—')}</td><td>${saPill(latest)}</td><td class="sa-date-cell">${saEsc(saTime(latest?.updatedAt))}</td><td>${rows.length ? saButton('toggle-details', `${expanded ? '收合' : '查看'} ${rows.length} 筆紀錄`, `data-sa-employee="${saEsc(e.id)}" aria-expanded="${expanded}" aria-controls="${saEsc(detailId)}"`) : '尚無登記紀錄'}</td></tr>${expanded && rows.length ? `<tr id="${saEsc(detailId)}" class="sa-history-row"><td colspan="5">${saHistory(rows)}</td></tr>` : ''}`;
+    }).join('') || '<tr><td colspan="5" class="sa-empty">沒有符合條件的人員。</td></tr>'}</tbody></table></div>`;
 }
 function saEmployeeNote(employee) {
     return employee.terminationDate ? `<small>離職日 ${saEsc(employee.terminationDate)}</small>` : employee.historical ? '<small>歷史人員</small>' : '';
@@ -107,13 +116,24 @@ function saEmployeeNote(employee) {
 function saPaperKey(employeeId, requestId = '') { return `${saState.month}/${employeeId}/${requestId}`; }
 function saPaperTable() {
     const employees = saFilteredRoster();
-    return `<p class="sa-note">直接填寫金額與備註，再按「確認儲存」。已補登的紀錄可修改後再次儲存；每次異動留痕並同步顯示於員工的登記月份。補登可指定過去月份，仍須符合活動金額及每月筆數上限；取消請至「管理部待複核」切換全部狀態。</p><div class="sa-table-wrap"><table class="sa-table sa-paper-table"><thead><tr><th>工號／姓名</th><th>本月申請狀態</th><th>補登金額／備註</th><th>紀錄版本</th></tr></thead><tbody>${employees.map((e) => {
-        const rows = saState.data.requests.filter((r) => r.employeeId === e.id), papers = rows.filter((r) => saPaper(r) && r.status === 'approved');
+    return `<p class="sa-note">每人一列。填寫金額與備註後確認儲存；切換「編輯紀錄」可修正既有補登，版本與操作紀錄持續保留。新增仍須符合活動金額及每月筆數上限。</p><div class="sa-table-wrap"><table class="sa-table sa-paper-table"><thead><tr><th>工號／姓名</th><th>本月申請狀態</th><th>編輯紀錄／版本</th><th>補登金額</th><th>備註</th><th>儲存</th><th>更新日期</th></tr></thead><tbody>${employees.map((e) => {
+        const rows = saEmployeeRows(e.id), papers = rows.filter((r) => saPaper(r) && r.status === 'approved');
         const targetKey = `${saState.month}/${e.id}`, selected = saState.paperTargets[targetKey];
         const row = selected === '' ? null : papers.find((r) => r.requestId === selected) || papers[0] || null;
-        const requestId = row?.requestId || '', key = saPaperKey(e.id, requestId), draft = saState.draft.paper?.[key] || {};
-        return `<tr><td>${saEsc(e.id)} ${saEsc(e.name)}<small>${saEsc(e.department || '—')}</small>${saEmployeeNote(e)}</td><td><div class="sa-status-list">${rows.length ? rows.map(saPill).join('') : saPill(null)}</div></td><td>${papers.length ? `<label class="field"><span>編輯紀錄</span><select data-sa-paper-target data-sa-employee="${saEsc(e.id)}"><option value="" ${!row ? 'selected' : ''}>新增另一筆補登</option>${papers.map((r) => `<option value="${saEsc(r.requestId)}" ${r.requestId === requestId ? 'selected' : ''}>${saEsc(r.requestId)} · ${saMoney(r.approvedAmount)}</option>`).join('')}</select></label>` : ''}<form data-sa-form="paper" data-sa-employee="${saEsc(e.id)}" data-sa-id="${saEsc(requestId)}" data-sa-revision="${row?.revision || ''}" class="sa-paper-form">${saInput(`${e.id} 補登金額（元）`, 'requestedAmount', draft.requestedAmount ?? row?.requestedAmount ?? '', 'number', `required min="1" max="${row?.rulesSnapshot?.maxAmount || saState.data.settings.maxAmount || 1000000000}" step="1" inputmode="numeric"`)}${saNote(`${e.id} 補登備註（選填）`, 'note', draft.note ?? row?.note ?? '')}<button class="primary-btn" type="submit">${row ? '確認修改儲存' : '確認儲存'}</button></form></td><td>${row ? `<small>${saEsc(row.requestId)}</small><strong>v${row.revision}</strong><small>更新 ${saEsc(saTime(row.updatedAt))}</small>` : '<small>新增補登</small>'}</td></tr>`;
-    }).join('') || '<tr><td colspan="4" class="sa-empty">沒有符合條件的人員。</td></tr>'}</tbody></table></div>`;
+        const requestId = row?.requestId || '', key = saPaperKey(e.id, requestId), draft = saState.draft.paper?.[key] || {}, formId = `sa-paper-${encodeURIComponent(e.id)}`;
+        return `<tr><td>${saEsc(e.id)} ${saEsc(e.name)}<small>${saEsc(e.department || '—')}</small>${saEmployeeNote(e)}</td><td>${saPill(rows[0])}${rows.length > 1 ? `<small>當月共 ${rows.length} 筆紀錄</small>` : ''}</td><td>${papers.length ? `<select aria-label="${saEsc(e.id)} 編輯紀錄與版本" data-sa-paper-target data-sa-employee="${saEsc(e.id)}"><option value="" ${!row ? 'selected' : ''}>新增另一筆補登</option>${papers.map((r) => `<option value="${saEsc(r.requestId)}" ${r.requestId === requestId ? 'selected' : ''}>v${r.revision} · ${saMoney(r.approvedAmount)} · ${saEsc(r.requestId)}</option>`).join('')}</select>` : '<span class="sa-note">新增補登</span>'}</td><td><input aria-label="${saEsc(e.id)} 補登金額（元）" form="${saEsc(formId)}" name="requestedAmount" type="number" value="${saEsc(draft.requestedAmount ?? row?.requestedAmount ?? '')}" required min="1" max="${row?.rulesSnapshot?.maxAmount || saState.data.settings.maxAmount || 1000000000}" step="1" inputmode="numeric"></td><td><input aria-label="${saEsc(e.id)} 補登備註（選填）" form="${saEsc(formId)}" name="note" maxlength="500" value="${saEsc(draft.note ?? row?.note ?? '')}"></td><td><form id="${saEsc(formId)}" data-sa-form="paper" data-sa-employee="${saEsc(e.id)}" data-sa-id="${saEsc(requestId)}" data-sa-revision="${row?.revision || ''}" class="sa-paper-form"><button class="primary-btn" type="submit">${row ? '確認修改儲存' : '確認儲存'}</button></form></td><td class="sa-date-cell">${saEsc(saTime(row?.updatedAt))}</td></tr>`;
+    }).join('') || '<tr><td colspan="7" class="sa-empty">沒有符合條件的人員。</td></tr>'}</tbody></table></div>`;
+}
+function saAdminSummary() {
+    const data = saState.data, roster = saFilteredRoster(), people = new Set(roster.map((e) => e.id));
+    const rows = data.requests.filter((r) => people.has(r.employeeId)), summary = data.summary;
+    let items;
+    if (saState.page === 'review') items = [['本月申請筆數', summary.count], ['本月待複核', summary.pendingCount], ['有效申請金額', saMoney(summary.requestedAmount)], ['已複核合計', saMoney(summary.approvedAmount)]];
+    else if (saState.page === 'paper') {
+        const papers = rows.filter((r) => saPaper(r) && r.status === 'approved');
+        items = [['篩選人員', roster.length], ['已補登人數', new Set(papers.map((r) => r.employeeId)).size], ['有效補登筆數', papers.length], ['有效補登金額', saMoney(papers.reduce((sum, r) => sum + r.approvedAmount, 0))]];
+    } else items = [['篩選人員', roster.length], ['有申請紀錄', new Set(rows.map((r) => r.employeeId)).size], ['無申請人數', roster.filter((e) => !saEmployeeRows(e.id).length).length], ['已複核合計', saMoney(rows.filter((r) => r.status === 'approved').reduce((sum, r) => sum + r.approvedAmount, 0))]];
+    return `<div class="sa-summary" aria-label="${saEsc(saState.month)} ${saState.page === 'review' ? '當月完整申請統計' : '目前人員篩選統計'}">${items.map(([label, value]) => `<span>${saEsc(label)}<strong>${saEsc(value)}</strong></span>`).join('')}</div>`;
 }
 function saAdminContent() {
     const data = saState.data, pages = [['query', '查看登記月份'], ...(saCan('review') ? [['review', '管理部待複核']] : []), ...(saCan('paper') ? [['paper', '紙本核准補登']] : []), ...(saCan('settings') ? [['settings', '活動設定']] : [])];
@@ -127,11 +147,11 @@ function saAdminContent() {
         else if (saState.page === 'paper') content += saPaperTable();
         else {
             const filter = saFilter(), rows = data.requests.filter((r) => saEmployeeMatches({ id: r.employeeId, name: r.employeeName, department: r.department }) && saMatchesStatus(r, filter.status));
-            content += `<div class="sa-summary"><span>本月申請筆數 <strong>${data.summary.count}</strong></span><span>本月待複核 <strong>${data.summary.pendingCount}</strong></span><span>有效申請 <strong>${saMoney(data.summary.requestedAmount)}</strong></span><span>已複核合計 <strong>${saMoney(data.summary.approvedAmount)}</strong></span></div><p class="sa-note">預設列出待複核申請；切換「全部狀態」可查看並取消已複核或補登紀錄。審核說明可不填，取消時須填操作原因。</p>${saRequests(rows)}`;
+            content += `<p class="sa-note">預設列出待複核申請；切換「全部狀態」可查看並取消已複核或補登紀錄。審核說明可不填，取消時須填操作原因。</p>${saRequests(rows)}`;
         }
         content += '</section>';
     }
-    return `<div class="workspace-subnav-layout"><aside class="workspace-subnav-sidebar" aria-label="借支管理子導覽"><div class="workspace-subnav-card"><div class="workspace-subnav-group"><p class="workspace-subnav-group-title">借支申請管理</p><div class="workspace-subnav-items">${pages.map(([id, label]) => `<button type="button" class="workspace-subnav-item ${saState.page === id ? 'is-active' : ''}" data-sa-action="page" data-sa-page="${id}" aria-current="${saState.page === id ? 'page' : 'false'}"><span>${label}</span>${id === 'review' ? `<span class="workspace-subnav-badge">${data.summary.pendingCount}</span>` : ''}</button>`).join('')}</div></div></div></aside><section class="workspace-subnav-content">${content}</section></div>`;
+    return `<div class="workspace-subnav-layout"><aside class="workspace-subnav-sidebar" aria-label="借支管理子導覽"><div class="workspace-subnav-card"><div class="workspace-subnav-group"><p class="workspace-subnav-group-title">借支申請管理</p><div class="workspace-subnav-items">${pages.map(([id, label]) => `<button type="button" class="workspace-subnav-item ${saState.page === id ? 'is-active' : ''}" data-sa-action="page" data-sa-page="${id}" aria-current="${saState.page === id ? 'page' : 'false'}"><span>${label}</span>${id === 'review' ? `<span class="workspace-subnav-badge">${data.summary.pendingCount}</span>` : ''}</button>`).join('')}</div></div></div></aside><section class="workspace-subnav-content">${saState.page === 'settings' ? '' : saAdminSummary()}${content}</section></div>`;
 }
 function renderSalaryAdvanceWorkspace(role) {
     const nextRole = role || state.dashboard?.role || 'employee';
@@ -184,8 +204,8 @@ renderDashboard = function renderSalaryAdvanceIdentity(dashboard) {
     return saPreviousDashboard(dashboard);
 };
 document.addEventListener('input', (event) => {
-    const form = event.target.closest('[data-sa-form]');
-    if (!form || saState.busy) return;
+    const form = event.target.closest('[data-sa-form]') || event.target.form;
+    if (!form?.dataset.saForm || saState.busy) return;
     if (form.dataset.saForm === 'submit') {
         saState.draft.requestedAmount = form.elements.requestedAmount.value;
         saState.draft.note = form.elements.note.value;
@@ -219,6 +239,8 @@ document.addEventListener('click', async (event) => {
     const button = event.target.closest('[data-sa-action]');
     if (!button || saState.busy) return;
     const action = button.dataset.saAction;
+    if (action === 'toggle-details') { const key = `${saState.month}/${button.dataset.saEmployee}`; saState.expanded[key] = !saState.expanded[key]; saPaint(); return; }
+    if (action === 'toggle-all-details') { const employees = saFilteredRoster().filter((e) => saEmployeeRows(e.id).length), expand = !employees.every((e) => saState.expanded[`${saState.month}/${e.id}`]); employees.forEach((e) => { saState.expanded[`${saState.month}/${e.id}`] = expand; }); saPaint(); return; }
     if (action === 'page') { saState.page = button.dataset.saPage; saState.action = null; saState.message = ''; saState.error = false; saPaint(); return; }
     if (action === 'reset-filters') { delete saState.filters[saState.page]; saPaint(); return; }
     if (action === 'refresh') { saState.message = ''; saState.error = false; await saLoad(); return; }
