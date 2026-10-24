@@ -1299,6 +1299,8 @@ function getColumnWidthLimits(table, columnIndex) {
 }
 
 function fitDataTableColumnsForTable(table) {
+    // The roster has equal-width columns; content measurement must not resize them.
+    if (table?.dataset?.columnLayout === "uniform") return;
     if (!table?.rows?.length) return;
     const columnCount = Math.max(...Array.from(table.rows).map((row) => row.cells.length), 0);
     if (!columnCount) return;
@@ -1823,12 +1825,11 @@ function renderEmployeeNameWithSupervisorHint(employee) {
     const departments = getSupervisorDepartmentsForEmployee(employee.id);
     const nameText = escapeHtml(employee.name || "-");
     if (!departments.length) return nameText;
-    const departmentText = departments.slice(0, 3).join("、");
-    const overflowText = departments.length > 3 ? ` 等 ${departments.length} 位員工` : "";
+    const departmentText = departments.join("、");
     return `
         <div class="employee-name-stack">
             <span>${nameText}</span>
-            <span class="supervisor-hint">請假／加班主管：${escapeHtml(departmentText)}${escapeHtml(overflowText)}</span>
+            <span class="supervisor-hint">請假／加班主管：${escapeHtml(departmentText)}</span>
         </div>
     `;
 }
@@ -1839,12 +1840,12 @@ function renderEmployeeRows(employees, visibleRows = "25") {
     const visibleColumns = getActiveEmployeeRosterColumns();
 
     return `
-        <div class="data-table-wrap employee-table-wrap" style="--employee-table-height: ${tableHeight};">
-            <table class="data-table">
+        <div class="data-table-wrap employee-table-wrap" style="--employee-table-height: ${tableHeight};" role="region" aria-label="員工名冊，可左右捲動查看完整欄位" tabindex="0">
+            <table class="data-table employee-roster-table" data-column-layout="uniform" style="--employee-column-count: ${visibleColumns.length + 1};">
                 <thead>
                     <tr>
-                        ${visibleColumns.map((column) => `<th class="${column.cellClass || ""}">${escapeHtml(column.label)}</th>`).join("")}
-                        <th class="nowrap-cell">操作</th>
+                        ${visibleColumns.map((column) => `<th scope="col" class="${column.cellClass || ""}">${escapeHtml(column.label)}</th>`).join("")}
+                        <th scope="col" class="nowrap-cell">操作</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -2104,7 +2105,7 @@ function renderAdminPeopleSection(datasets) {
                 </form>
             </article>
 
-            <article class="table-card">
+            <article class="table-card employee-roster-card">
                 <div class="list-toolbar">
                     <div>
                         <h3>員工名冊</h3>
@@ -4656,7 +4657,7 @@ renderAdminPeopleSection = function renderAdminPeopleSectionOverride(datasets) {
                 </form>
             </article>
 
-            <article class="table-card">
+            <article class="table-card employee-roster-card">
                 <div class="list-toolbar">
                     <div>
                         <h3>員工名冊</h3>
@@ -5041,11 +5042,11 @@ renderAdminPeopleSection = function renderAdminPeopleSectionTabsOverride(dataset
 
             ${renderDepartmentSettingsPanel(datasets)}
 
-            <article class="table-card">
+            <article class="table-card employee-roster-card">
                 <div class="list-toolbar">
                     <div>
                         <h3>員工名冊</h3>
-                        <p class="helper-text">固定顯示核心 8 欄，其它表頭可自由勾選，篩選與列數切換會即時更新名冊內容。</p>
+                        <p class="helper-text">固定顯示核心 8 欄，其它欄位可自由勾選。每欄等寬、內容完整換行；在名冊內左右捲動可查看所有欄位。</p>
                     </div>
                     <div class="badge-row">
                         <span id="employee-filter-badge">${renderBadge(`顯示 ${filteredEmployees.length} / ${datasets.employees.length} 筆`, "success")}</span>
