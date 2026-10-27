@@ -1,7 +1,13 @@
 (() => {
     'use strict';
-    const defaultFilter = (kind) => ({ query: '', department: '', status: kind === 'diagnostics' ? 'failure' : '' });
+    const defaultFilter = (kind) => {
+        if (kind !== 'diagnostics') return { query: '', department: '', status: '' };
+        const today = new Date(Date.now() + 8 * 60 * 60 * 1000);
+        return { employeeId: '', status: 'failure', endDate: today.toISOString().slice(0, 10),
+            startDate: new Date(today.getTime() - 13 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10) };
+    };
     const filters = { devices: defaultFilter('devices'), remote: defaultFilter('remote'), diagnostics: defaultFilter('diagnostics') };
+    let diagnosticQuery = { data: null, applied: null, loading: false, error: '', request: 0 };
     let dialog;
     let dialogOrigin;
     let sessionGeneration = 0;
@@ -13,6 +19,7 @@
     let renderedIdentity = sessionIdentity();
     function clearDirectorySession() {
         sessionGeneration += 1;
+        diagnosticQuery = { data: null, applied: null, loading: false, error: '', request: diagnosticQuery.request + 1 };
         dialogOrigin = null;
         if (dialog) {
             const previousDialog = dialog;
@@ -119,39 +126,83 @@
         return `<section data-directory-kind="devices" aria-label="裝置綁定人員清單"><p class="helper-text">目前每人上限 ${deviceLimit(datasets.security?.settings)} 台。3 台以上會標記待查看，可先比對裝置登入診斷；系統不會自行解除任何綁定。裝置名稱及 IP 不能單獨證明是同一台實體電腦。</p>${renderFilters('devices', groups)}<div data-directory-results>${renderDeviceResults(groups, deviceLimit(datasets.security?.settings))}</div></section>`;
     }
 
-    function diagnosticMatches(record) {
-        const filter = filters.diagnostics;
-        if (filter.status === 'failure' && record.success === true) return false;
-        if (filter.status === 'success' && record.success !== true) return false;
-        const query = filter.query.trim().toLowerCase();
-        return !query || [record.employeeId, record.employeeName, record.submittedAccount, record.department, record.deviceId, record.deviceName, record.failureCode, record.browserName, record.siteOrigin].join(' ').toLowerCase().includes(query);
-    }
-
-    function renderDiagnosticResults(data = {}) {
+    function renderDiagnosticRecords(records = []) {
         if (!canViewDiagnostics()) return renderEmptyState('目前沒有「安全設定檢視」權限，無法查看裝置登入診斷。');
-        const records = Array.isArray(data.records) ? data.records : [];
-        const rows = records.filter(diagnosticMatches);
-        const stageLabels = { login: '登入', workspace_switch: '切換工作台', punch: '打卡驗證' };
+        const stageLabels = { login: '登入', workspace_switch: '切換工作台', punch: '打卡驗證', device_recovery: '恢復原裝置', recovery_complete: '恢復原裝置', device_storage: '儲存確認', storage_ack: '儲存確認' };
         const identityLabels = { local_storage: '沿用網站儲存', cookie: '從 Cookie 備援恢復', generated: '新產生', unknown: '舊紀錄未記錄' };
-        const tokenLabels = { local_storage: '網站儲存', cookie: 'Cookie 備援', legacy: '舊版憑證', none: '沒有憑證', unknown: '舊紀錄未記錄' };
+        const tokenLabels = { local_storage: '網站儲存', cookie: 'Cookie 備援', legacy: '舊版憑證', multiple: '多份候選憑證', none: '沒有憑證', unknown: '舊紀錄未記錄' };
         const storageLabels = { available: '可用', unavailable: '不可用', unknown: '舊紀錄未記錄' };
-        return `<p class="helper-text" role="status">顯示 ${rows.length} / ${records.length} 筆已載入紀錄 · 篩選僅套用於最近 14 日最新 ${esc(data.limit || 200)} 筆</p>
-            ${rows.length ? `<div class="directory-diagnostic-list">${rows.map((record) => `<article class="directory-diagnostic">
+        const outcomeLabels = { new: '新增綁定', existing: '沿用原綁定', recovered: '恢復原綁定', disabled: '未啟用裝置綁定', blocked: '驗證遭拒', persistence: '回報憑證儲存' };
+        const verificationLabels = { verified: '有效', missing: '未提供', invalid: '無效', ambiguous: '對應多筆綁定，無法確認', not_required: '此步驟不需驗證' };
+        const persistenceLabels = { saved: '已確認保存', partial: '僅部分位置保存成功', retained: '沿用既存憑證（無法重新寫入）', failed: '保存失敗', unknown: '尚無儲存回報' };
+        const label = (labels, value, fallback = '舊紀錄未記錄') => Object.hasOwn(labels, value || '') ? labels[value] : fallback;
+        return records.length ? `<div class="directory-diagnostic-list">${records.map((record) => `<article class="directory-diagnostic">
                 <div class="directory-diagnostic-heading"><div><strong>${record.employeeId ? `${esc(record.employeeId)} / ${esc(record.employeeName || '未提供姓名')}` : '未確認帳號'}</strong><div class="directory-muted">${esc(record.timestampText || '未提供時間')}${record.department ? ` · ${esc(record.department)}` : ''}</div>${!record.employeeId && record.submittedAccount ? `<div class="directory-muted">輸入帳號：${esc(record.submittedAccount)}（尚未驗證身分）</div>` : ''}</div><div class="badge-row">${renderBadge(record.success === true ? '成功' : '失敗', record.success === true ? 'success' : 'danger')}${renderBadge(Object.hasOwn(stageLabels, record.stage) ? stageLabels[record.stage] : record.stage || '未提供階段')}</div></div>
                 <p class="directory-diagnostic-reason"><strong>${esc(record.failureCode || (record.success === true ? '成功' : '未提供錯誤碼'))}</strong> · ${esc(record.reason || '未提供原因')}</p>
                 <dl class="directory-diagnostic-fields"><div><dt>裝置 ID / 名稱</dt><dd>${esc(record.deviceId || '未提供')}<div class="directory-muted">${esc(record.deviceName || '未提供名稱')}</div></dd></div><div><dt>瀏覽器 / 平台</dt><dd>${esc(record.browserName || '未提供瀏覽器')} / ${esc(record.platform || '未提供平台')}</dd></div><div><dt>來源網址</dt><dd>${esc(record.siteOrigin || '未提供')}</dd></div><div><dt>IP</dt><dd>${esc(record.ipAddress || '未提供')}</dd></div><div><dt>有無提供裝置憑證</dt><dd>${record.tokenPresent === true ? '有提供（不代表驗證有效）' : '未提供'}</dd></div><div><dt>當時綁定數 / 上限</dt><dd>${esc(record.boundDeviceCount ?? '未確認')} / ${esc(record.maxDevicesPerEmployee ?? '未確認')}</dd></div></dl>
-                <dl class="directory-diagnostic-fields"><div><dt>識別來源</dt><dd>${esc(identityLabels[record.identitySource] || identityLabels.unknown)}${record.identityRecovered ? ' · 已用有效憑證找回原綁定' : ''}</dd></div><div><dt>憑證來源</dt><dd>${esc(tokenLabels[record.tokenSource] || tokenLabels.unknown)}</dd></div><div><dt>網站儲存 / Cookie 備援</dt><dd>${esc(storageLabels[record.localStorageStatus] || storageLabels.unknown)} / ${esc(storageLabels[record.cookieStorageStatus] || storageLabels.unknown)}</dd></div></dl>
+                <dl class="directory-diagnostic-fields"><div><dt>識別來源</dt><dd>${esc(identityLabels[record.identitySource] || identityLabels.unknown)}${record.identityRecovered ? (['device_recovery', 'recovery_complete'].includes(record.stage) ? ' · 已經管理者確認恢復' : ' · 已用有效憑證找回原綁定') : ''}</dd></div><div><dt>憑證來源</dt><dd>${esc(tokenLabels[record.tokenSource] || tokenLabels.unknown)}</dd></div><div><dt>網站儲存 / Cookie 備援</dt><dd>${esc(storageLabels[record.localStorageStatus] || storageLabels.unknown)} / ${esc(storageLabels[record.cookieStorageStatus] || storageLabels.unknown)}</dd></div></dl>
+                <dl class="directory-diagnostic-fields directory-diagnostic-outcome"><div><dt>送出時裝置 ID</dt><dd>${esc(record.originalDeviceId || '舊紀錄未記錄')}</dd></div><div><dt>確認後裝置 ID</dt><dd>${esc(record.canonicalDeviceId || '尚未確認')}</dd></div><div><dt>綁定處理</dt><dd>${esc(label(outcomeLabels, record.bindingOutcome))}</dd></div><div><dt>處理前 → 處理後綁定數</dt><dd>${esc(record.boundDeviceCountBefore ?? '未記錄')} → ${esc(record.boundDeviceCountAfter ?? '未記錄')}</dd></div><div><dt>憑證驗證結果</dt><dd>${esc(label(verificationLabels, record.tokenVerification))}${Number.isInteger(record.tokenCandidateCount) ? ` · ${esc(record.tokenCandidateCount)} 份候選` : ''}</dd></div><div><dt>憑證保存結果</dt><dd>${esc(label(persistenceLabels, record.persistenceStatus, persistenceLabels.unknown))}</dd></div></dl>
                 <details class="directory-user-agent"><summary>瀏覽器完整資訊（User-Agent）</summary><p>${esc(record.userAgent || '未提供')}</p></details>
-            </article>`).join('')}</div>` : renderEmptyState(records.length ? '沒有符合條件的紀錄；可切換「全部」或「成功」比對來源。' : '尚無最近 14 日裝置診斷紀錄。新版啟用後才開始記錄，不會補記過去未留下的登入失敗。')}`;
+            </article>`).join('')}</div>` : renderEmptyState('這個查詢範圍沒有紀錄，可調整員工、日期或診斷結果。');
+    }
+
+    function renderDiagnosticResults() {
+        if (!canViewDiagnostics()) return renderEmptyState('目前沒有「安全設定檢視」權限，無法查看裝置登入診斷。');
+        if (diagnosticQuery.loading) return '<p class="helper-text" role="status">正在查詢裝置登入診斷…</p>';
+        if (diagnosticQuery.error) return `<p class="directory-diagnostic-error" role="alert">${esc(diagnosticQuery.error)} 請重新查詢。</p>`;
+        const data = diagnosticQuery.data;
+        if (!data) return '<p class="helper-text" role="status">正在準備查詢；若未自動載入，請按「查詢診斷」。</p>';
+        const total = Number.isSafeInteger(data.total) && data.total >= 0 ? data.total : 0;
+        const page = Number.isSafeInteger(data.page) && data.page > 0 ? data.page : 1;
+        const pageSize = Number.isSafeInteger(data.pageSize) && data.pageSize > 0 ? data.pageSize : 25;
+        const pages = Math.max(1, Math.ceil(total / pageSize));
+        const applied = diagnosticQuery.applied || {};
+        const resultLabel = applied.status === 'success' ? '成功' : applied.status === 'failure' ? '失敗' : '全部結果';
+        return `<div class="directory-range"><strong>${esc(data.startDate)} — ${esc(data.endDate)}</strong><span>台北時間 · ${applied.employeeId ? `工號 ${esc(applied.employeeId)}` : '全部員工與未確認帳號'} · ${resultLabel} · 共 ${total} 筆</span></div>
+            ${renderDiagnosticRecords(Array.isArray(data.records) ? data.records : [])}
+            <div class="directory-diagnostic-pagination" aria-label="診斷分頁"><button class="outline-btn" type="button" data-directory-action="diagnostics-previous" ${page <= 1 ? 'disabled' : ''}>上一頁</button><span role="status">第 ${page} / ${pages} 頁 · 每頁 ${pageSize} 筆</span><button class="outline-btn" type="button" data-directory-action="diagnostics-next" ${page >= pages ? 'disabled' : ''}>下一頁</button></div>`;
+    }
+
+    function updateDiagnosticResults() {
+        const section = document.querySelector('[data-directory-kind="diagnostics"]');
+        if (section) section.querySelector('[data-directory-results]').innerHTML = renderDiagnosticResults();
+    }
+
+    async function loadDiagnostics(page = 1, query = filters.diagnostics) {
+        if (!canViewDiagnostics()) return;
+        const applied = { ...query };
+        const submittedIdentity = sessionIdentity(), submittedGeneration = sessionGeneration;
+        const request = ++diagnosticQuery.request;
+        const isCurrent = () => submittedIdentity === sessionIdentity() && submittedGeneration === sessionGeneration && request === diagnosticQuery.request && canViewDiagnostics();
+        diagnosticQuery.loading = true; diagnosticQuery.error = ''; diagnosticQuery.applied = applied;
+        updateDiagnosticResults();
+        try {
+            const params = new URLSearchParams({ employeeId: applied.employeeId || '', startDate: applied.startDate,
+                endDate: applied.endDate, result: applied.status || 'all', page: String(page), pageSize: '25' });
+            const result = await requestJson(`/api/browser/admin/device-login-diagnostics?${params}`, { auth: true });
+            if (!isCurrent()) return;
+            diagnosticQuery.data = result;
+        } catch (error) {
+            if (!isCurrent()) return;
+            diagnosticQuery.data = null; diagnosticQuery.error = error.message || '查詢失敗。';
+        } finally {
+            if (isCurrent()) { diagnosticQuery.loading = false; updateDiagnosticResults(); }
+        }
     }
 
     function renderDiagnostics(datasets) {
         if (!canViewDiagnostics()) return renderEmptyState('目前沒有「安全設定檢視」權限，無法查看裝置登入診斷。');
         const data = datasets.security?.deviceLoginDiagnostics || {}, filter = filters.diagnostics;
-        return `<section data-directory-kind="diagnostics" aria-label="最近 14 日裝置登入診斷"><div class="directory-range"><strong>${data.range ? `${esc(data.range.startDate)} — ${esc(data.range.endDate)}` : '最近 14 日'}</strong><span>台北時間 · 今天及前 13 日 · 最新 ${esc(data.limit || 200)} 筆</span></div>
-            <p class="helper-text">預設顯示失敗；搜尋工號、姓名或裝置 ID，再切換「全部」比對成功與失敗的瀏覽器、來源網址及憑證有無。成功事件也會記錄，以便追查新裝置 ID 的來源；此頁不會解除綁定。</p>
-            <p class="helper-text">新版啟用前沒有留下的失敗不會補記；此清單只涵蓋伺服器收到並記錄的驗證，網路連線失敗可能沒有紀錄。「有提供憑證」只表示請求有攜帶憑證，不代表有效；名稱、IP 或相同瀏覽器資訊不能直接判定實體電腦相同。</p>
-            <div class="directory-filter-row directory-diagnostic-filters"><label class="field directory-search"><span>搜尋裝置診斷</span><input data-directory-filter="query" value="${esc(filter.query)}" placeholder="工號、姓名、裝置 ID、錯誤碼或來源網址"></label><label class="field"><span>診斷結果</span><select data-directory-filter="status"><option value="" ${filter.status === '' ? 'selected' : ''}>全部</option><option value="failure" ${filter.status === 'failure' ? 'selected' : ''}>失敗</option><option value="success" ${filter.status === 'success' ? 'selected' : ''}>成功</option></select></label><button class="outline-btn" type="button" data-directory-action="reset" data-kind="diagnostics">重設為失敗紀錄</button></div><div data-directory-results>${renderDiagnosticResults(data)}</div></section>`;
+        const scheduledIdentity = sessionIdentity(), scheduledGeneration = sessionGeneration;
+        Promise.resolve().then(() => {
+            if (scheduledIdentity === sessionIdentity() && scheduledGeneration === sessionGeneration && !diagnosticQuery.data && !diagnosticQuery.loading && !diagnosticQuery.error && document.querySelector('[data-directory-kind="diagnostics"]')) loadDiagnostics();
+        });
+        const employees = [...(datasets.employees || [])].sort((a, b) => String(a.id).localeCompare(String(b.id), 'zh-TW'));
+        return `<section data-directory-kind="diagnostics" aria-label="裝置登入診斷查詢">
+            <p class="helper-text">預設查詢最近 14 日失敗紀錄。選擇員工、日期及結果後按「查詢診斷」；伺服器會先查該員工，再分頁顯示，不受工作台摘要最新 200 筆限制。未驗證帳號仍會標明身分尚未確認。</p>
+            <p class="helper-text">不會補記過去未留下的登入失敗；網路連線失敗可能沒有紀錄。儲存可用只代表當下可存取，不保證關閉瀏覽器後仍保留。相同名稱、IP 或瀏覽器資訊不能直接判定是同一台實體電腦。</p>
+            <form data-directory-diagnostics-query><div class="directory-filter-row directory-diagnostic-filters"><label class="field"><span>診斷員工</span><select data-directory-filter="employeeId"><option value="">全部員工與未確認帳號</option>${employees.map(employee => `<option value="${esc(employee.id)}" ${filter.employeeId === employee.id ? 'selected' : ''}>${esc(employee.id)} / ${esc(employee.name)}</option>`).join('')}</select></label><label class="field"><span>開始日期</span><input type="date" required data-directory-filter="startDate" value="${esc(filter.startDate)}"></label><label class="field"><span>結束日期</span><input type="date" required data-directory-filter="endDate" value="${esc(filter.endDate)}"></label><label class="field"><span>診斷結果</span><select data-directory-filter="status"><option value="all" ${filter.status === 'all' ? 'selected' : ''}>全部</option><option value="failure" ${filter.status === 'failure' ? 'selected' : ''}>失敗</option><option value="success" ${filter.status === 'success' ? 'selected' : ''}>成功</option></select></label><button class="primary-btn" type="submit">查詢診斷</button><button class="outline-btn" type="button" data-directory-action="reset" data-kind="diagnostics">重設最近 14 日</button></div></form><div data-directory-results aria-live="polite">${renderDiagnosticResults()}</div>
+            <details class="directory-diagnostic-preview"><summary>工作台載入時摘要（僅最近 14 日最新 ${esc(data.limit || 200)} 筆，不套用上方查詢）</summary><p class="helper-text">這是載入工作台當時的有限摘要，不能用來判斷某位員工沒有其他紀錄。請以上方伺服器查詢為準。</p>${renderDiagnosticRecords(Array.isArray(data.records) ? data.records : [])}</details></section>`;
     }
 
     function renderRemote(datasets) {
@@ -228,7 +279,8 @@
         if (!section) return;
         const kind = section.dataset.directoryKind;
         filters[kind][control.dataset.directoryFilter] = control.value;
-        section.querySelector('[data-directory-results]').innerHTML = kind === 'devices' ? renderDeviceResults(deviceGroups()) : kind === 'diagnostics' ? renderDiagnosticResults(security().deviceLoginDiagnostics) : renderRemoteResults(security().recentBrowserPunchEmployees || []);
+        if (kind === 'diagnostics') return;
+        section.querySelector('[data-directory-results]').innerHTML = kind === 'devices' ? renderDeviceResults(deviceGroups()) : renderRemoteResults(security().recentBrowserPunchEmployees || []);
     }
 
     document.addEventListener('input', (event) => {
@@ -250,14 +302,31 @@
         if (action === 'remote') showRemote(employeeId);
         if (action === 'remove-one') confirmRemoval(employeeId, button.dataset.deviceId);
         if (action === 'remove-all') confirmRemoval(employeeId);
+        if ((action === 'diagnostics-previous' || action === 'diagnostics-next') && !diagnosticQuery.loading && diagnosticQuery.data) {
+            const page = Number(diagnosticQuery.data.page) || 1;
+            const next = page + (action === 'diagnostics-next' ? 1 : -1);
+            const pages = Math.max(1, Math.ceil(Number(diagnosticQuery.data.total) / Number(diagnosticQuery.data.pageSize)));
+            if (next >= 1 && next <= pages) loadDiagnostics(next, diagnosticQuery.applied);
+        }
         if (action === 'reset') {
             const kind = button.dataset.kind;
             filters[kind] = defaultFilter(kind);
+            if (kind === 'diagnostics') {
+                diagnosticQuery.request += 1; diagnosticQuery.loading = false;
+                diagnosticQuery.data = null; diagnosticQuery.error = ''; diagnosticQuery.applied = null;
+            }
             const section = button.closest('[data-directory-kind]');
             section.outerHTML = kind === 'devices' ? renderDevices(getDatasets()) : kind === 'diagnostics' ? renderDiagnostics(getDatasets()) : renderRemote(getDatasets());
         }
     });
     document.addEventListener('submit', async (event) => {
+        const queryForm = event.target.closest('[data-directory-diagnostics-query]');
+        if (queryForm) {
+            event.preventDefault();
+            if (!queryForm.checkValidity()) { queryForm.reportValidity(); return; }
+            await loadDiagnostics(1);
+            return;
+        }
         const form = event.target.closest('[data-directory-confirm]');
         if (!form) return;
         event.preventDefault();

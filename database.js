@@ -14,6 +14,7 @@ const { createAnnualLeaveStore } = require('./annual-leave-store');
 const { createReviewWorkflow } = require('./review-workflow');
 const { createDashboardMetricStore } = require('./dashboard-metrics');
 const { createSalaryAdvanceStore } = require('./salary-advances');
+const { createDeviceRecoveryStore } = require('./device-recovery-store');
 const { normalizeLeavePay } = require('./leave-type-pay');
 const { normalizeLeaveDateSelection, getLeaveDateSegments, EXPLICIT_DATES, EXPLICIT_SEGMENTS, LEGACY_RANGE } = require('./leave-date-selection');
 let db = null;
@@ -27,6 +28,7 @@ let annualLeave = null;
 let reviewWorkflow = null;
 let dashboardMetrics = null;
 let salaryAdvances = null;
+let deviceRecovery = null;
 let currentDbFilePath = '';
 
 function init(dbFilePath) {
@@ -299,6 +301,7 @@ function init(dbFilePath) {
     CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_id ON audit_logs (actor_id);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs (action);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_target_type ON audit_logs (target_type);
+    CREATE INDEX IF NOT EXISTS idx_audit_device_diagnostics ON audit_logs (target_type, timestamp DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_audit_archives_created_at ON audit_archives (created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_audit_archives_month ON audit_archives (archive_month);
     CREATE INDEX IF NOT EXISTS idx_external_api_keys_hash ON external_api_keys (key_hash);
@@ -522,6 +525,7 @@ function init(dbFilePath) {
   reviewWorkflow = createReviewWorkflow(db);
   dashboardMetrics = createDashboardMetricStore(db, (entry) => addAuditLog(entry));
   salaryAdvances = createSalaryAdvanceStore(db, (entry) => addAuditLog(entry));
+  deviceRecovery = createDeviceRecoveryStore(db, (entry) => addAuditLog(entry));
 }
 
 function close() {
@@ -538,6 +542,7 @@ function close() {
   reviewWorkflow = null;
   dashboardMetrics = null;
   salaryAdvances = null;
+  deviceRecovery = null;
   currentDbFilePath = '';
 }
 
@@ -2328,6 +2333,21 @@ const queryAuditLogs = (filters = {}) => {
     return rows.map(mapAuditLogRow);
 };
 
+const queryDeviceLoginDiagnostics = ({ employeeId = '', startAt, endAt, result = 'all', page = 1, pageSize = 50 }) => {
+    const clauses = ["target_type = 'device_login'", 'timestamp >= ?', 'timestamp < ?'];
+    const params = [startAt, endAt];
+    if (employeeId) {
+        clauses.push("(target_id = ? OR (json_valid(after_json) AND json_extract(after_json, '$.submittedAccount') = ?))");
+        params.push(employeeId, employeeId);
+    }
+    if (result !== 'all') clauses.push(result === 'success' ? 'success = 1' : 'success = 0');
+    const where = clauses.join(' AND ');
+    const total = get(`SELECT COUNT(*) total FROM audit_logs WHERE ${where}`, ...params).total;
+    const records = all(`SELECT * FROM audit_logs WHERE ${where} ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?`,
+        ...params, pageSize, (page - 1) * pageSize).map(mapAuditLogRow);
+    return { records, total };
+};
+
 const countAuditLogs = (filters = {}) => {
     const { whereSql, params } = buildAuditLogWhere(filters);
     const row = get(`SELECT COUNT(*) AS total FROM audit_logs ${whereSql}`, ...params);
@@ -2375,6 +2395,8 @@ module.exports = {
   getReviewWorkflow: () => reviewWorkflow,
   getDashboardMetrics: () => dashboardMetrics,
   getSalaryAdvances: () => salaryAdvances,
+  getDeviceRecovery: () => deviceRecovery,
+  queryDeviceLoginDiagnostics,
   getMeals: () => meals,
   init, close,
   getDatabasePath, backupDatabase, validateBackupDatabaseFile, replaceDatabaseFromBackup,

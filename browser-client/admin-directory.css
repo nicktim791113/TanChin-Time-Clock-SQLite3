@@ -33,7 +33,14 @@
 .directory-dialog .directory-confirm-submit::before,.directory-dialog .directory-confirm-submit::after { display: none; }
 .directory-confirm-submit:disabled { opacity: .4; cursor: not-allowed; }
 .directory-manual-history { border-top: 1px solid #e2e8f0; padding-top: 20px; margin-top: 24px; }
-.directory-diagnostic-filters { grid-template-columns: minmax(220px, 2fr) minmax(140px, 1fr) auto; }
+.directory-diagnostic-filters { grid-template-columns: minmax(200px, 1.5fr) repeat(2, minmax(140px, 1fr)) minmax(100px, .7fr); }
+.directory-diagnostic-filters button { min-width: 0; }
+.directory-diagnostic-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; margin-top: 16px; }
+.directory-diagnostic-pagination span { font-size: .86rem; }
+.directory-diagnostic-preview { margin-top: 24px; border-top: 1px solid var(--border-color, #dbe3ec); padding-top: 14px; }
+.directory-diagnostic-preview > summary { cursor: pointer; font-size: .86rem; color: var(--muted-text, #687887); }
+.directory-diagnostic-error { color: #b91c1c; overflow-wrap: anywhere; }
+.directory-diagnostic-outcome { margin-top: 14px; border-top: 1px solid var(--border-color, #dbe3ec); padding-top: 14px; }
 .directory-diagnostic-list { display: grid; gap: 14px; max-height: 60vh; overflow: auto; padding: 2px 6px 8px 2px; }
 .directory-diagnostic { min-width: 0; border: 1px solid var(--border-color, #dbe3ec); border-radius: 12px; padding: 16px; background: var(--panel-bg, #fff); }
 .directory-diagnostic-heading { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; }

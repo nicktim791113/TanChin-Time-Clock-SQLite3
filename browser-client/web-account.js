@@ -167,7 +167,7 @@ async function switchWebWorkspace(role) {
     closeRealtimeSync();
     try {
         const result = await requestJson("/api/browser/workspace", { method: "POST", auth: true, body: { role, deviceInfo: buildClientDeviceInfo() } });
-        storeIssuedDeviceToken(result.deviceBinding?.issuedDeviceToken || "", result.dashboard?.user?.id, result.deviceBinding?.deviceId || "");
+        await persistBrowserDeviceBinding(result);
         state.token = result.token;
         sessionStorage.setItem("browserPortalToken", result.token);
         renderDashboard(result.dashboard);
@@ -176,6 +176,7 @@ async function switchWebWorkspace(role) {
     } catch (error) {
         switcher.value = state.dashboard?.role || "";
         setMessage(ui.dashboardMessage, error.message, "error");
+        if (/P21[237]/.test(error.message)) window.DeviceRecovery?.offer();
         initializeRealtimeSync();
     } finally {
         workspaceSwitchBusy = false;

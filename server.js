@@ -18,6 +18,8 @@ const { attachSalaryAdvanceRoutes, SALARY_ADVANCE_PERMISSIONS } = require('./sal
 const { buildDashboardMetrics, attachDashboardMetricRoutes } = require('./dashboard-metrics');
 const { recentTaipeiDateRange, groupBrowserPunches, confirmedDeviceClear } = require('./admin-security-data');
 const { buildDeviceLoginDiagnostic, mapDeviceLoginDiagnostic } = require('./browser-device-diagnostics');
+const { tokenCandidates, verifyDeviceProof } = require('./device-proof');
+const { attachDeviceRecoveryRoutes } = require('./device-recovery');
 const { normalizeLeavePay } = require('./leave-type-pay');
 const {
   ATTENDANCE_EXPORT_FIELD_DEFINITIONS,
@@ -1296,6 +1298,7 @@ function normalizeClientDeviceInfo(deviceInfo = {}) {
   return {
     deviceId,
     deviceToken,
+    deviceTokenCandidates: tokenCandidates(deviceInfo),
     platform,
     browserName,
     deviceName,
@@ -3790,72 +3793,49 @@ function writeDeviceLoginDiagnostic(request, { stage, success, error, employee =
   }
 }
 
-function authorizeEmployeeDeviceForLogin(employee, request, deviceInfo = {}) {
+function authorizeEmployeeDeviceForLogin(employee, request, deviceInfo = {}, options = {}) {
   const securitySettings = getBrowserSecuritySettings();
+  const devices = dbModule.loadEmployeeDevices(employee.id);
+  request.deviceAuthorization = { originalDeviceId: deviceInfo.deviceId || '', canonicalDeviceId: '',
+    boundDeviceCountBefore: devices.length, boundDeviceCountAfter: devices.length, bindingOutcome: 'blocked',
+    tokenVerification: 'not_required', tokenCandidateCount: tokenCandidates(deviceInfo).length };
   if (!securitySettings.deviceBindingEnabled) {
-    return {
-      securitySettings,
-      deviceRecord: null,
-      issuedDeviceToken: null,
-      boundDeviceCount: dbModule.loadEmployeeDevices(employee.id).length,
-      newlyBound: false
-    };
+    request.deviceAuthorization.bindingOutcome = 'disabled';
+    return { securitySettings, deviceRecord: null, issuedDeviceToken: null, boundDeviceCount: devices.length, newlyBound: false };
   }
-
-  // A retained secret can recover its original binding after the local ID was lost or changed.
-  // Never infer device ownership from IP, browser metadata, or an unverified client ID.
-  let existingDevice = deviceInfo.deviceId ? dbModule.getEmployeeDevice(employee.id, deviceInfo.deviceId) : null;
-  if (deviceInfo.deviceToken && (!existingDevice || existingDevice.device_token_hash !== hashDeviceToken(deviceInfo.deviceToken))) {
-    const providedHash = hashDeviceToken(deviceInfo.deviceToken);
-    const matches = dbModule.loadEmployeeDevices(employee.id).filter((row) => row.device_token_hash === providedHash);
-    if (matches.length === 1) {
-      existingDevice = matches[0];
-      deviceInfo.deviceId = existingDevice.device_id;
-      request.deviceIdentityRecovered = true;
-    }
+  const proof = verifyDeviceProof(devices, deviceInfo);
+  request.deviceAuthorization.tokenVerification = proof.verification;
+  if (proof.verification === 'ambiguous') {
+    throw createHttpError(withSupportCode('P217', '找到多個不同綁定的有效憑證，請由管理者確認要恢復的原裝置。'), 403);
   }
-
+  if (proof.device) {
+    const recovered = deviceInfo.deviceId !== proof.device.device_id || deviceInfo.deviceToken !== proof.token;
+    deviceInfo.deviceId = proof.device.device_id;
+    request.deviceIdentityRecovered = recovered;
+    Object.assign(request.deviceAuthorization, { canonicalDeviceId: deviceInfo.deviceId, bindingOutcome: recovered ? 'recovered' : 'existing' });
+    const updatedDevice = buildEmployeeDeviceRecord(employee.id, deviceInfo, request, proof.device);
+    if (!options.dryRun) dbModule.saveEmployeeDevice(updatedDevice);
+    return { securitySettings, deviceRecord: updatedDevice, issuedDeviceToken: null, verifiedDeviceToken: proof.token,
+      identityRecovered: recovered, boundDeviceCount: devices.length, newlyBound: false };
+  }
   if (!deviceInfo.deviceId) {
     throw createHttpError(withSupportCode('P211', '此帳號已啟用裝置綁定，請使用支援本地儲存的瀏覽器登入。'), 400);
   }
-
-  if (existingDevice) {
-    const providedHash = deviceInfo.deviceToken ? hashDeviceToken(deviceInfo.deviceToken) : '';
-    if (!providedHash || existingDevice.device_token_hash !== providedHash) {
-      throw createHttpError(withSupportCode('P212', '此裝置缺少有效綁定憑證，請改用原本綁定的裝置或請管理者解除後重新綁定。'), 403);
-    }
-
-    const updatedDevice = buildEmployeeDeviceRecord(employee.id, deviceInfo, request, existingDevice);
-    dbModule.saveEmployeeDevice(updatedDevice);
-    return {
-      securitySettings,
-      deviceRecord: updatedDevice,
-      issuedDeviceToken: null,
-      boundDeviceCount: dbModule.loadEmployeeDevices(employee.id).length,
-      newlyBound: false
-    };
+  if (devices.some((row) => row.device_id === deviceInfo.deviceId)) {
+    throw createHttpError(withSupportCode('P212', '此裝置缺少有效綁定憑證，請使用原綁定裝置或申請管理者確認恢復原裝置。'), 403);
   }
-
   if (deviceInfo.localStorageStatus === 'unavailable' && deviceInfo.cookieStorageStatus === 'unavailable') {
     throw createHttpError(withSupportCode('P216', '無法保存裝置綁定資料，請允許此網站使用網站資料或 Cookie 後再登入。'), 400);
   }
-  const employeeDevices = dbModule.loadEmployeeDevices(employee.id);
-  if (employeeDevices.length >= securitySettings.maxDevicesPerEmployee) {
-    throw createHttpError(withSupportCode('P213', `此裝置尚未綁定，已達每人 ${securitySettings.maxDevicesPerEmployee} 台上限；請使用已綁定裝置，或請管理者確認舊裝置。`), 403);
+  if (devices.length >= securitySettings.maxDevicesPerEmployee) {
+    throw createHttpError(withSupportCode('P213', `此裝置尚未綁定，已達每人 ${securitySettings.maxDevicesPerEmployee} 台上限；請使用已綁定裝置，或申請管理者確認恢復原裝置。`), 403);
   }
-
+  if (options.dryRun) return { securitySettings, deviceRecord: null, boundDeviceCount: devices.length, newlyBound: false };
   const issuedDeviceToken = crypto.randomBytes(32).toString('hex');
-  const deviceRecord = buildEmployeeDeviceRecord(employee.id, deviceInfo, request, null, {
-    deviceTokenHash: hashDeviceToken(issuedDeviceToken)
-  });
+  const deviceRecord = buildEmployeeDeviceRecord(employee.id, deviceInfo, request, null, { deviceTokenHash: hashDeviceToken(issuedDeviceToken) });
   dbModule.saveEmployeeDevice(deviceRecord);
-  return {
-    securitySettings,
-    deviceRecord,
-    issuedDeviceToken,
-    boundDeviceCount: employeeDevices.length + 1,
-    newlyBound: true
-  };
+  Object.assign(request.deviceAuthorization, { canonicalDeviceId: deviceInfo.deviceId, bindingOutcome: 'new', boundDeviceCountAfter: devices.length + 1 });
+  return { securitySettings, deviceRecord, issuedDeviceToken, boundDeviceCount: devices.length + 1, newlyBound: true };
 }
 
 // Sensitive employee actions must not continue on a removed binding or create a replacement binding.
@@ -7924,6 +7904,15 @@ function createServerApp() {
 
   attachExternalApiRoutes(server);
   attachBrowserRoutes(server);
+  attachDeviceRecoveryRoutes(server, {
+    db: dbModule, accounts: browserAccounts, getEmployee: getEmployeeById,
+    normalizeDeviceInfo: normalizeClientDeviceInfo, authorizeDevice: authorizeEmployeeDeviceForLogin,
+    getSettings: getBrowserSecuritySettings, buildDevice: buildEmployeeDeviceRecord,
+    requireSession: requireBrowserSession, requirePermission: requireAdminPermission,
+    auditEntry: buildBrowserAuditLogEntry, mapDevice: mapEmployeeDeviceForDashboard,
+    recordDiagnostic: writeDeviceLoginDiagnostic, mapDiagnostic: mapDeviceLoginDiagnostic,
+    notify: (request) => { notifyDesktop('employeeDevices', getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); }
+  });
   const backupRoutes = attachDatabaseBackupRoutes(server, {
     db: dbModule, requireSession: requireBrowserSession, requireRole: requireBrowserRole,
     getSettings: getDatabaseBackupSettings, createBackup: createDatabaseBackup,

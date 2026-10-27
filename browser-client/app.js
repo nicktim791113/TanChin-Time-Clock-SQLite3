@@ -7858,6 +7858,7 @@ function buildClientDeviceInfo(employeeId = "") {
     return {
         deviceId: identity.deviceId,
         deviceToken: identity.deviceToken,
+        deviceTokenCandidates: identity.deviceTokenCandidates,
         deviceName: identity.deviceName,
         browserName: detectBrowserName(),
         platform: detectPlatformName(),
@@ -7870,7 +7871,30 @@ function buildClientDeviceInfo(employeeId = "") {
 
 function storeIssuedDeviceToken(token, employeeId = "", canonicalDeviceId = "") {
     if (!token && !canonicalDeviceId) return;
-    getBrowserDeviceIdentityStore().save(token, employeeId, canonicalDeviceId);
+    return getBrowserDeviceIdentityStore().save(token, employeeId, canonicalDeviceId);
+}
+
+async function persistBrowserDeviceBinding(result) {
+    const binding = result.deviceBinding;
+    if (!binding?.enabled || !binding.deviceId) return;
+    let status;
+    try {
+        status = storeIssuedDeviceToken(binding.issuedDeviceToken || binding.verifiedDeviceToken || "", result.dashboard?.user?.id, binding.deviceId);
+    } catch (error) {
+        reportBrowserDeviceStorage(result.token, binding.deviceId, error.devicePersistence || { persisted: false });
+        throw error;
+    }
+    reportBrowserDeviceStorage(result.token, binding.deviceId, status || { persisted: true });
+}
+
+function reportBrowserDeviceStorage(token, deviceId, status) {
+    if (!token) return;
+    // Telemetry cannot turn a valid login into a failure; never send credentials in its body.
+    fetch('/api/browser/device-storage-status', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ deviceId, persisted: status.persisted === true,
+            localStorageStatus: status.localStorageStatus || 'unknown', cookieStorageStatus: status.cookieStorageStatus || 'unknown' })
+    }).catch(() => {});
 }
 
 function describeGeolocationError(error) {
@@ -8090,6 +8114,10 @@ function renderAdminSecuritySection(datasets) {
                 <h3>裝置登入診斷</h3>
                 ${window.AdminDirectory.renderDiagnostics(datasets)}
             </article>
+            <article class="table-card">
+                <h3>原裝置恢復申請</h3>
+                ${window.DeviceRecovery?.renderAdmin() || ''}
+            </article>
         </div>
     `;
 }
@@ -8168,7 +8196,7 @@ handleLoginSubmit = async function handleLoginSubmitSecurityOverride(event) {
             }
         });
 
-        storeIssuedDeviceToken(result.deviceBinding?.issuedDeviceToken || "", result.dashboard?.user?.id, result.deviceBinding?.deviceId || "");
+        await persistBrowserDeviceBinding(result);
         state.token = result.token;
         sessionStorage.setItem("browserPortalToken", state.token);
         ui.loginView.classList.add("hidden");
@@ -8181,6 +8209,7 @@ handleLoginSubmit = async function handleLoginSubmitSecurityOverride(event) {
         setMessage(ui.dashboardMessage, loginMessage, "success");
     } catch (error) {
         setMessage(ui.loginMessage, error.message, "error");
+        if (/P21[237]/.test(error.message)) window.DeviceRecovery?.offer();
     } finally {
         ui.loginSubmitBtn.disabled = false;
     }
@@ -12378,7 +12407,8 @@ const workspaceSubnavConfigs = {
                         { id: "recent", label: "最近遠端打卡", panelIndex: 3 },
                         { id: "punchPermissions", label: "員工網頁打卡權限", panelIndex: 4 },
                         { id: "requestHistory", label: "員工紀錄可見範圍", panelIndex: 5 },
-                        { id: "deviceDiagnostics", label: "裝置登入診斷", panelIndex: 6 }
+                        { id: "deviceDiagnostics", label: "裝置登入診斷", panelIndex: 6 },
+                        { id: "deviceRecovery", label: "原裝置恢復申請", panelIndex: 7 }
                     ]
                 }
             ]

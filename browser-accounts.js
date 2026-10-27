@@ -169,7 +169,8 @@ function createBrowserAccounts(context) {
       deviceName: authorization?.deviceRecord?.device_name || device.deviceName || '',
       maxDevicesPerEmployee: authorization?.securitySettings?.maxDevicesPerEmployee ?? 4,
       boundDeviceCount: authorization?.boundDeviceCount ?? 0,
-      issuedDeviceToken: authorization?.issuedDeviceToken || '' };
+      issuedDeviceToken: authorization?.issuedDeviceToken || '',
+      verifiedDeviceToken: authorization?.verifiedDeviceToken || '', identityRecovered: authorization?.identityRecovered === true };
   }
 
   function sessionMetadata(request, device, extra) {
@@ -230,6 +231,37 @@ function createBrowserAccounts(context) {
     db.addAuditLog(auditEntry(request, { action: 'login', target_type: 'session', target_id: id, summary: '網頁個人帳號登入。', after_data: { role: activeRole, auth_method: extra.authMethod } }));
     response.json({ success: true, token, dashboard: buildDashboard(request.browserSession), deviceBinding: deviceBinding(authorization, device) });
   }, 'login');
+
+  async function authenticateRecovery(request) {
+    const id = String(request.body?.employeeId || '').trim();
+    const secret = request.body?.secret;
+    if (!id || typeof secret !== 'string' || !secret || secret.length > 128) throw httpError('請輸入工號與卡號或個人網頁密碼。');
+    // Share the login bucket; a second endpoint must not double the password-guess budget.
+    throttle(request, `login:${id}`);
+    const employee = getEmployee(id);
+    if (!employee) throw httpError('工號與卡號或個人網頁密碼不正確。', 401);
+    if (employee.card && String(employee.card).trim() === secret.trim()) {
+      request.deviceDiagnosticEmployee = employee;
+      return { employee, authSignature: `card:${fingerprint(employee.card)}` };
+    }
+    const stored = db.getWebCredential(id);
+    if (!await credentials.verifyPassword(stored?.credential, secret) || db.getWebCredential(id)?.revision !== stored?.revision) {
+      throw httpError('工號與卡號或個人網頁密碼不正確。', 401);
+    }
+    request.deviceDiagnosticEmployee = employee;
+    return { employee, authSignature: `web:${stored.revision}` };
+  }
+
+  function validRecoveryIdentity(employeeId, signature) {
+    const employee = getEmployee(employeeId);
+    return !!employee && (signature === `card:${fingerprint(employee.card || '')}` || signature === `web:${db.getWebCredential(employeeId)?.revision}`);
+  }
+
+  function revokeDevice(employeeId, deviceId) {
+    for (const [token, session] of sessions) {
+      if ((session.realEmployeeId || session.employeeId) === employeeId && session.deviceId === deviceId) revoke(token);
+    }
+  }
 
   async function reauthenticate(request) {
     const session = request.browserSession;
@@ -369,7 +401,7 @@ function createBrowserAccounts(context) {
     }
   }
 
-  return { attachRoutes, requireSession, validSession, effectiveRoles, decorateDashboard, pendingDashboard, revoke, revokeEmployee, revokeSystemAdmins };
+  return { attachRoutes, requireSession, validSession, effectiveRoles, decorateDashboard, pendingDashboard, revoke, revokeEmployee, revokeSystemAdmins, authenticateRecovery, validRecoveryIdentity, revokeDevice };
 }
 
 module.exports = { createBrowserAccounts, RESET_PERMISSION, REVEAL_PERMISSION };

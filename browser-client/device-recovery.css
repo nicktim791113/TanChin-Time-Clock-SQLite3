@@ -1,0 +1,20 @@
+.recovery-dialog { width: min(760px, calc(100vw - 24px)); }
+.recovery-entry { margin-top: 16px; }
+.recovery-list { display: grid; gap: 12px; margin-top: 16px; }
+.recovery-card { min-width: 0; padding: 16px; border: 1px solid var(--border-color, #dbe3ec); border-radius: 12px; overflow-wrap: anywhere; }
+.recovery-card .primary-btn { margin-top: 12px; }
+.recovery-status { padding: 14px; border-radius: 10px; background: #eff6ff; color: #1e3a5f; overflow-wrap: anywhere; }
+.recovery-status p { margin: 8px 0 0; }
+.recovery-choices { min-width: 0; padding: 12px; border: 1px solid #dbe3ec; border-radius: 10px; }
+.recovery-choice { display: flex; align-items: flex-start; gap: 10px; padding: 12px 4px; border-bottom: 1px solid #e2e8f0; }
+.recovery-choice:last-child { border-bottom: 0; }
+.recovery-choice input { margin-top: 4px; flex: 0 0 auto; }
+.recovery-choice span { min-width: 0; overflow-wrap: anywhere; }
+.recovery-choice small { display: block; margin-top: 4px; color: #64748b; }
+.recovery-dialog p { line-height: 1.65; }
+.recovery-dialog .field input,.recovery-dialog .field textarea { width: 100%; box-sizing: border-box; }
+@media (max-width: 540px) {
+    .recovery-dialog .form-toolbar { display: grid; grid-template-columns: 1fr; }
+    .recovery-card .list-toolbar { align-items: flex-start; flex-direction: column; }
+    .recovery-dialog .modal-header h2 { font-size: 1.05rem; }
+}
