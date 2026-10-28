@@ -98,3 +98,26 @@ test('second-employee audit failure rolls back every assignment and the first au
         assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM audit_test').get().n, 0);
     } finally { sql.close(); }
 });
+
+test('reason preset audit failure atomically preserves saved values and revision, including across store recreation', () => {
+    const sql = new Database(':memory:');
+    try {
+        sql.exec("CREATE TABLE employees (id TEXT PRIMARY KEY, name TEXT, department TEXT); CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE audit_test (target TEXT); INSERT INTO employees VALUES ('E1','Employee','A'),('S1','Supervisor','A');");
+        let failAudit = false;
+        const addAudit = (entry) => {
+            sql.prepare('INSERT INTO audit_test VALUES (?)').run(entry.target_id);
+            if (failAudit) throw new Error('Preset audit failure');
+        };
+        let store = createSupervisorStore(sql, addAudit);
+        const audit = (entry) => ({ ...entry, actor_id: 'S1' });
+        store.saveAssignments({ employeeId: 'E1', supervisorIds: ['S1'], reason: 'Fixture assignment', revision: store.assignmentsState().employees.find((e) => e.id === 'E1').revision }, audit);
+        const saved = store.saveReasonPresets('S1', { values: ['One', 'Two'], revision: store.reasonPresets('S1').revision }, audit);
+        store = createSupervisorStore(sql, addAudit);
+        assert.deepEqual(store.reasonPresets('S1'), saved);
+        const count = sql.prepare('SELECT COUNT(*) AS n FROM audit_test').get().n;
+        failAudit = true;
+        assert.throws(() => store.saveReasonPresets('S1', { values: ['Changed', 'Other'], revision: saved.revision }, audit), /Preset audit failure/);
+        assert.deepEqual(store.reasonPresets('S1'), saved);
+        assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM audit_test').get().n, count);
+    } finally { sql.close(); }
+});

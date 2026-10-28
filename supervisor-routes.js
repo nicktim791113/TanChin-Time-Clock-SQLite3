@@ -1,12 +1,19 @@
 const crypto = require('node:crypto');
 const { monthRange, buildCalendar } = require('./request-calendar');
-const { proxyReason, requirePersonalSupervisor } = require('./supervisor-management');
+const { proxyReason, requirePersonalSupervisor, isSupervisorSimulation } = require('./supervisor-management');
 const { normalizeLeaveDateSelection, leaveOverlapsRange, getLeaveDateSegments } = require('./leave-date-selection');
 
 function fail(message, status = 400) { throw Object.assign(new Error(message), { status }); }
 function requestPeriod(body, kind) {
     if (kind === 'leave' && body.dateSelectionMode === 'explicit_segments') {
-        return normalizeLeaveDateSelection({ date_selection_mode: 'explicit_segments', leave_segments: body.leaveSegments });
+        const period = normalizeLeaveDateSelection({ date_selection_mode: 'explicit_segments', leave_segments: body.leaveSegments });
+        for (const segment of period.leave_segments) {
+            if (!Object.hasOwn(segment, 'breakMinutes')) fail('每段請假須填寫休息分鐘。');
+            const minutes = (segment.endAt - segment.startAt) / 60000;
+            if (!Number.isInteger(minutes) || segment.startAt % 60000 || segment.endAt % 60000 ||
+                segment.hours !== Math.floor((minutes - segment.breakMinutes) * 100 / 60) / 100) fail('請假時數須依起訖時間扣除休息分鐘自動計算。');
+        }
+        return period;
     }
     const parse = (date, time) => {
         if (typeof date !== 'string' || !monthRange(date.slice(0, 7)).dates.includes(date) ||
@@ -21,7 +28,8 @@ function requestPeriod(body, kind) {
             date_selection_mode: body.dateSelectionMode, daily_hours: body.dailyHours }) };
     }
     if (kind === 'leave' && body.dateSelectionMode != null && body.dateSelectionMode !== 'legacy_range') fail('請假日期選取模式不正確。');
-    const hours = body.durationHours == null || body.durationHours === '' ? (end - start) / 3600000 : Number(body.durationHours);
+    const hours = kind === 'overtime' ? Math.floor((end - start) / 60000 * 100 / 60) / 100 :
+        body.durationHours == null || body.durationHours === '' ? (end - start) / 3600000 : Number(body.durationHours);
     if (!Number.isFinite(hours) || Math.round(hours * 100) <= 0) fail('請輸入有效時數。');
     return { start_at: start, end_at: end, duration_hours: Math.round(hours * 100) / 100 };
 }
@@ -58,29 +66,38 @@ function attachSupervisorRoutes(server, context) {
         notify(request, 'supervisorAssignments');
         response.json({ success: true, ...result, message: `${result.updatedCount} 位員工的指定代辦主管已批量儲存。`, assignments: store().assignmentsState() });
     }));
-    function requireSupervisor(request) {
-        requirePersonalSupervisor(request.browserSession);
-        validateBoundDevice(request.browserSession);
+    function requireSupervisor(request, readOnly = false) {
+        if (!(readOnly && isSupervisorSimulation(request.browserSession))) {
+            requirePersonalSupervisor(request.browserSession);
+            validateBoundDevice(request.browserSession);
+        }
+        if (!readOnly && !store().assignedEmployees(request.browserSession.employeeId).length) fail('目前沒有指定代辦員工。', 403);
     }
-    function targetFor(request, employeeId) {
-        requireSupervisor(request);
+    function targetFor(request, employeeId, readOnly = false) {
+        requireSupervisor(request, readOnly);
         const target = store().assignedEmployees(request.browserSession.employeeId).find((e) => e.id === employeeId);
         if (!target) fail('只能代辦目前明確指定給自己的員工，主管授權可能已變更。', 403);
         return target;
     }
-    function targetsFor(request, body) {
+    function targetsFor(request, body, readOnly = false) {
         const ids = body.employeeIds === undefined ? [body.employeeId] : body.employeeIds;
         if (!Array.isArray(ids) || !ids.length || ids.length > 100 || ids.some((id) => typeof id !== 'string' || !id)) fail('請選擇 1 至 100 位代辦員工。');
         if (new Set(ids).size !== ids.length) fail('代辦員工不可重複。');
-        return ids.map((id) => targetFor(request, id));
+        return ids.map((id) => targetFor(request, id, readOnly));
     }
-    server.get('/api/browser/employee/supervisor', requireSession, requireRole('employee'), handle((request, response) => {
+    server.post('/api/browser/employee/supervisor/reason-presets', requireSession, requireRole('employee'), handle((request, response) => {
         requireSupervisor(request);
+        const reasonPresets = store().saveReasonPresets(request.browserSession.employeeId, request.body || {}, (entry) => auditEntry(request, entry));
+        response.json({ success: true, reasonPresets: { ...reasonPresets, canEdit: true } });
+    }));
+    server.get('/api/browser/employee/supervisor', requireSession, requireRole('employee'), handle((request, response) => {
+        requireSupervisor(request, true);
+        const canWrite = !isSupervisorSimulation(request.browserSession);
         const range = monthRange(request.query.month);
         const employees = store().assignedEmployees(request.browserSession.employeeId);
         const employeeId = request.query.employeeId || employees[0]?.id;
         if (!employeeId) return response.json({ success: true, proxy: { employees, calendar: null, meals: null, leaveTypes: [] } });
-        targetFor(request, employeeId);
+        targetFor(request, employeeId, true);
         const kind = request.query.kind || 'leave';
         if (!['leave', 'overtime'].includes(kind)) fail('無效的代辦項目。');
         if (request.query.date && !range.dates.includes(request.query.date)) fail('日期必須位於選取月份。');
@@ -99,7 +116,8 @@ function attachSupervisorRoutes(server, context) {
         })) };
         const mealDate = request.query.date || range.dates[0];
         const mealDay = db.getMeals().dayState(mealDate);
-        response.json({ success: true, proxy: { employees, employeeId, kind, calendar,
+        response.json({ success: true, proxy: { employees, employeeId, kind, calendar, canWrite,
+            reasonPresets: { ...store().reasonPresets(request.browserSession.employeeId), canEdit: canWrite },
             batchMeal: { date: mealDate, version: mealDay.version, employees: employees.map((employee) => {
                 const row = mealDay.rows.find((item) => item.employee_id === employee.id);
                 return { id: employee.id, eligible: Boolean(row?.eligible), canChange: Boolean(row?.canChange), eating: Boolean(row?.eating) };
@@ -109,7 +127,7 @@ function attachSupervisorRoutes(server, context) {
             meals: db.getMeals().calendar({ month: range.month, employeeId }) } });
     }));
     server.post('/api/browser/employee/supervisor/leave/meal-options', requireSession, requireRole('employee'), handle((request, response) => {
-        const targets = targetsFor(request, request.body || {});
+        const targets = targetsFor(request, request.body || {}, true);
         const period = requestPeriod(request.body || {}, 'leave');
         response.json({ success: true, options: db.getMeals().getLeaveMealOptions(targets.map((row) => row.id), getLeaveDateSegments(period)) });
     }));

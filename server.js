@@ -11,6 +11,7 @@ const { createBrowserAccounts, RESET_PERMISSION, REVEAL_PERMISSION } = require('
 const { attachMealRoutes } = require('./meal-routes');
 const { attachRequestCalendarRoutes, monthRange: leaveAuditMonthRange } = require('./request-calendar');
 const { attachSupervisorRoutes } = require('./supervisor-routes');
+const { isSupervisorSimulation } = require('./supervisor-management');
 const { attachRequestHistoryRoutes } = require('./request-history');
 const { attachLeaveEntitlementRoutes } = require('./leave-entitlement-routes');
 const { attachAnnualLeaveRoutes, ANNUAL_LEAVE_PERMISSIONS } = require('./annual-leave-routes');
@@ -3333,7 +3334,10 @@ function buildEmployeeDashboard(employee, session = null) {
       canUse: reviewCount > 0 || dbModule.getReviewSupervisors().rows().some((row) => row.supervisor_id === employee.id) },
     meals: dbModule.getMeals().calendar({ employeeId: employee.id }),
     supervisorProxy: { count: dbModule.getSupervisors().assignedEmployees(employee.id).length,
-      canUse: ['card', 'web_password'].includes(session?.authMethod) && !session?.impersonation?.active },
+      canView: dbModule.getSupervisors().assignedEmployees(employee.id).length > 0 && (isSupervisorSimulation(session) ||
+        (['card', 'web_password'].includes(session?.authMethod) && !session?.impersonation?.active && (!session?.realEmployeeId || session.realEmployeeId === employee.id))),
+      canUse: ['card', 'web_password'].includes(session?.authMethod) && !session?.impersonation?.active &&
+        (!session?.realEmployeeId || session.realEmployeeId === employee.id) },
     recentRecords
   };
 }

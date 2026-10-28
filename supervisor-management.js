@@ -12,6 +12,10 @@ function requirePersonalSupervisor(session) {
         fail('主管代辦須使用主管本人的卡號或個人網頁密碼登入員工工作台。', 403);
     }
 }
+function isSupervisorSimulation(session) {
+    return session?.role === 'employee' && session.realRole === 'developer' && session.impersonation?.active === true &&
+        session.impersonation.targetEmployeeId === session.employeeId;
+}
 function createSupervisorStore(sql, addAuditLog) {
     sql.exec(`CREATE TABLE IF NOT EXISTS supervisor_assignments (
         employee_id TEXT NOT NULL, supervisor_id TEXT NOT NULL, updated_at INTEGER NOT NULL,
@@ -82,6 +86,23 @@ function createSupervisorStore(sql, addAuditLog) {
         });
         return { updatedCount: employeeIds.length, batchId };
     })();
-    return { assignedEmployees, isAssigned, assignmentsState, saveAssignments, saveAssignmentsBatch, transaction: (callback) => sql.transaction(callback)() };
+    const presetsKey = (id) => `supervisorProxyReasonPresets:${id}`;
+    const reasonPresets = (id) => {
+        const raw = sql.prepare('SELECT value FROM settings WHERE key = ?').get(presetsKey(id))?.value;
+        const saved = raw ? JSON.parse(raw) : null;
+        return saved || { values: ['員工不便操作，主管代為申請', '依員工通知，主管協助登記'], revision: 'default' };
+    };
+    const saveReasonPresets = (id, body, audit) => sql.transaction(() => {
+        if (!assignedEmployees(id).length) fail('目前沒有指定代辦員工，不能管理常用原因。', 403);
+        if (!Array.isArray(body.values) || body.values.length !== 2) fail('請設定兩個常用原因。');
+        const values = body.values.map(proxyReason), before = reasonPresets(id);
+        if (typeof body.revision !== 'string' || body.revision !== before.revision) fail('常用原因已變更，請重新整理後再儲存。', 409);
+        const after = { values, revision: crypto.randomUUID() };
+        sql.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(presetsKey(id), JSON.stringify(after));
+        addAuditLog(audit({ action: 'supervisor_reason_presets_update', target_type: 'supervisor_reason_presets', target_id: id,
+            summary: '更新主管個人常用代辦原因', before_data: before, after_data: after }));
+        return after;
+    })();
+    return { assignedEmployees, isAssigned, assignmentsState, saveAssignments, saveAssignmentsBatch, reasonPresets, saveReasonPresets, transaction: (callback) => sql.transaction(callback)() };
 }
-module.exports = { createSupervisorStore, proxyReason, requirePersonalSupervisor };
+module.exports = { createSupervisorStore, proxyReason, requirePersonalSupervisor, isSupervisorSimulation };

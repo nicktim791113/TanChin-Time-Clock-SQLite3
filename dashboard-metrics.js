@@ -100,6 +100,10 @@ function buildDashboardMetrics(db, can, summary = {}, now = Date.now(), supplied
     return { today: source.today, timeZone: 'Asia/Taipei', catalog, groups,
         roster: roster ? db.loadEmployees().map(({ id, name, department, job_title, termination_date }) => ({ id, name, department, job_title, termination_date })) : [] };
 }
+function metricApplicant(row, employees) {
+    const applicantId = String(row.applicant_id || '').trim();
+    return { applicantId, applicantName: applicantId ? employees.get(applicantId)?.name || '' : '' };
+}
 function attachDashboardMetricRoutes(server, { db, requireSession, requireAdmin, can, auditEntry, notify, formatRecord }) {
     const handle = (callback) => (request, response) => { try { callback(request, response); } catch (error) { response.status(error.statusCode || 500).json({ success: false, error: error.statusCode ? error.message : '指標處理失敗，未儲存異動。' }); } };
     server.post('/api/browser/admin/dashboard-metrics/preferences', requireSession, requireAdmin, handle((request, response) => {
@@ -140,7 +144,7 @@ function attachDashboardMetricRoutes(server, { db, requireSession, requireAdmin,
         const page = request.query.page == null ? 1 : Number(request.query.page);
         if (!Number.isSafeInteger(page) || page < 1) fail('頁碼不正確。');
         const totalPages = Math.max(1, Math.ceil(rows.length / 50)), current = Math.min(page, totalPages);
-        response.json({ success: true, detail: { metric, kind, page: current, totalPages, totalRecords: rows.length, unfilteredRecords, summary, departments, filters: { keyword, department }, records: rows.slice((current - 1) * 50, current * 50).map((r) => kind === 'salary' ? ({ requestId: r.requestId, employeeId: r.employeeId, employeeName: r.employeeName, employeeDepartment: r.department, applicationMonth: r.applicationMonth, status: r.status, entryMode: r.entryMode, requestedAmount: r.requestedAmount, approvedAmount: r.approvedAmount, revision: r.revision, updatedAt: r.updatedAt }) : kind === 'meal' ? ({ employeeId: r.employee_id, employeeName: r.name, employeeDepartment: r.department, eating: r.eating, submittedEating: r.submittedEating }) : ({ ...formatRecord(kind, r), ...(isLeaveDay ? { dayHours: dayHours(r) } : {}) })) } });
+        response.json({ success: true, detail: { metric, kind, page: current, totalPages, totalRecords: rows.length, unfilteredRecords, summary, departments, filters: { keyword, department }, records: rows.slice((current - 1) * 50, current * 50).map((r) => kind === 'salary' ? ({ requestId: r.requestId, employeeId: r.employeeId, employeeName: r.employeeName, employeeDepartment: r.department, applicationMonth: r.applicationMonth, status: r.status, entryMode: r.entryMode, requestedAmount: r.requestedAmount, approvedAmount: r.approvedAmount, revision: r.revision, updatedAt: r.updatedAt }) : kind === 'meal' ? ({ employeeId: r.employee_id, employeeName: r.name, employeeDepartment: r.department, eating: r.eating, submittedEating: r.submittedEating }) : ({ ...formatRecord(kind, r), ...metricApplicant(r, employees), ...(isLeaveDay ? { dayHours: dayHours(r) } : {}) })) } });
     }));
 }
-module.exports = { DEFAULT_CARDS, METRIC_GROUPS, createDashboardMetricStore, buildDashboardMetrics, attachDashboardMetricRoutes };
+module.exports = { metricApplicant, DEFAULT_CARDS, METRIC_GROUPS, createDashboardMetricStore, buildDashboardMetrics, attachDashboardMetricRoutes };

@@ -75,7 +75,8 @@ test('one multi-segment application retains one review, exact gaps, reports, cal
     db.getSupervisors().saveAssignments({ employeeId: 'E001', supervisorIds: ['A001'], revision: assignment.revision, reason: 'Test delegated scope' }, manager.audit);
     const proxy = await api('/employee/supervisor/leave', supervisor, { ...body, employeeIds: ['E001'],
         proxyReason: 'Employee requested assistance', confirmApproval: true,
-        leaveSegments: [segment('2026-11-02', '09:00', '11:00', 2), segment('2026-11-05', '14:00', '16:00', 2)] });
+        leaveSegments: [{ ...segment('2026-11-02', '09:00', '11:00', 2), breakMinutes: 0 },
+            { ...segment('2026-11-05', '14:00', '16:00', 2), breakMinutes: 0 }] });
     assert.equal(proxy.status, 200, proxy.error);
     assert.equal(proxy.createdCount, 1);
     assert.equal(db.getLeaveRequestById(proxy.requestId).leave_segments.length, 2);

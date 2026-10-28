@@ -65,7 +65,7 @@ function spTargets(meal = false) {
     const employees = supervisorState.data.employees;
     const disabledIds = meal ? employees.filter((e) => !supervisorState.data.batchMeal.employees.find((m) => m.id === e.id)?.canChange).map((e) => e.id) : [];
     return renderAdminPaperEmployeePicker(employees, '代辦員工', [], {
-        selectedIds: disabledIds.includes(supervisorState.employeeId) ? [] : [supervisorState.employeeId], disabledIds, maxSelection: 100,
+        selectedIds: [], disabledIds, maxSelection: 100,
         notes: Object.fromEntries(disabledIds.map((id) => [id, '本日無法代登午餐']))
     });
 }
@@ -108,8 +108,8 @@ function spCalendar(data) {
             const meal = supervisorState.kind === 'meals', row = meal ? day.rows[0] : null;
             const choosing = supervisorState.proxyView === 'create';
             const label = choosing ? meal ? (day.serving ? '供餐' : '未供餐') : '選擇日期' : meal ? !day.serving ? '未供餐' : !row.eligible ? '未參加' : row.eating ? '用餐' : '不用餐' : `${day.totalCount} 件`;
-            return `<button type="button" class="meal-date ${day.date === supervisorState.date ? 'is-selected' : ''} ${meal && row.eating ? 'is-eating' : ''}" data-action="sp-date" data-date="${day.date}" aria-pressed="${day.date === supervisorState.date}" aria-label="${day.date} ${label}">
-                <span class="meal-date-number">${Number(day.date.slice(-2))}${day.date === spToday() ? '<small>今天</small>' : ''}</span><span class="meal-date-status">${label}</span>
+            return `<button type="button" class="meal-date ${!choosing && !meal && day.totalCount > 0 ? 'has-records' : ''} ${day.date === supervisorState.date ? 'is-selected' : ''} ${meal && row.eating ? 'is-eating' : ''}" data-action="sp-date" data-date="${day.date}" aria-pressed="${day.date === supervisorState.date}" aria-label="${day.date} ${label}">
+                <span class="meal-date-number">${Number(day.date.slice(-2))}${day.date === spToday() ? '<small>今天</small>' : ''}</span><span class="meal-date-status ${!choosing && !meal ? 'sp-record-count' : ''}">${label}</span>
                 <small class="meal-date-deadline">${meal ? !day.serving ? '&nbsp;' : day.locked ? `<span>${day.revision ? '已結單' : '已截止'}</span>` : `<span>${day.cutoff}</span><span>截止</span>` : choosing ? '' : `<span>核准 ${day.approvedCount}</span><span>待審 ${day.pendingCount}</span>`}</small>
                 ${row?.warning ? '<span class="meal-warning-dot" title="全日請假仍預訂午餐">請假</span>' : ''}</button>`;
         }).join('')}</div>`;
@@ -120,12 +120,12 @@ function spRequestForm() {
         <h4>代申請${leave ? '請假' : '加班'}</h4>${spTargets()}
         <div class="request-period-grid">${spField('開始日期', 'startDate', 'date', date)}${spField('開始時間', 'startTime', 'time', leave ? '08:20' : '17:30')}
         ${spField('結束日期', 'endDate', 'date', date)}${spField('結束時間', 'endTime', 'time', leave ? '17:00' : '19:30')}</div>
-        <div class="sp-form-grid">${leave ? `<label class="field"><span>假別</span><select name="leaveTypeId" required>${supervisorState.data.leaveTypes.map((t) => `<option value="${spEscape(t.id)}">${spEscape(t.name)}</option>`).join('')}</select></label>` : ''}
-         ${spField('每人整筆時數', 'durationHours', 'number', leave ? '' : '2', leave ? 'readonly placeholder="由請假時段自動加總"' : 'min="0.01" step="0.01"')}</div>
-        ${leave ? `${renderLeaveDaysEditor({ batch: true })}<div data-sp-leave-meals></div>` : ''}
-        ${spField('申請事由', 'reason', 'text', '', 'maxlength="2000"')}${spField('代辦原因', 'proxyReason', 'text', '', 'maxlength="500"')}
+        <div class="sp-form-grid">${leave ? `<label class="field"><span>假別</span><select name="leaveTypeId" required><option value="">請選擇假別</option>${supervisorState.data.leaveTypes.map((t) => `<option value="${spEscape(t.id)}">${spEscape(t.name)}</option>`).join('')}</select></label>` : ''}
+         ${spField('每人整筆時數', 'durationHours', 'number', leave ? '' : '2', 'readonly placeholder="由時段自動計算" min="0.01" step="0.01"')}</div>
+        ${leave ? `${renderLeaveDaysAddTools({ autoHours: true })}${renderLeaveDaysEditor({ batch: true, autoHours: true, externalTools: true })}<div data-sp-leave-meals></div>` : ''}
+        ${spField('申請事由', 'reason', 'text', '', 'maxlength="2000"')}${spReasonField('proxyReason')}
         <label class="sp-confirm"><input type="checkbox" name="confirmApproval" required>確認替所有勾選員工代申請相同內容；多主管設定依各人審核規則送審，原單主管代辦流程保留</label>
-        <div class="inline-actions"><button class="primary-btn" type="submit" ${supervisorState.busy ? 'disabled' : ''}>送出代申請</button>${spButton('reset-form', '重設表單')}</div>
+        <div class="inline-actions"><button class="primary-btn" type="submit" ${supervisorState.busy || !spCanWrite() ? 'disabled' : ''}>送出代申請</button>${spButton('reset-form', '重設表單')}</div>
     </form>`;
 }
 function spPaintLeaveMeals(form) {
@@ -154,14 +154,14 @@ function spMealDetail() {
     return `<section class="sp-day-detail"><h4>${day.date} 午餐${creating ? '代登' : '紀錄'}</h4><p>${day.serving ? '供餐' : '未供餐'} · ${day.cutoff} 截止（台北時間）${creating ? '' : ` · ${spEscape(supervisorState.employeeId)} · ${row.eating ? '用餐' : '不用餐'}`}${day.revision ? ' · 已結單' : ''}${creating || row.submittedEating == null ? '' : ` · 已交單：${row.submittedEating ? '用餐' : '不用餐'}`}</p>
         ${!creating && row.warning ? '<div class="meal-warning-row"><span>全日請假仍預訂午餐；請至「建立代辦申請」修改午餐安排。</span></div>' : ''}
         ${creating && allowed ? `<form data-sp-form="meals" class="sp-form">${spTargets(true)}<label class="field"><span>是否用餐</span><select name="eating"><option value="true">用餐</option><option value="false">不用餐</option></select></label>
-        ${spField('代辦原因', 'reason', 'text', '', 'maxlength="500"')}<button class="primary-btn" type="submit" ${supervisorState.busy ? 'disabled' : ''}>儲存午餐代登</button></form>` : creating ? `<p class="meal-lock">${!day.serving ? '本日未供餐' : '已截止或已結單，請聯絡團膳管理者。'}</p>` : ''}</section>`;
+        ${spReasonField('reason')}<button class="primary-btn" type="submit" ${supervisorState.busy || !spCanWrite() ? 'disabled' : ''}>儲存午餐代登</button></form>` : creating ? `<p class="meal-lock">${!day.serving ? '本日未供餐' : '已截止或已結單，請聯絡團膳管理者。'}</p>` : ''}</section>`;
 }
 function spRequestDetail() {
     const detail = supervisorState.data.calendar.detail;
     return `<section class="sp-day-detail"><div class="sp-toolbar"><h4>${supervisorState.date} ${supervisorState.kind === 'leave' ? '請假' : '加班'}</h4></div>
         ${supervisorState.kind === 'leave' && typeof leBalanceTable === 'function' ? leBalanceTable(supervisorState.data.leaveBalances || []) : ''}
         <div class="sp-records">${detail.records.map((row) => `<article class="sp-record"><div class="sp-toolbar"><strong>${spEscape(row.leaveTypeName || '加班')} · ${spEscape(row.statusText)}</strong>
-            ${row.canProxyWithdraw ? spButton('withdraw', '代撤回', `data-id="${spEscape(row.id)}"`) : ''}</div>
+            ${row.canProxyWithdraw ? spButton('withdraw', '代撤回', `data-id="${spEscape(row.id)}"`, !spCanWrite()) : ''}</div>
             <p>${spEscape(row.startText)} 至 ${spEscape(row.endText)} · ${spEscape(row.duration_hours)} 小時</p><p>${spEscape(row.reason)}</p>
             ${supervisorState.kind === 'leave' ? renderLeaveDaysSummary(row) : ''}
             <p>${spEscape(row.approvalModeText)}${row.applicantId || row.applicant_id ? ` · 申請人：${spEscape(row.applicantName || row.applicantId || row.applicant_id)}` : ''}</p>
@@ -170,17 +170,17 @@ function spRequestDetail() {
                 <input type="hidden" name="requestId" value="${spEscape(row.id)}"><input type="hidden" name="updatedAt" value="${row.updated_at}">
                 ${spField('代撤回原因', 'reason', 'text', '', 'maxlength="500"')}
                 <label class="sp-confirm"><input type="checkbox" name="confirmWithdrawal" required>確認代 ${spEscape(supervisorState.employeeId)} 撤回這筆請假</label>
-                <div class="inline-actions"><button class="primary-btn" type="submit">確認代撤回</button>${spButton('cancel-form', '取消')}</div>
+                <div class="inline-actions"><button class="primary-btn" type="submit" ${!spCanWrite() ? 'disabled' : ''}>確認代撤回</button>${spButton('cancel-form', '取消')}</div>
             </form>` : ''}</article>`).join('') || '<p>本日沒有申請紀錄。</p>'}</div>
         ${detail.totalPages > 1 ? `<div class="inline-actions">${spButton('page', '←', `data-page="${detail.page - 1}" aria-label="上一頁"`, detail.page <= 1)}<span>${detail.page} / ${detail.totalPages}</span>${spButton('page', '→', `data-page="${detail.page + 1}" aria-label="下一頁"`, detail.page >= detail.totalPages)}</div>` : ''}</section>`;
 }
 function renderSupervisorWorkspace() {
-    const data = supervisorState.data, canUse = state.dashboard?.supervisorProxy?.canUse;
+    const data = supervisorState.data, canUse = spCanView();
     return `<section id="supervisor-workspace" class="sp-workspace" aria-label="主管代辦">
         <div class="sp-toolbar"><h3>主管代辦</h3>${spButton('refresh', '重新整理', '', !canUse)}</div>
         <div class="inline-message sp-message" aria-live="polite">${spEscape(supervisorState.error)}</div>
         <p class="muted">指定代辦主管可用本人卡號或個人網頁密碼登入，僅能代辦明確指定的員工；申請仍依審核規則處理，並保留操作者與代辦原因。</p>
-        ${!canUse ? '<p>請以主管本人的卡號或個人網頁密碼登入員工工作台；身份模擬不能代辦。</p>' : !data ? '<p role="status">讀取代辦資料中…</p>' : !data.employees.length ? '<p>目前沒有獲指定的代辦員工。</p>' : `
+        ${!spCanWrite() && canUse ? '<p role="status">身份模擬可查看紀錄並試填草稿；送出、撤回及儲存常用原因需主管本人登入。</p>' : ''}${!canUse ? '<p>目前沒有主管代辦檢視權限。</p>' : !data ? '<p role="status">讀取代辦資料中…</p>' : !data.employees.length ? '<p>目前沒有獲指定的代辦員工。</p>' : `
         <div class="sp-mode-tabs" role="tablist" aria-label="代辦工作模式">${[['create', '建立代辦申請'], ['records', '查看代辦紀錄']].map(([view, label]) => `<button type="button" role="tab" data-action="sp-proxy-view" data-view="${view}" aria-selected="${supervisorState.proxyView === view}" class="${supervisorState.proxyView === view ? 'is-active' : ''}">${label}</button>`).join('')}</div>
         <p class="sp-mode-description">${supervisorState.proxyView === 'create' ? '先選項目與日期，再在申請表勾選本次代辦對象。下方日曆僅用來選擇日期。' : '此頁只查看一位員工的紀錄；要新增申請請切換「建立代辦申請」。'}</p>
         ${supervisorState.proxyView === 'records' ? renderAdminPaperEmployeePicker(data.employees, '紀錄查詢對象', [], {
@@ -241,6 +241,7 @@ async function spLoad() {
 const spPreviousRender = renderDashboard;
 renderDashboard = function renderDashboardWithSupervisor(dashboard) {
     const identity = `${state.token}/${dashboard.role}/${dashboard.user?.id || ''}`;
+    if (identity !== supervisorState.identity) (document.querySelectorAll?.('.sp-reasons-dialog') || []).forEach((dialog) => { dialog.close(); dialog.remove(); });
     if (identity !== supervisorState.identity) Object.assign(supervisorState, { identity, data: null, assignments: null, routes: null, month: spToday().slice(0, 7),
         date: spToday(), employeeId: '', assignmentId: '', kind: 'leave', proxyView: 'create', managementView: 'review', page: 1, form: '', loading: false, busy: false, dirty: false, error: '', sequence: supervisorState.sequence + 1 });
     return spPreviousRender(dashboard);
@@ -257,7 +258,7 @@ renderSystemAdminDashboard = function renderSystemAdminWithSupervisor(dashboard)
 const spPreviousPostRender = postRenderSetup;
 postRenderSetup = function postRenderWithSupervisor() {
     spPreviousPostRender();
-    if (spRoot() && !supervisorState.loading && !supervisorState.error && (spManagement() ? spCanAssignments() ? !supervisorState.assignments : !supervisorState.routes : !supervisorState.data && state.dashboard?.supervisorProxy?.canUse)) spLoad();
+    if (spRoot() && !supervisorState.loading && !supervisorState.error && (spManagement() ? spCanAssignments() ? !supervisorState.assignments : !supervisorState.routes : !supervisorState.data && spCanView())) spLoad();
     spLoadLeaveMeals(spRoot()?.querySelector('[data-sp-form="leave"]')).catch(() => {});
 };
 const spPreviousClick = handleDashboardClick;
@@ -285,6 +286,9 @@ handleDashboardClick = async function handleSupervisorClick(event) {
         return spPreviousClick(event);
     }
     event.preventDefault(); if (supervisorState.busy) return;
+    if (action === 'sp-reason-preset') { const input = button.closest('[data-sp-form]').elements[button.dataset.field]; input.value = spPresets().values[Number(button.dataset.index)] || ''; input.dispatchEvent(new Event('input', { bubbles: true })); return; }
+    if (action === 'sp-reason-settings') { spOpenReasons(); return; }
+    if (action === 'sp-withdraw' && !spCanWrite()) { spMessage('身份模擬無法代撤回。'); return; }
     if (action === 'sp-management-view') {
         const view = button.dataset.view;
         if (!['review', 'assignments'].includes(view) || (view === 'review' ? !spCanRoutes() : !spCanAssignments()) || view === spManagementView()) return;
@@ -344,6 +348,7 @@ handleDashboardChange = async function handleSupervisorChange(event) {
     if (target.matches('[data-paper-employee-height]')) return;
     if (target.matches('[data-paper-employee-department]')) return spPreviousChange(event);
     if (target.closest('[data-sp-form]')) {
+        spSyncOvertime(target.closest('[data-sp-form="overtime"]'));
         if (supervisorState.busy) return;
         if (target.matches('[data-paper-employee-checkbox]')) await spPreviousChange(event);
         spSyncAssignmentClear(target.closest('[data-sp-form]'), target.matches('[name="mode"], [data-paper-employee-checkbox]'));
@@ -355,6 +360,7 @@ handleDashboardChange = async function handleSupervisorChange(event) {
 };
 async function spSave(operation, body) {
     const identity = supervisorState.identity, managing = ['assignments/batch', 'reviewers/batch'].includes(operation);
+    if (!managing && !spCanWrite()) throw new Error('身份模擬無法送出代辦異動，請以主管本人登入。');
     const controls = [...(spRoot()?.querySelectorAll('input, select, button') || [])].map((input) => [input, input.disabled]);
     supervisorState.busy = true; controls.forEach(([input]) => { input.disabled = true; });
     try {
@@ -374,6 +380,7 @@ handleDashboardSubmit = async function handleSupervisorSubmit(event) {
     const form = event.target.closest('[data-sp-form]'); if (!form) return spPreviousSubmit(event);
     event.preventDefault(); if (supervisorState.busy) return;
     const fields = new FormData(form), operation = form.dataset.spForm, body = Object.fromEntries(fields);
+    if (!['assignments/batch', 'reviewers/batch'].includes(operation) && !spCanWrite()) { spMessage('身份模擬無法送出代辦異動，請以主管本人登入。'); return; }
     if (operation === 'assignments/batch') {
         body.employeeIds = fields.getAll('assignmentEmployeeIds'); body.supervisorIds = fields.getAll('supervisorIds');
         body.confirmAssignment = fields.has('confirmAssignment');
@@ -402,7 +409,9 @@ handleDashboardSubmit = async function handleSupervisorSubmit(event) {
         else body.confirmApproval = fields.has('confirmApproval');
     }
     try {
+        if (operation === 'overtime') { spSyncOvertime(form); body.durationHours = form.elements.durationHours.value; if (!body.durationHours) throw new Error('請填寫有效的加班開始與結束時段。'); }
         if (operation === 'leave') {
+            if (!body.leaveTypeId) throw new Error('請選擇假別。');
             if (!String(body.reason || '').trim()) throw new Error('請填寫請假事由。');
             Object.assign(body, collectLeaveDays(form));
             await spLoadLeaveMeals(form);
@@ -433,6 +442,7 @@ handleRealtimeSyncMessage = async function handleSupervisorSync(payload) {
 };
 document.addEventListener('input', (event) => {
     if (!supervisorState.busy && !event.target.matches('[data-paper-employee-search], [data-paper-employee-height]') && event.target.closest('[data-sp-form]')) supervisorState.dirty = true;
+    if (!supervisorState.busy) spSyncOvertime(event.target.closest('[data-sp-form="overtime"]'));
     if (!supervisorState.busy) spLoadLeaveMeals(event.target.closest('[data-sp-form="leave"]')).catch(() => {});
 });
 document.addEventListener('click', (event) => {
@@ -440,6 +450,48 @@ document.addEventListener('click', (event) => {
 });
 const spPreviousLogout = handleLogout;
 handleLogout = function logoutWithSupervisorCleanup(...args) {
+    (document.querySelectorAll?.('.sp-reasons-dialog') || []).forEach((dialog) => { dialog.close(); dialog.remove(); });
     Object.assign(supervisorState, { identity: '', data: null, assignments: null, routes: null, dirty: false, loading: false, busy: false, error: '', sequence: supervisorState.sequence + 1 });
     return spPreviousLogout(...args);
 };
+function spCanView() { return Boolean(state.dashboard?.supervisorProxy?.canView || state.dashboard?.supervisorProxy?.canUse); }
+function spCanWrite() { return Boolean(state.dashboard?.supervisorProxy?.canUse); }
+function spPresets() { return supervisorState.data?.reasonPresets || { values: ['員工不便操作，主管代為申請', '依員工通知，主管協助登記'], revision: 0, canEdit: false }; }
+function spReasonField(name) {
+    return `<div class="field sp-reason-field"><div class="sp-reason-label"><label for="sp-${name}">代辦原因</label><div class="sp-reason-pills">${spPresets().values.map((value, index) => `<button type="button" class="sp-reason-pill" data-action="sp-reason-preset" data-field="${name}" data-index="${index}">${spEscape(value)}</button>`).join('')}</div>${spButton('reason-settings', '管理常用原因')}</div><input id="sp-${name}" name="${name}" type="text" maxlength="500" required></div>`;
+}
+function spSyncOvertime(form) {
+    if (form?.dataset?.spForm !== 'overtime') return;
+    const f = form.elements;
+    if (!f?.startDate || !f.startTime || !f.endDate || !f.endTime || !f.durationHours) return;
+    const start = new Date(`${f.startDate.value}T${f.startTime.value}:00+08:00`).getTime(), end = new Date(`${f.endDate.value}T${f.endTime.value}:00+08:00`).getTime();
+    const minutes = (end - start) / 60000;
+    f.durationHours.value = Number.isFinite(minutes) && minutes > 0 ? String(Math.floor(minutes * 100 / 60) / 100) : '';
+}
+function spOpenReasons() {
+    if (document.querySelector('.sp-reasons-dialog')) return;
+    const identity = supervisorState.identity, presets = spPresets(), editable = spCanWrite() && presets.canEdit;
+    const dialog = document.createElement('dialog'); dialog.className = 'sp-reasons-dialog'; dialog.setAttribute('aria-labelledby', 'sp-reasons-title');
+    dialog.innerHTML = `<form><h3 id="sp-reasons-title">管理常用原因</h3><p>請設定兩個常用代辦原因。</p>${presets.values.map((value, i) => `<label class="field" for="sp-preset-${i}"><span>常用原因 ${i + 1}</span><input id="sp-preset-${i}" name="preset${i}" value="${spEscape(value)}" maxlength="500" required></label>`).join('')}<p class="inline-message" role="status" aria-live="polite"></p>${!editable ? '<p>身份模擬只能試填，無法儲存設定。</p>' : ''}<div class="inline-actions"><button type="submit" class="primary-btn" ${!editable ? 'disabled' : ''}>儲存常用原因</button><button type="button" class="outline-btn" data-close>關閉</button></div></form>`;
+    let saving = false;
+    const close = () => { if (!saving) { dialog.close(); dialog.remove(); } };
+    dialog.querySelector('[data-close]').addEventListener('click', close);
+    dialog.addEventListener('cancel', (event) => { event.preventDefault(); close(); });
+    dialog.querySelector('form').addEventListener('submit', async (event) => {
+        event.preventDefault(); if (saving || !editable || !spCanWrite() || identity !== supervisorState.identity) return;
+        const values = [0, 1].map((i) => dialog.querySelector(`[name="preset${i}"]`).value.trim());
+        const message = dialog.querySelector('[role="status"]');
+        if (values.some((value) => !value)) { message.textContent = '請填寫兩個常用原因。'; return; }
+        saving = true; dialog.querySelectorAll('button, input').forEach((input) => { input.disabled = true; });
+        try {
+            const result = await requestJson('/api/browser/employee/supervisor/reason-presets', { auth: true, method: 'POST', body: { values, revision: presets.revision } });
+            if (identity !== supervisorState.identity || !dialog.isConnected) return;
+            supervisorState.data.reasonPresets = result.reasonPresets;
+            // Update only the pills so that application drafts and dirty state remain intact.
+            spRoot()?.querySelectorAll('[data-action="sp-reason-preset"]').forEach((button) => { button.textContent = result.reasonPresets.values[Number(button.dataset.index)]; });
+            saving = false; close();
+        } catch (error) { if (identity === supervisorState.identity && dialog.isConnected) message.textContent = error.message; }
+        finally { saving = false; if (identity === supervisorState.identity && dialog.isConnected) dialog.querySelectorAll('button, input').forEach((input) => { input.disabled = false; }); }
+    });
+    document.body.append(dialog); dialog.showModal();
+}

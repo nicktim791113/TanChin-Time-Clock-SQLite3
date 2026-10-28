@@ -29,7 +29,8 @@ test('leave lunch selection preserves employee/proxy scope, deadline, complete r
     }
     for (let day = 1; day <= 10; day++) meals.saveDay({ date: `2035-01-${String(day).padStart(2, '0')}`, serving: true, cutoff: '09:00', reason: 'Fixture serving day' }, manager);
     const leaveTypeId = db.loadLeaveTypes().find((type) => type.enabled && !type.deducts_balance).id;
-    const period = (date, start = '12:30', end = '14:00', hours = 1.5) => ({ date, startAt: at(date, start), endAt: at(date, end), hours });
+    const period = (date, start = '12:30', end = '14:00', hours = 1.5) => ({ date, startAt: at(date, start), endAt: at(date, end), hours,
+        breakMinutes: (at(date, end) - at(date, start)) / 60000 - hours * 60 });
     const body = (date, extra = {}) => ({ leaveTypeId, dateSelectionMode: 'explicit_segments', leaveSegments: [period(date)], reason: 'Medical appointment', ...extra });
     const choice = (date, employeeId = 'E001') => ({ employeeId, date });
     const eating = (date, employeeId = 'E001') => meals.dayState(date).rows.find((row) => row.employee_id === employeeId).eating;

@@ -114,7 +114,45 @@ test('explicit supervisor APIs enforce multiple supervisors, scope, final review
         assert.equal(audit.after_data.employee_id, 'E001');
         assert.equal((await request('/employee/leave/calendar?month=2026-10', null, employee.token)).calendar.totalCount, 1);
     });
+    await t.test('personal reason presets persist per supervisor and reject stale, invalid and unauthorized writes', async () => {
+        const original = (await getProxy(supervisor.token)).proxy.reasonPresets;
+        assert.equal(original.values.length, 2);
+        assert.equal(original.canEdit, true);
+        const route = '/employee/supervisor/reason-presets';
+        const saved = await request(route, { values: ['第一個常用原因', '第二個常用原因'], revision: original.revision }, supervisor.token);
+        assert.equal(saved.status, 200);
+        assert.deepEqual((await getProxy(supervisor.token)).proxy.reasonPresets.values, saved.reasonPresets.values);
+        assert.deepEqual((await getProxy(second.token)).proxy.reasonPresets.values, original.values);
+        assert.equal((await request(route, { values: ['stale', 'overwrite'], revision: original.revision }, supervisor.token)).status, 409);
+        for (const values of [[], ['one'], ['', 'two'], ['x'.repeat(501), 'two'], [1, 'two']]) {
+            assert.equal((await request(route, { values, revision: saved.reasonPresets.revision }, supervisor.token)).status, 400);
+        }
+        assert.equal((await request(route, { values: ['one', 'two'], revision: 'default' }, employee.token)).status, 403);
+        assert.equal((await request(route, { values: ['one', 'two'], revision: 'default' }, admin.token)).status, 403);
+        assert.deepEqual((await getProxy(supervisor.token)).proxy.reasonPresets, saved.reasonPresets);
+        assert.ok(db.queryAuditLogs({ limit: 1000 }).some((row) => row.action === 'supervisor_reason_presets_update' && row.target_id === 'A001'));
+    });
+    await t.test('proxy HTTP creation rejects missing breaks and tampered segment hours, and computes overnight overtime', async () => {
+        const segment = { startAt: Date.parse('2027-07-01T08:00:00+08:00'), endAt: Date.parse('2027-07-01T09:01:00+08:00'), hours: 1.01, breakMinutes: 0 };
+        const body = { ...leaveBody, dateSelectionMode: 'explicit_segments', leaveSegments: [segment] };
+        const before = db.countLeaveRequests({ employeeId: 'E001' });
+        const { breakMinutes, ...missing } = segment;
+        for (const row of [missing, { ...segment, hours: 1 }, { ...segment, breakMinutes: 1 }, { ...segment, startAt: segment.startAt + 1000 }]) {
+            assert.equal((await request('/employee/supervisor/leave', { ...body, leaveSegments: [row] }, supervisor.token)).status, 400);
+            assert.equal(db.countLeaveRequests({ employeeId: 'E001' }), before);
+        }
+        const leave = await request('/employee/supervisor/leave', body, supervisor.token);
+        assert.equal(leave.status, 200);
+        assert.equal(db.getLeaveRequestById(leave.requestId).duration_hours, 1.01);
+        const overtime = await request('/employee/supervisor/overtime', { ...leaveBody, startDate: '2027-07-03', endDate: '2027-07-04',
+            startTime: '23:30', endTime: '00:31', durationHours: 999 }, supervisor.token);
+        assert.equal(overtime.status, 200);
+        const row = db.getOvertimeRequestById(overtime.requestId);
+        assert.equal(row.duration_hours, 1.01);
+        assert.equal(row.end_at - row.start_at, 61 * 60000);
+    });
     await t.test('withdraw updates the same row, rejects stale and approved records, and requires active delegation', async () => {
+        const countBeforeWithdrawal = db.countLeaveRequests({ employeeId: 'E001' });
         const row = db.getLeaveRequestById(leaveId);
         const body = { requestId: leaveId, updatedAt: row.updated_at, reason: 'Employee requested withdrawal' };
         assert.equal((await request('/employee/supervisor/leave/withdraw', { ...body, updatedAt: 0 }, second.token)).status, 409);
@@ -123,7 +161,7 @@ test('explicit supervisor APIs enforce multiple supervisors, scope, final review
         const log = db.queryAuditLogs({ limit: 200 }).find((r) => r.action === 'supervisor_proxy_withdraw');
         assert.equal(log.after_data.proxy_reason, row.proxy_reason);
         assert.equal(log.after_data.withdrawal_reason, body.reason);
-        assert.equal(db.countLeaveRequests({ employeeId: 'E001' }), 1);
+        assert.equal(db.countLeaveRequests({ employeeId: 'E001' }), countBeforeWithdrawal);
         db.createLeaveRequest({ ...row, id: 'approved-original', status: 'approved' });
         assert.equal((await request('/employee/supervisor/leave/withdraw', { ...body, requestId: 'approved-original' }, second.token)).status, 409);
     });
@@ -165,6 +203,9 @@ test('explicit supervisor APIs enforce multiple supervisors, scope, final review
     await t.test('audit failure rolls back proxy request, withdrawal and assignment changes', async () => {
         inspection.exec("CREATE TRIGGER fail_proxy_audit BEFORE INSERT ON audit_logs BEGIN SELECT RAISE(FAIL, 'test audit failure'); END");
         try {
+            const presets = (await getProxy(supervisor.token)).proxy.reasonPresets;
+            assert.equal((await request('/employee/supervisor/reason-presets', { values: ['Atomic one', 'Atomic two'], revision: presets.revision }, supervisor.token)).status, 500);
+            assert.deepEqual((await getProxy(supervisor.token)).proxy.reasonPresets, presets);
             const count = db.countLeaveRequests({ employeeId: 'E001' });
             assert.equal((await request('/employee/supervisor/leave', { ...leaveBody, startDate: '2026-10-15', endDate: '2026-10-15' }, second.token)).status, 500);
             assert.equal(db.countLeaveRequests({ employeeId: 'E001' }), count);
@@ -276,7 +317,29 @@ test('card proxy preserves any/required reviews, bound-device revocation, delega
     const impersonated = await request('/developer/impersonation/start', { targetRole: 'employee', targetEmployeeId: 'A001', systemPassword: 'fixture-system-password' }, developer.token);
     assert.equal(impersonated.status, 200);
     assert.equal(impersonated.dashboard.supervisorProxy.canUse, false);
-    assert.equal((await request(reads[0], null, developer.token)).status, 403);
+    assert.equal(impersonated.dashboard.supervisorProxy.canView, true);
+    const simulated = await request(reads[0], null, developer.token);
+    assert.equal(simulated.status, 200);
+    assert.equal(simulated.proxy.reasonPresets.canEdit, false);
+    assert.equal(simulated.proxy.canWrite, false);
+    assert.ok(simulated.proxy.calendar.detail.records.some((row) => row.canProxyWithdraw));
+    const tomorrow = taipeiDate(Date.now() + 86400000);
+    const mealManager = { manager: true, actorId: 'A001', audit: (entry) => ({ ...entry, actor_id: 'A001' }) };
+    db.getMeals().saveDay({ date: tomorrow, serving: true, cutoff: '23:59', reason: 'Simulation selection fixture' }, mealManager);
+    db.getMeals().saveMember({ employeeId: 'E001', effectiveDate: tomorrow, participating: true, reason: 'Simulation membership fixture' }, mealManager);
+    const preview = await request(`/employee/supervisor?month=${tomorrow.slice(0, 7)}&date=${tomorrow}&employeeId=E001`, null, developer.token);
+    assert.equal(preview.status, 200);
+    assert.equal(preview.proxy.canWrite, false);
+    assert.equal(preview.proxy.batchMeal.employees.find((row) => row.id === 'E001').canChange, true);
+    const mealBefore = db.getMeals().dayState(tomorrow);
+    assert.equal((await request('/employee/supervisor/meals/choice', { employeeId: 'E001', date: tomorrow, eating: false,
+        reason: 'Simulation must remain read only', version: mealBefore.version }, developer.token)).status, 403);
+    assert.deepEqual(db.getMeals().dayState(tomorrow), mealBefore);
+    assert.equal((await request('/employee/supervisor/reason-presets', { values: ['one', 'two'], revision: simulated.proxy.reasonPresets.revision }, developer.token)).status, 403);
+    assert.equal((await request('/employee/supervisor/leave/meal-options', period, developer.token)).status, 200);
+    for (const route of ['/employee/supervisor/overtime', '/employee/supervisor/leave/withdraw', '/employee/supervisor/meals/choice']) {
+        assert.equal((await request(route, period, developer.token)).status, 403);
+    }
     assert.equal((await request('/employee/supervisor/leave', period, developer.token)).status, 403);
 });
 

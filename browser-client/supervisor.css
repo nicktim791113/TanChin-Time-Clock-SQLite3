@@ -50,3 +50,14 @@
 .sp-mode-tabs button { flex: 1; min-width: 140px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: inherit; padding: 12px 18px; font: inherit; font-weight: 700; cursor: pointer; }
 .sp-mode-tabs button.is-active { background: var(--surface, white); border-color: var(--line, #c7dbe5); box-shadow: 0 2px 5px #153e5612; }
 .sp-mode-description { margin: 0 0 16px; color: var(--text-muted, #576d7b); font-size: 13px; line-height: 1.6; }
+/* Compact only supervisor proxy calendars; other meal calendars retain their size. */
+.sp-calendar .meal-date { min-height: 80px; padding: 6px; gap: 3px; }
+.sp-calendar .has-records .sp-record-count { color: #075b86; font-weight: 800; }
+.sp-calendar .has-records { border-color: #6a9fb9; }
+.sp-reason-label, .sp-reason-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sp-reason-label > label { font-weight: 600; }
+.sp-reason-pill { border: 1px solid #9ab5ad; border-radius: 999px; padding: 5px 12px; background: #f0f7f4; color: #284d40; cursor: pointer; text-align: left; }
+.sp-reasons-dialog { width: min(560px, calc(100% - 32px)); padding: 20px; border: 1px solid var(--line); border-radius: 8px; }
+.sp-reasons-dialog form { display: grid; gap: 14px; }
+.sp-reasons-dialog::backdrop { background: rgb(0 0 0 / 35%); }
+@media (max-width: 600px) { .sp-calendar .meal-date { min-height: 81px; padding: 4px 3px; gap: 3px; } }
