@@ -3,7 +3,8 @@
 // Pure, date-only annual-leave projection. No database writes, payroll, or rounding
 // of existing leave usage belongs here. Fractions, not decimal display strings,
 // are the storage/arithmetical contract. See LAW_SOURCES and dateRules in results.
-const CALCULATOR_VERSION = 'tw-annual-leave-1';
+const CALCULATOR_VERSION = 'tw-annual-leave-2';
+const FULL_HALF_YEAR = 'full_at_acquisition_year_end';
 const DAY = 86400000;
 const LAW_SOURCES = Object.freeze([
     { title: '勞動基準法第 38 條', url: 'https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=N0030001&flno=38' },
@@ -169,10 +170,11 @@ function partitionLot(lot, { year, prorationBasis = 'calendar_month' } = {}) {
  */
 function calculate(input) {
     if (!input || typeof input !== 'object') invalid('請提供特休試算輸入。');
-    const { employeeId, year, period = 'calendar_year', prorationBasis = 'calendar_month', rounding = 'raw', edgeDateConfirmed = false, employmentType = 'full_time' } = input;
+    const { employeeId, year, period = 'calendar_year', prorationBasis = 'calendar_month', rounding = 'raw', halfYearMode = 'prorated', edgeDateConfirmed = false, employmentType = 'full_time' } = input;
     if (typeof employeeId !== 'string' || !employeeId.trim() || employeeId.length > 200) invalid('請提供員工識別碼。', 'employeeId');
     if (!Number.isSafeInteger(year) || year < 2017 || year > 9997) invalid('本引擎只適用 2017 年起的現行特休級距，年度須為整數。', 'year');
     if (!['calendar_year', 'anniversary'].includes(period)) invalid('特休制度不正確。', 'period');
+    if (!['prorated', FULL_HALF_YEAR].includes(halfYearMode) || (halfYearMode === FULL_HALF_YEAR && period !== 'calendar_year')) invalid('半年整筆給假並於年底結清只適用曆年制。', 'halfYearMode');
     if (!['calendar_month', 'actual_day'].includes(prorationBasis)) invalid('分攤基礎不正確。', 'prorationBasis');
     if (!['raw', 'ceil_1_decimal'].includes(rounding)) invalid('小數策略不正確。', 'rounding');
     if (typeof edgeDateConfirmed !== 'boolean') invalid('月底日期確認必須為布林值。', 'edgeDateConfirmed');
@@ -203,7 +205,9 @@ function calculate(input) {
     for (const months of [6, ...Array.from({ length: maxYears }, (_, index) => (index + 1) * 12)]) {
         const event = milestone(service, months, exclusions);
         if (event.ordinal >= yearEnd) continue;
-        const end = addMonths(event, months === 6 ? 6 : 12);
+        const statutoryEnd = addMonths(event, months === 6 ? 6 : 12);
+        const fullHalfYear = months === 6 && halfYearMode === FULL_HALF_YEAR;
+        const end = fullHalfYear ? date(`${event.year + 1}-01-01`, '半年假年底期限') : statutoryEnd;
         if (period === 'anniversary' ? event.ordinal < yearStart : end.ordinal <= yearStart) continue;
         if (event.ordinal < hire.ordinal) { warn('SOURCE_BEFORE_CURRENT_HIRE', '所選年度含本次到職前取得的來源期間；其既有權利需人工對帳，未自動認列為本次任職新權利。', true); continue; }
         if (event.text < '2017-01-01') { warn('PRE_2017_SOURCE', '所選年度涉及 2017 年新制前取得的權利；本引擎不以現行級距回算舊權利，請人工核對。', true); continue; }
@@ -213,14 +217,16 @@ function calculate(input) {
         const lot = {
             eventKey, serviceMonths: months, acquisitionDate: event.text, baseAcquisitionDate: event.base,
             periodStart: event.text, periodEndExclusive: end.text, baselineStatutoryDays: serialize(baselineDays), statutoryDays: serialize(days), statutoryHours: serialize(multiply(days, dayHours)),
-            status, excludedDays: event.excludedDays,
+            status, excludedDays: event.excludedDays, halfYearMode: months === 6 ? halfYearMode : 'prorated',
+            ...(fullHalfYear ? { statutoryPeriodEndExclusive: statutoryEnd.text, settlementRule: 'year_end_wage_only', canCarry: false } : {}),
             steps: [
                 { code: 'SERVICE_MILESTONE', serviceDate: service.text, months, baseAcquisitionDate: event.base, missingDayClamped: event.clamped },
                 { code: 'EXCLUDE_SERVICE_DAYS', periods: event.applied, excludedDays: event.excludedDays, acquisitionDate: event.text },
                 { code: 'STATUTORY_TIER', completedYears: months === 6 ? '0.5' : String(months / 12), days: serialize(baselineDays), independentHalfYearLot: months === 6 },
                 { code: 'EMPLOYMENT_FACTOR', employmentType, factor: serialize(entitlementFactor), factorBasis, baselineDays: serialize(baselineDays), days: serialize(days) },
                 { code: 'ELIGIBILITY_AT_AS_OF', asOf: asOf.text, leaveDate: leave?.text || null, status },
-                { code: 'SOURCE_PERIOD', start: event.text, endExclusive: end.text, months: months === 6 ? 6 : 12, missingDayClamped: end.clamped }
+                { code: 'SOURCE_PERIOD', start: event.text, endExclusive: end.text, months: fullHalfYear ? null : months === 6 ? 6 : 12, missingDayClamped: end.clamped || false },
+                ...(fullHalfYear ? [{ code: 'FULL_HALF_YEAR', message: '滿半年一次給完整權利，取得當年可用至 12/31；未休僅列待結算工資，不分配或遞延至次年。', statutoryPeriodEndExclusive: statutoryEnd.text }] : [])
             ]
         };
         sourceLots.push(lot);
@@ -235,9 +241,9 @@ function calculate(input) {
     const manualConfirmationRequired = warnings.some((warning) => warning.blocking);
     return {
         calculatorVersion: CALCULATOR_VERSION, employeeId: employeeId.trim(), year, asOf: asOf.text,
-        policy: { period, prorationBasis, rounding, dayHours: serialize(dayHours), employmentType, entitlementFactor: serialize(entitlementFactor), factorBasis },
+        policy: { period, prorationBasis, rounding, halfYearMode, dayHours: serialize(dayHours), employmentType, entitlementFactor: serialize(entitlementFactor), factorBasis },
         inputs: { hireDate: hire.text, serviceDate: service.text, leaveDate: leave?.text || null, excludedPeriods: exclusions.map(({ start, end }) => ({ start, end })), edgeDateConfirmed },
-        dateRules: { timeZone: 'Asia/Taipei', interval: '[start,end)', leaveDate: 'last_employed_day_inclusive', exclusionEnd: 'return_to_service_day_exclusive', anniversary: 'original_anchor_same_day_or_month_end', serviceExclusion: 'actual_days_shift_each_milestone', rightPeriod: 'six_or_twelve_calendar_months_after_acquisition', sourceScope: 'sources_relevant_to_selected_year', decimal: 'display_only_max_18_fraction_digits' },
+        dateRules: { timeZone: 'Asia/Taipei', interval: '[start,end)', leaveDate: 'last_employed_day_inclusive', exclusionEnd: 'return_to_service_day_exclusive', anniversary: 'original_anchor_same_day_or_month_end', serviceExclusion: 'actual_days_shift_each_milestone', rightPeriod: halfYearMode === FULL_HALF_YEAR ? 'half_year_until_acquisition_year_end_other_sources_twelve_calendar_months' : 'six_or_twelve_calendar_months_after_acquisition', sourceScope: 'sources_relevant_to_selected_year', decimal: 'display_only_max_18_fraction_digits' },
         manualConfirmationRequired, warnings, sourceLots, segments,
         statutory: { acquiredInYearDays: serialize(acquiredInYear), acquiredSourceDays: serialize(acquiredSource), acquiredSourceHours: serialize(multiply(acquiredSource, dayHours)), lifetimeTotal: false },
         annual: { rawDays: serialize(raw), grantedDays: serialize(rounded), roundingDifferenceDays: serialize(subtract(rounded, raw)), rawHours: serialize(multiply(raw, dayHours)), grantedHours: serialize(multiply(rounded, dayHours)), roundingDifferenceHours: serialize(multiply(subtract(rounded, raw), dayHours)),
@@ -246,7 +252,7 @@ function calculate(input) {
             includesProjected: compare(projectedRaw, 0) > 0, allocationOnly: period === 'calendar_year', independentlyRoundedSubtotalsMustNotBeAdded: true },
         steps: [
             { code: 'SOURCE_RIGHTS_FIRST', message: 'sourceLots 的完整法定日數與年度配置分開；只有 acquired 才已取得，需排除既有給假與已結算權利後才可入帳。' },
-            { code: 'YEAR_ALLOCATION', period, prorationBasis, message: period === 'calendar_year' ? '逐來源以本年度交集權重／完整來源期間權重分攤；半年批次使用自身六個月分母。' : '採本年度資格取得事件的完整權利，不按月份切分。' },
+            { code: 'YEAR_ALLOCATION', period, prorationBasis, halfYearMode, message: period === 'calendar_year' ? halfYearMode === FULL_HALF_YEAR ? '半年來源完整配置於取得年度並於年底結清；滿一年起仍依各來源期間分攤。' : '逐來源以本年度交集權重／完整來源期間權重分攤；半年批次使用自身六個月分母。' : '採本年度資格取得事件的完整權利，不按月份切分。' },
             { code: 'SUM_BEFORE_ROUNDING', rawDays: serialize(raw), rounding, grantedDays: serialize(rounded), differenceDays: serialize(subtract(rounded, raw)), message: '全年預估合計與已取得配置各自加總後進位一次；不可將分別進位小計相加，年度配置也不能覆寫法定全額。' },
             { code: 'EXACT_HOURS', dayHours: serialize(dayHours), message: '精確日數乘核實的日工時；不轉成既有百分之一小時帳本，不計薪資、預占或已休。' }
         ],

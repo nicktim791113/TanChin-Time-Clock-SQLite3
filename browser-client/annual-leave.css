@@ -35,6 +35,9 @@
 .al-person:has(input:checked) { border-color: #5887e2; background: #eef4ff; }
 .al-warning { padding: 10px 13px; margin: 10px 0; border-radius: 8px; color: #8b3c12; background: #fff4e8; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
 .al-success { color: #17624e; background: #eaf7f1; }
+.al-policy-note { padding: 12px 14px; margin: 12px 0; border: 1px solid #bfd5ed; border-radius: 9px; background: #f2f7fd; line-height: 1.7; overflow-wrap: anywhere; }
+.al-policy-note strong { display: block; color: #184879; font-size: 14px; }
+.al-policy-note p { margin: 6px 0 0; color: #455f7a; font-size: 13px; }
 .al-chip { display: inline-block; padding: 3px 8px; border-radius: 6px; color: #245bce; background: #edf3ff; font-size: 12px; }
 .al-details { margin: 10px 0; border: 1px solid #dce4ee; border-radius: 10px; overflow: hidden; }
 .al-details > summary { padding: 13px; cursor: pointer; background: #f8fafc; overflow-wrap: anywhere; }

@@ -6,7 +6,7 @@ const crypto = require('node:crypto');
 const { test } = require('node:test');
 const Database = require('better-sqlite3');
 const { monthRange, buildCalendar } = require('../request-calendar');
-const { startFixture } = require('./fixtures/browser-server');
+const { startFixture, listenForFetch } = require('./fixtures/browser-server');
 const at = (date) => Date.parse(`${date}+08:00`);
 
 test('calendar dates use Taipei, validate months and include leap days', () => {
@@ -50,6 +50,11 @@ test('calendar browser endpoints retain complete history, permission scopes, fil
     const fixture = await startFixture();
     const inspection = new Database(fixture.databasePath);
     t.after(async () => { inspection.close(); await fixture.close(); });
+    // Seed the large history before opening the HTTP test phase. Synchronous
+    // SQLite writes must not leave the startup health connection idle while
+    // its keep-alive timers and client socket events cannot be processed.
+    fixture.server.closeAllConnections();
+    await new Promise((resolve) => fixture.server.close(resolve));
     const db = fixture.db;
     for (const kind of ['leave', 'overtime']) {
         const create = (row) => (kind === 'leave' ? db.createLeaveRequest : db.createOvertimeRequest)({ reason: '', supervisor_id: null, applicant_role: 'employee', updated_at: row.created_at, ...row });
@@ -65,6 +70,7 @@ test('calendar browser endpoints retain complete history, permission scopes, fil
         create({ id: `${kind}-next`, employee_id: 'E001', leave_type_id: 'annual', applicant_id: 'E001',
             start_at: at('2026-11-01T00:00:00'), end_at: at('2026-11-01T01:00:00'), duration_hours: 1, status: 'approved', created_at: 0 });
     }
+    fixture.url = await listenForFetch(fixture.server);
     async function request(route, token, body) {
         const response = await fetch(fixture.url + '/api/browser' + route, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined });
         return { status: response.status, ...await response.json() };

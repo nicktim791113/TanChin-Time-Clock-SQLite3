@@ -15,6 +15,7 @@ const sum = (values) => values.reduce(add, exact('0'));
 const min = (a, b) => cmp(a, b) < 0 ? exact(a) : exact(b);
 const maximum = (a, b) => cmp(a, b) > 0 ? exact(a) : exact(b);
 const numeric = (value) => Number(value.numerator) / Number(value.denominator);
+const FULL_HALF_YEAR = 'full_at_acquisition_year_end';
 function calculationForEmployee(value) {
     if (Array.isArray(value)) return value.map(calculationForEmployee);
     if (!value || typeof value !== 'object') return value;
@@ -46,6 +47,7 @@ function createAnnualLeaveStore(sql, addAuditLog, options = {}) {
     const now = options.now || Date.now, today = () => taipeiDay(now()), previews = new Map();
     sql.exec(`
       CREATE TABLE IF NOT EXISTS annual_leave_policy_versions (id TEXT PRIMARY KEY, leave_type_id TEXT NOT NULL, effective_from TEXT NOT NULL, data_json TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(leave_type_id,effective_from));
+      CREATE TABLE IF NOT EXISTS annual_leave_policy_revisions (id TEXT PRIMARY KEY, policy_id TEXT NOT NULL, before_json TEXT NOT NULL, after_json TEXT NOT NULL, created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS employee_service_periods (employee_id TEXT PRIMARY KEY, revision TEXT NOT NULL, data_json TEXT NOT NULL, updated_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS annual_leave_accounts (id TEXT PRIMARY KEY, employee_id TEXT NOT NULL, leave_type_id TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, data_json TEXT NOT NULL, created_at INTEGER NOT NULL);
       CREATE UNIQUE INDEX IF NOT EXISTS annual_leave_active_account ON annual_leave_accounts(employee_id,leave_type_id) WHERE active=1;
@@ -59,7 +61,7 @@ function createAnnualLeaveStore(sql, addAuditLog, options = {}) {
       CREATE TABLE IF NOT EXISTS annual_leave_charge_state (account_id TEXT NOT NULL, request_id TEXT NOT NULL, data_json TEXT NOT NULL, PRIMARY KEY(account_id,request_id));
     `);
     const staff = () => sql.prepare('SELECT id,name,department,hire_date,termination_date AS leave_date FROM employees ORDER BY id').all();
-    const policies = () => sql.prepare('SELECT * FROM annual_leave_policy_versions ORDER BY effective_from,id').all().map((r) => ({ ...parse(r.data_json), id: r.id }));
+    const policies = () => sql.prepare('SELECT * FROM annual_leave_policy_versions ORDER BY effective_from,id').all().map((r) => ({ halfYearMode: 'prorated', ...parse(r.data_json), id: r.id }));
     const services = () => sql.prepare('SELECT * FROM employee_service_periods ORDER BY employee_id').all().map((r) => ({ ...parse(r.data_json), revision: r.revision }));
     const accounts = () => sql.prepare('SELECT * FROM annual_leave_accounts WHERE active=1 ORDER BY employee_id,leave_type_id').all().map((r) => ({ ...parse(r.data_json), id: r.id, employeeId: r.employee_id, leaveTypeId: r.leave_type_id }));
     const lotsFor = (accountId) => sql.prepare('SELECT * FROM annual_leave_grant_lots WHERE account_id=? ORDER BY event_key').all(accountId).map((r) => ({ ...parse(r.data_json), id: r.id, accountId: r.account_id }));
@@ -81,25 +83,58 @@ function createAnnualLeaveStore(sql, addAuditLog, options = {}) {
     function ledger(accountId, allocationId, requestId, action, data) {
         sql.prepare('INSERT INTO annual_leave_ledger VALUES (?,?,?,?,?,?,?)').run(id(), accountId, allocationId || null, requestId || null, action, json(data), now());
     }
+    function policyCanRevise(policy) {
+        // Even inactive accounts are historical posted references. A later
+        // employee deletion must never make an already-used policy editable.
+        if (sql.prepare('SELECT 1 FROM annual_leave_accounts WHERE leave_type_id=? LIMIT 1').get(policy.leaveTypeId)) return false;
+        const ids = new Set(policies().filter((p) => p.leaveTypeId === policy.leaveTypeId).map((p) => p.id));
+        return !['annual_leave_grant_lots', 'annual_leave_allocations', 'annual_leave_ledger'].some((table) =>
+            sql.prepare(`SELECT data_json FROM ${table}`).all().some((row) => {
+                const data = parse(row.data_json);
+                return ids.has(data.policyId) || ids.has(data.policy?.id);
+            }));
+    }
+    function policyFields(body) {
+        if (body.confirm !== true || body.confirmAnnualLeave !== true) fail('請確認此制度只適用所選特休假別。');
+        const type = sql.prepare('SELECT * FROM leave_types WHERE id=?').get(body.leaveTypeId);
+        if (!type || !type.enabled || !type.deducts_balance) fail('請選擇已啟用且扣額度的特休假別。');
+        if (!['calendar_year', 'anniversary'].includes(body.period) || !['calendar_month', 'actual_day'].includes(body.prorationBasis) || !['raw', 'ceil_1_decimal'].includes(body.rounding)) fail('制度期間、折算基礎或小數方式不正確。');
+        const halfYearMode = body.halfYearMode ?? 'prorated';
+        if (!['prorated', FULL_HALF_YEAR].includes(halfYearMode) || (halfYearMode === FULL_HALF_YEAR && body.period !== 'calendar_year')) fail('半年整筆給假並於年底結清只適用曆年制。');
+        const effectiveFrom = date(body.effectiveFrom);
+        if (effectiveFrom < '2017-01-01') fail('現行年資制度生效日不可早於 2017-01-01。');
+        return { name: text(body.name, '制度名稱', 100), leaveTypeId: type.id, leaveTypeName: type.name,
+            period: body.period, prorationBasis: body.prorationBasis, rounding: body.rounding, halfYearMode, effectiveFrom,
+            agreementReference: text(body.agreementReference, '制度與折算約定依據'), reason: text(body.reason, '設定原因') };
+    }
     function savePolicy(body, audit) {
         return sql.transaction(() => {
             checkRevision(body);
-            if (body.confirm !== true || body.confirmAnnualLeave !== true) fail('請確認此制度只適用所選特休假別。');
-            const type = sql.prepare('SELECT * FROM leave_types WHERE id=?').get(body.leaveTypeId);
-            if (!type || !type.enabled || !type.deducts_balance) fail('請選擇已啟用且扣額度的特休假別。');
-            if (!['calendar_year', 'anniversary'].includes(body.period) || !['calendar_month', 'actual_day'].includes(body.prorationBasis) || !['raw', 'ceil_1_decimal'].includes(body.rounding)) fail('制度期間、折算基礎或小數方式不正確。');
-            const effectiveFrom = date(body.effectiveFrom), why = text(body.reason, '設定原因');
-            if (effectiveFrom < '2017-01-01') fail('現行年資制度生效日不可早於 2017-01-01。');
-            const previous = policies().filter((p) => p.leaveTypeId === type.id);
+            const fields = policyFields(body), { effectiveFrom, reason: why } = fields;
+            const previous = policies().filter((p) => p.leaveTypeId === fields.leaveTypeId);
             if (previous.some((p) => p.effectiveFrom >= effectiveFrom)) fail('新制度版本的生效日須晚於此假別所有舊版本。', 409);
-            const posted = accounts().filter((a) => a.leaveTypeId === type.id).flatMap((a) => lotsFor(a.id));
+            const posted = accounts().filter((a) => a.leaveTypeId === fields.leaveTypeId).flatMap((a) => lotsFor(a.id));
             if (posted.some((l) => l.acquisitionDate >= effectiveFrom)) fail('新版本生效日不可回溯覆蓋已給假批次。', 409);
-            const policy = { id: id(), name: text(body.name, '制度名稱', 100), leaveTypeId: type.id, leaveTypeName: type.name,
-                period: body.period, prorationBasis: body.prorationBasis, rounding: body.rounding, effectiveFrom,
-                agreementReference: text(body.agreementReference, '制度與折算約定依據'), reason: why, createdAt: now() };
-            sql.prepare('INSERT INTO annual_leave_policy_versions VALUES (?,?,?,?,?)').run(policy.id, type.id, effectiveFrom, json(policy), now());
+            const policy = { id: id(), ...fields, createdAt: now() };
+            sql.prepare('INSERT INTO annual_leave_policy_versions VALUES (?,?,?,?,?)').run(policy.id, fields.leaveTypeId, effectiveFrom, json(policy), now());
             entryAudit(audit, 'annual_leave_policy', policy.id, null, policy, `建立特休制度版本：${why}`);
             return { policyId: policy.id, policy };
+        })();
+    }
+    function reviseUnusedPolicy(body, audit) {
+        return sql.transaction(() => {
+            checkRevision(body);
+            if (body.confirmUnusedRevision !== true) fail('請明確確認只修訂尚未入帳的制度，保留原版本歷程。');
+            const before = policies().find((p) => p.id === body.policyId);
+            if (!before) fail('找不到要修訂的制度。', 404);
+            if (!policyCanRevise(before)) fail('此假別已有入帳或歷史權利帳，不能修改原制度；請另建較晚生效版本。', 409);
+            const fields = policyFields(body);
+            if (fields.leaveTypeId !== before.leaveTypeId || fields.effectiveFrom !== before.effectiveFrom) fail('未入帳修訂須保留原假別與生效日；日期異動請另建制度版本。');
+            const revisionId = id(), policy = { ...before, ...fields, revisedAt: now(), revisionId };
+            sql.prepare('INSERT INTO annual_leave_policy_revisions VALUES (?,?,?,?,?)').run(revisionId, before.id, json(before), json(policy), now());
+            sql.prepare('UPDATE annual_leave_policy_versions SET data_json=? WHERE id=?').run(json(policy), before.id);
+            entryAudit(audit, 'annual_leave_policy_revision', before.id, before, policy, `修訂未入帳特休制度：${fields.reason}`);
+            return { policyId: policy.id, policy, revisionId };
         })();
     }
     function saveService(body, audit) {
@@ -132,24 +167,36 @@ function createAnnualLeaveStore(sql, addAuditLog, options = {}) {
             excludedPeriods.forEach((p, i) => { if (p.end <= p.start || p.start < serviceDate || (i && excludedPeriods[i - 1].end > p.start)) fail('不計年資區間不得倒置、重疊或早於起算日。'); });
             const openingHours = body.openingHours == null && previous ? exact(previous.openingHours) : quantity(body.openingHours ?? '0', '接管剩餘小時'), openingExpires = date(body.openingExpires || previous?.openingExpires || `${cutoverDate.slice(0, 4)}-12-31`);
             if (openingExpires < cutoverDate || openingExpires > nextYearDate(cutoverDate)) fail('接管額度期限須自接管起日至其後一年內。');
+            const openingHalfYearOnly = body.openingHalfYearOnly ?? previous?.openingHalfYearOnly ?? false;
+            if (typeof openingHalfYearOnly !== 'boolean') fail('半年假接管來源標記須為布林值。');
+            if (openingHalfYearOnly && (openingExpires !== `${cutoverDate.slice(0, 4)}-12-31` || (!activeAccounts.length && cmp(openingHours, mul(mul('3', entitlementFactor), dayHours)) > 0))) fail('半年假接管餘額不得超過原半年完整權利，且期限須為接管當年 12/31。');
             const manual = sql.prepare('SELECT * FROM leave_entitlements WHERE employee_id=? ORDER BY leave_type_id,year').all(person.id);
             if (!activeAccounts.length && (manual.length || cmp(openingHours, '0') > 0) && body.takeoverConfirmed !== true) fail('已有人工額度或接管餘額，請核對後確認接管，避免重複給假。');
             const why = text(body.reason, '年資核對原因'), openingSource = manual.length || cmp(openingHours, '0') > 0 ? text(body.openingSource ?? previous?.openingSource, '接管對帳依據') : String(body.openingSource ?? previous?.openingSource ?? '').trim();
-            if (activeAccounts.length && (cutoverDate !== previous.cutoverDate || cmp(openingHours, previous.openingHours) !== 0 || openingExpires !== previous.openingExpires || openingSource !== previous.openingSource)) fail('接管後不可改寫接管日期、期初餘額、期限或對帳來源；請使用獨立額度調整保存原因。', 409);
+            if (activeAccounts.length && (cutoverDate !== previous.cutoverDate || cmp(openingHours, previous.openingHours) !== 0 || openingExpires !== previous.openingExpires || openingSource !== previous.openingSource || openingHalfYearOnly !== (previous.openingHalfYearOnly || false))) fail('接管後不可改寫接管日期、期初餘額、期限或對帳來源；請使用獨立額度調整保存原因。', 409);
             const service = { employeeId: person.id, hireDate, leaveDate: person.leave_date || '', serviceDate, excludedPeriods, dayHours,
                 employmentType, entitlementFactor, factorBasis, edgeDateConfirmed: body.edgeDateConfirmed === true, verified: true,
-                cutoverDate, openingHours, openingExpires, openingSource, takeoverConfirmed: activeAccounts.length ? previous.takeoverConfirmed : body.takeoverConfirmed === true,
+                cutoverDate, openingHours, openingExpires, openingSource, openingHalfYearOnly, takeoverConfirmed: activeAccounts.length ? previous.takeoverConfirmed : body.takeoverConfirmed === true,
                 manualRevision: hash(manual), reason: why, verifiedAt: now(), revision: id(), effectiveFrom, reviewRequired: false, reviewIssues: [] };
             // Validate the service calendar before accepting even an unposted
             // version. In particular, exclusions must not exceed termination.
             calc.calculate(calculatorInput(person, service, { period: 'anniversary', prorationBasis: 'calendar_month', rounding: 'raw' }, Number(effectiveFrom.slice(0, 4)), today()));
+            if (openingHalfYearOnly) {
+                const openingTerms = activeAccounts.length ? serviceVersionAt(previous, cutoverDate) : service;
+                const openingCheck = calc.calculate(calculatorInput(person, service, { period: 'calendar_year', halfYearMode: FULL_HALF_YEAR, prorationBasis: 'calendar_month', rounding: 'raw' }, Number(cutoverDate.slice(0, 4)), cutoverDate, openingTerms));
+                const source = openingCheck.sourceLots.find((lot) => lot.eventKey === 'm6' && lot.status === 'acquired' && lot.acquisitionDate < cutoverDate);
+                if (!source || source.acquisitionDate.slice(0, 4) !== cutoverDate.slice(0, 4)) fail('半年假接管須為接管當年、接管日前已取得的半年來源；未取得或跨年已結清的來源不可帶入。');
+                if (activeAccounts.length && source.acquisitionDate !== previous.openingHalfYearSource?.acquisitionDate) fail('已接管半年來源的資格日不可改寫，請先完成專用歷史對帳。', 409);
+                service.openingHalfYearSource = { eventKey: 'm6', acquisitionDate: source.acquisitionDate, statutoryDays: source.statutoryDays, statutoryHours: source.statutoryHours,
+                    previouslyUsedOrSettledHours: sub(source.statutoryHours, openingHours), periodEndExclusive: source.periodEndExclusive };
+            }
             const version = { ...service, id: service.revision };
             service.versions = [...oldVersions.filter((v) => v.effectiveFrom !== effectiveFrom), version];
             const issues = [];
             for (const account of activeAccounts) {
                 for (const lot of lotsFor(account.id)) {
                     const terms = serviceVersionAt(service, lot.acquisitionDate);
-                    const recalculated = calc.calculate(calculatorInput(person, service, { ...lot.policy, period: 'anniversary' }, Number(lot.acquisitionDate.slice(0, 4)), today(), terms));
+                    const recalculated = calc.calculate(calculatorInput(person, service, { ...lot.policy, period: lot.halfYearMode === FULL_HALF_YEAR ? 'calendar_year' : 'anniversary', halfYearMode: lot.halfYearMode === FULL_HALF_YEAR ? FULL_HALF_YEAR : 'prorated' }, Number(lot.acquisitionDate.slice(0, 4)), today(), terms));
                     const expected = recalculated.sourceLots.find((candidate) => candidate.eventKey === lot.eventKey);
                     if (!expected || expected.acquisitionDate !== lot.acquisitionDate || expected.status !== 'acquired' || expected.periodEndExclusive !== lot.periodEndExclusive || cmp(expected.statutoryDays, lot.statutoryDays) !== 0 || cmp(expected.statutoryHours, lot.statutoryHours) !== 0) {
                         issues.push(`已入帳來源 ${lot.eventKey}（${lot.acquisitionDate}）的取得日、資格或完整權利將改變；須專用歷史對帳，不可回寫原批次。`);
@@ -177,7 +224,7 @@ function createAnnualLeaveStore(sql, addAuditLog, options = {}) {
             const grantHours = add(item.hours, adjustedHours);
             return { ...item, id: r.id, lotId: r.id, accountId: account.id, sourceLotId: r.source_lot_id, employeeId: account.employeeId,
                 name: person?.name || '', leaveTypeId: account.leaveTypeId, year: r.year, grantHours, adjustedHours, closedHours,
-                usedHours: exact('0'), heldHours: exact('0'), availableHours: sub(grantHours, closedHours), warnings: [], canCarry: item.kind !== 'carry' };
+                usedHours: exact('0'), heldHours: exact('0'), availableHours: sub(grantHours, closedHours), warnings: [], canCarry: item.kind !== 'carry' && item.settlementRule !== 'year_end_wage_only' };
         });
         const warnings = [], unfunded = [], requestRows = new Map();
         const requests = sql.prepare("SELECT * FROM leave_requests WHERE employee_id=? AND leave_type_id=? AND created_at>? AND status IN ('approved','pending_supervisor','pending_admin') ORDER BY start_at,created_at,id").all(account.employeeId, account.leaveTypeId, account.employeeEpoch);
@@ -299,7 +346,7 @@ function createAnnualLeaveStore(sql, addAuditLog, options = {}) {
     }
     function state(requestedYear) {
         const y = year(requestedYear), all = accounts().map(compute), people = staff();
-        return { year: y, today: today(), revision: revision(), policies: policies(), employees: people, services: services(),
+        return { year: y, today: today(), revision: revision(), policies: policies().map((policy) => ({ ...policy, canRevise: policyCanRevise(policy) })), employees: people, services: services(),
             leaveTypes: sql.prepare('SELECT id,name,enabled,deducts_balance FROM leave_types ORDER BY display_order,id').all(),
             accounts: all.map((s) => ({ ...s.account, warnings: s.warnings.map((w) => w.message) })),
             balances: balanceRows(people.map((p) => p.id), y),
@@ -316,7 +363,7 @@ function createAnnualLeaveStore(sql, addAuditLog, options = {}) {
     const serviceVersionAt = (service, acquiredAt) => serviceVersions(service).filter((version) => version.effectiveFrom <= acquiredAt).at(-1) || serviceVersions(service)[0];
     const calculatorInput = (person, service, policy, y, asOf, terms = service) => ({ employeeId: person.id, hireDate: service.hireDate,
         serviceDate: service.serviceDate, excludedPeriods: service.excludedPeriods.map(({ start, end }) => ({ start, end })), year: y, asOf,
-        period: policy.period, prorationBasis: policy.prorationBasis, rounding: policy.rounding, dayHours: terms.dayHours,
+        period: policy.period, prorationBasis: policy.prorationBasis, rounding: policy.rounding, halfYearMode: policy.halfYearMode || 'prorated', dayHours: terms.dayHours,
         leaveDate: person.leave_date || undefined, edgeDateConfirmed: service.edgeDateConfirmed,
         employmentType: terms.employmentType, entitlementFactor: terms.entitlementFactor, factorBasis: terms.factorBasis });
     function calculateServiceVersions(person, service, policy, y, asOf) {
@@ -383,6 +430,13 @@ function createAnnualLeaveStore(sql, addAuditLog, options = {}) {
             row.warnings.push(...calculation.warnings.map((w) => w.message || String(w)));
             if (calculation.manualConfirmationRequired || calculation.warnings.some((w) => w.blocking)) return row;
             if (service.cutoverDate > asOf) { row.warnings.push('接管起日尚未到達試算基準日。'); return row; }
+            if (!oldAccount && service.openingHalfYearOnly && policy.halfYearMode !== FULL_HALF_YEAR) { row.warnings.push('半年假年底結清的接管來源須使用對應的半年整筆制度。'); return row; }
+            if (!oldAccount && !service.openingHalfYearOnly && cmp(service.openingHours, '0') > 0 && policy.halfYearMode === FULL_HALF_YEAR) {
+                const atCutover = calculateServiceVersions(person, service, policy, Number(service.cutoverDate.slice(0, 4)), service.cutoverDate);
+                if (atCutover.sourceLots.some((lot) => lot.eventKey === 'm6' && lot.status === 'acquired' && lot.acquisitionDate < service.cutoverDate)) {
+                    row.warnings.push('期初可能混合半年與滿一年來源，請先拆清；本版尚不支援混合來源直接接管。若核對後僅含半年假，請標記「接管餘額僅含半年假」，保留年底結清限制。'); return row;
+                }
+            }
             const accountId = oldAccount?.id || `new:${person.id}:${policy.leaveTypeId}`;
             const existing = oldAccount ? lotsFor(oldAccount.id) : [], allAllocations = oldAccount ? compute(oldAccount).allocations : [];
             const newLots = calculation.sourceLots.filter((l) => l.status === 'acquired' && l.acquisitionDate >= service.cutoverDate && l.acquisitionDate >= policy.effectiveFrom && (!nextPolicy || l.acquisitionDate < nextPolicy.effectiveFrom) && !existing.some((e) => e.eventKey === l.eventKey));
@@ -412,7 +466,12 @@ function createAnnualLeaveStore(sql, addAuditLog, options = {}) {
                 const posted = add(sum(previousRounding.map((a) => a.hours)), sum(allAllocations.filter((a) => a.year === targetYear).flatMap((a) => sql.prepare('SELECT amount_json,data_json FROM annual_leave_adjustments WHERE allocation_id=?').all(a.id).filter((r) => parse(r.data_json).kind === 'rounding_delta').map((r) => parse(r.amount_json)))));
                 const difference = sub(wanted, posted);
                 if (cmp(difference, '0') < 0 && previousRounding.some((a) => cmp(a.closedHours, '0') > 0)) { row.warnings.push('該年度進位加給已結算，請先核對新增來源與已結算差額。'); return row; }
-                if (cmp(difference, '0') !== 0) rounding.push({ year: targetYear, difference, rawDays, roundedDays, dayHours: yearDayHours });
+                // A rounding bonus involving a cash-only half-year source must
+                // not become a back door for carrying that source. It is a
+                // company rounding bonus, distinct from the y1+ legal right.
+                const halfYearBonus = previous.some((a) => a.settlementRule === 'year_end_wage_only') || lotPlans.some((lp) => lp.source.settlementRule === 'year_end_wage_only' && lp.allocations.some((a) => a.year === targetYear));
+                if (cmp(difference, '0') !== 0) rounding.push({ year: targetYear, difference, rawDays, roundedDays, dayHours: yearDayHours,
+                    ...(halfYearBonus ? { settlementRule: 'year_end_wage_only' } : {}) });
             }
             const opening = !oldAccount && cmp(service.openingHours, '0') > 0;
             const deltaHours = add(sum(plannedAllocations.map((a) => a.hours)), sum(rounding.map((r) => r.difference)));
@@ -454,7 +513,7 @@ function createAnnualLeaveStore(sql, addAuditLog, options = {}) {
             if (cmp(allocation.heldHours, '0') > 0) warning.push('此來源尚有待審預占，請先結案。');
             if (view.unfunded.some((u) => u.date >= allocation.periodStart && u.date < allocation.periodEndExclusive)) warning.push('來源期間存在尚未覆蓋的請假時數，請先核對。');
             if (cmp(allocation.availableHours, '0') <= 0) warning.push('來源沒有可結算的正數餘額。');
-            if (input.mode === 'carry' && !allocation.canCarry) warning.push('已遞延的來源不能再次遞延，請列待結算工資。');
+            if (input.mode === 'carry' && !allocation.canCarry) warning.push(allocation.settlementRule === 'year_end_wage_only' ? '半年整筆來源須於年底列待結算工資，不能遞延至次年。' : '已遞延的來源不能再次遞延，請列待結算工資。');
             let agreementDate = '', evidence = '';
             if (input.mode === 'carry') {
                 agreementDate = date(input.agreementDate); evidence = text(input.evidence, '員工協商同意依據');
@@ -520,13 +579,15 @@ function createAnnualLeaveStore(sql, addAuditLog, options = {}) {
                 sql.prepare('INSERT INTO annual_leave_accounts VALUES (?,?,?,?,?,?)').run(accountId, p.person.id, p.policy.leaveTypeId, 1, json(account), now());
                 if (p.opening) addAllocation(accountId, null, Number(p.service.cutoverDate.slice(0, 4)), { kind: 'opening', hours: p.service.openingHours,
                     dayHours: openingTerms.dayHours, serviceVersionId: openingTerms.id, periodStart: p.service.cutoverDate, periodEndExclusive: plusDay(p.service.openingExpires),
-                    sourceYear: Number(p.service.cutoverDate.slice(0, 4)), reason: '人工對帳接管的剩餘額度', policyId: p.policy.id }, batchId);
+                    sourceYear: Number(p.service.cutoverDate.slice(0, 4)), reason: '人工對帳接管的剩餘額度', policyId: p.policy.id,
+                    ...(p.service.openingHalfYearOnly ? { openingHalfYearOnly: true, eventKey: 'm6', halfYearMode: FULL_HALF_YEAR, settlementRule: 'year_end_wage_only', openingHalfYearSource: p.service.openingHalfYearSource } : {}) }, batchId);
             }
             for (const lp of p.lotPlans) {
                 const lotId = id(), data = { ...lp.source, policyId: p.policy.id, policy: p.policy, calculation: p.calculation, reason: plan.reason, notifiedAt: now() };
                 sql.prepare('INSERT INTO annual_leave_grant_lots VALUES (?,?,?,?,?)').run(lotId, accountId, lp.source.eventKey, json(data), now());
                 for (const a of lp.allocations) addAllocation(accountId, lotId, a.year, { ...a, kind: 'grant', dayHours: a.dayHours, serviceVersionId: lp.source.serviceVersionId,
-                    sourceYear: Number(lp.source.acquisitionDate.slice(0, 4)), rounding: p.policy.rounding, policyId: p.policy.id, eventKey: lp.source.eventKey }, batchId);
+                    sourceYear: Number(lp.source.acquisitionDate.slice(0, 4)), rounding: p.policy.rounding, policyId: p.policy.id, eventKey: lp.source.eventKey,
+                    ...(lp.source.settlementRule ? { settlementRule: lp.source.settlementRule, halfYearMode: lp.source.halfYearMode } : {}) }, batchId);
                 added++;
             }
             for (const rounding of p.rounding) {
@@ -553,7 +614,8 @@ function createAnnualLeaveStore(sql, addAuditLog, options = {}) {
                 } else if (existing) adjust(existing, rounding.difference);
                 else addAllocation(accountId, null, rounding.year, { kind: 'rounding', hours: rounding.difference, dayHours: rounding.dayHours,
                     periodStart: `${rounding.year}-01-01`, periodEndExclusive: `${rounding.year + 1}-01-01`, sourceYear: rounding.year,
-                    rounding: p.policy.rounding, policyId: p.policy.id, calculation: rounding }, batchId);
+                    rounding: p.policy.rounding, policyId: p.policy.id, calculation: rounding,
+                    ...(rounding.settlementRule ? { settlementRule: rounding.settlementRule } : {}) }, batchId);
             }
         }
         return { updatedCount: plan.plans.length, addedLots: added };
@@ -606,7 +668,7 @@ function createAnnualLeaveStore(sql, addAuditLog, options = {}) {
             const included = new Set(allocations.map((r) => r.id)), sourceIds = new Set(allocations.map((r) => r.sourceLotId).filter(Boolean));
             return { employeeId: a.employeeId, name: people.find((p) => p.id === a.employeeId)?.name || '', leaveTypeId: a.leaveTypeId,
                 balances: balanceRows([a.employeeId], y).filter((b) => b.leave_type_id === a.leaveTypeId), allocations,
-                lots: s.lots.filter((l) => sourceIds.has(l.id)).map(({ reason, policy, ...l }) => calculationForEmployee({ ...l, policy: { name: policy.name, period: policy.period, rounding: policy.rounding, prorationBasis: policy.prorationBasis } })),
+                lots: s.lots.filter((l) => sourceIds.has(l.id)).map(({ reason, policy, ...l }) => calculationForEmployee({ ...l, policy: { name: policy.name, period: policy.period, rounding: policy.rounding, prorationBasis: policy.prorationBasis, halfYearMode: policy.halfYearMode || 'prorated' } })),
                 closures: s.closures.filter((c) => included.has(c.allocationId)).map(({ evidence, agreementDate, reason, ...c }) => c),
                 ledger: sql.prepare('SELECT * FROM annual_leave_ledger WHERE account_id=? ORDER BY created_at,id').all(a.id).filter((r) => included.has(r.allocation_id)).map((r) => ({ id: r.id, allocationId: r.allocation_id, requestId: r.request_id, action: r.action, createdAt: r.created_at, amount: parse(r.data_json).amount || parse(r.data_json).delta })),
                 warnings: s.warnings.filter((w) => w.start < end && w.end >= from).map((w) => w.message) };
@@ -619,7 +681,7 @@ function createAnnualLeaveStore(sql, addAuditLog, options = {}) {
             sql.prepare('DELETE FROM employee_service_periods WHERE employee_id=?').run(employeeId);
         }
     }
-    return { state, revision, today, policies, savePolicy, saveService, employeeView, balances: balanceRows, reconcile, removeEmployees,
+    return { state, revision, today, policies, savePolicy, reviseUnusedPolicy, saveService, employeeView, balances: balanceRows, reconcile, removeEmployees,
         isManaged: (employeeId, typeId, requestedYear) => accounts().some((a) => a.employeeId === employeeId && a.leaveTypeId === typeId && a.cutoverDate < `${Number(requestedYear) + 1}-01-01`),
         grantPreview: (body, ctx) => preview('grant', body, ctx), grantConfirm: (body, audit, ctx) => confirm('grant', body, audit, ctx),
         closePreview: (body, ctx) => preview('close', body, ctx), closeConfirm: (body, audit, ctx) => confirm('close', body, audit, ctx),

@@ -28,7 +28,7 @@ async function fixture() {
         calls.push({ method: 'employeeView', ids, year });
         return { year, employees: ids.map((employeeId) => ({ employeeId, name: employeeId, balances: [], lots: [], closures: [], warnings: [] })) };
     } };
-    for (const method of ['savePolicy', 'saveService']) store[method] = (body, audit) => {
+    for (const method of ['savePolicy', 'reviseUnusedPolicy', 'saveService']) store[method] = (body, audit) => {
         if (nextError) { const error = nextError; nextError = null; throw error; }
         calls.push({ method, body, audit: audit({ action: method }) }); return { saved: true };
     };
@@ -85,7 +85,7 @@ test('annual leave routes enforce separate permissions, server-owned actor conte
     assert.equal((await request('', undefined, 'adjust')).permissions.grant, false);
     assert.equal((await request('', undefined, 'system')).permissions.policyManage, true);
 
-    for (const route of ['/policy', '/service']) {
+    for (const route of ['/policy', '/policy-revision', '/service']) {
         for (const token of ['view', 'grant', 'close', 'adjust', 'employee']) assert.equal((await request(route, { confirm: true }, token)).status, 403);
         const result = await request(route, { reason: 'test', actorId: 'forged', actor_id: 'forged', token: 'forged', context: { actorId: 'forged' } }, 'policy');
         assert.equal(result.status, 200);
@@ -114,7 +114,7 @@ test('annual leave routes enforce separate permissions, server-owned actor conte
     const failed = await request('/policy', { reason: 'audit failure' }, 'system');
     assert.equal(failed.status, 500); assert.ok(!failed.text.includes('SQL path')); assert.equal(f.notifications(), before);
 
-    for (const route of ['/policy', '/service', '/grant-confirm', '/close-confirm', '/correction-confirm']) assert.equal((await request(route, body, 'impersonated')).status, 403);
+    for (const route of ['/policy', '/policy-revision', '/service', '/grant-confirm', '/close-confirm', '/correction-confirm']) assert.equal((await request(route, body, 'impersonated')).status, 403);
     assert.equal((await request('', undefined, 'impersonated')).permissions.grant, false);
 });
 

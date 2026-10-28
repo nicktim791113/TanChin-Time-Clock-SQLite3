@@ -61,7 +61,7 @@ function exportSnapshot(state, year, employeeView) {
         'carryHours', 'settlementHours', 'pendingHours', 'unpaidHours', 'createdAt', 'calculatedAt'];
     const pick = (row, fields) => Object.fromEntries(fields.filter((key) => Object.hasOwn(row, key)).map((key) => [key, row[key]]));
     const allocationFields = ['id', 'sourceLotId', 'year', 'kind', 'periodStart', 'periodEndExclusive', 'sourceYear',
-        'dayHours', 'grantHours', 'adjustedHours', 'closedHours', 'usedHours', 'heldHours', 'availableHours', 'warnings'];
+        'dayHours', 'grantHours', 'adjustedHours', 'closedHours', 'usedHours', 'heldHours', 'availableHours', 'warnings', 'halfYearMode', 'settlementRule', 'openingHalfYearOnly'];
     const lotFields = ['id', 'eventKey', 'serviceMonths', 'acquisitionDate', 'baseAcquisitionDate', 'periodStart', 'periodEndExclusive',
         'baselineStatutoryDays', 'statutoryDays', 'statutoryHours', 'status', 'policy', 'calculation'];
     return {
@@ -110,6 +110,7 @@ function attachAnnualLeaveRoutes(server, { db, requireSession, hasPermission, au
     }));
     for (const [route, method, message] of [
         ['policy', 'savePolicy', '特休制度版本已儲存。'],
+        ['policy-revision', 'reviseUnusedPolicy', '未入帳特休制度已修訂，原設定已保留於修訂歷程；額度未入帳。'],
         ['service', 'saveService', '員工年資認列資料已儲存。']
     ]) {
         server.post(`${root}/${route}`, requireSession, permit('policyManage', true), handle((request, response) => {
