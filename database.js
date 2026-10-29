@@ -7,6 +7,7 @@ const webCredentials = require('./web-credentials');
 const { createMealStore } = require('./meal-management');
 const { createSupervisorStore } = require('./supervisor-management');
 const { createBrowserPunchPermissionStore } = require('./browser-punch-permissions');
+const { createEmployeeBrowserSettingsStore } = require('./employee-browser-settings');
 const { createRequestHistoryStore } = require('./request-history');
 const { createReviewSupervisorStore } = require('./review-supervisors');
 const { createLeaveEntitlementStore } = require('./leave-entitlements');
@@ -21,6 +22,7 @@ let db = null;
 let meals = null;
 let supervisors = null;
 let browserPunchPermissions = null;
+let employeeBrowserSettings = null;
 let requestHistory = null;
 let reviewSupervisors = null;
 let leaveEntitlements = null;
@@ -517,6 +519,7 @@ function init(dbFilePath) {
   seedDefaultLeaveTypes();
   supervisors = createSupervisorStore(db, (entry) => addAuditLog(entry));
   browserPunchPermissions = createBrowserPunchPermissionStore(db, (entry) => addAuditLog(entry));
+  employeeBrowserSettings = createEmployeeBrowserSettingsStore(db, (entry) => addAuditLog(entry));
   requestHistory = createRequestHistoryStore(db, (entry) => addAuditLog(entry));
   reviewSupervisors = createReviewSupervisorStore(db, (entry) => addAuditLog(entry));
   leaveEntitlements = createLeaveEntitlementStore(db, (entry) => addAuditLog(entry));
@@ -536,6 +539,7 @@ function close() {
   supervisors = null;
   browserPunchPermissions = null;
   requestHistory = null;
+  employeeBrowserSettings = null;
   reviewSupervisors = null;
   leaveEntitlements = null;
   annualLeave = null;
@@ -709,6 +713,7 @@ const saveEmployees = (employees) => {
         reviewSupervisors?.removeEmployees(removedIds);
         reviewWorkflow?.removeEmployees(removedIds);
         dashboardMetrics?.removeEmployees(removedIds);
+        employeeBrowserSettings?.removeEmployees(removedIds);
         run('DELETE FROM employees');
         for (const emp of employees) insert.run(normalizeEmployeeForStorage(emp));
         run('DELETE FROM web_credentials WHERE employee_id NOT IN (SELECT id FROM employees)');
@@ -725,6 +730,7 @@ const deleteAllEmployees = () => db.transaction(() => {
     reviewSupervisors?.removeEmployees(all('SELECT id FROM employees').map((row) => row.id));
     reviewWorkflow?.removeEmployees(all('SELECT id FROM employees').map((row) => row.id));
     dashboardMetrics?.removeEmployees(all('SELECT id FROM employees').map((row) => row.id));
+    employeeBrowserSettings?.removeEmployees(all('SELECT id FROM employees').map((row) => row.id));
     run('DELETE FROM web_credentials');
     run('DELETE FROM supervisor_assignments');
     run('DELETE FROM employee_review_supervisors');
@@ -2387,6 +2393,7 @@ const withAnnualLeave = (callback) => (...args) => db.transaction(() => {
 
 module.exports = {
   getSupervisors: () => supervisors,
+  getEmployeeBrowserSettings: () => employeeBrowserSettings,
   getBrowserPunchPermissions: () => browserPunchPermissions,
   getRequestHistory: () => requestHistory,
   getReviewSupervisors: () => reviewSupervisors,

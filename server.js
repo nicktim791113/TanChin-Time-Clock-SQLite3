@@ -12,6 +12,7 @@ const { attachMealRoutes } = require('./meal-routes');
 const { attachRequestCalendarRoutes, monthRange: leaveAuditMonthRange } = require('./request-calendar');
 const { attachSupervisorRoutes } = require('./supervisor-routes');
 const { isSupervisorSimulation } = require('./supervisor-management');
+const { punchHistoryWindow } = require('./employee-browser-settings');
 const { attachRequestHistoryRoutes } = require('./request-history');
 const { attachLeaveEntitlementRoutes } = require('./leave-entitlement-routes');
 const { attachAnnualLeaveRoutes, ANNUAL_LEAVE_PERMISSIONS } = require('./annual-leave-routes');
@@ -1449,7 +1450,7 @@ function formatPunchRecord(record) {
   const typeText = record.type === 'in' ? '上班' : '下班';
   const attendanceStatusText = getPunchAttendanceStatusText(record);
   const statusText = isDuplicatePunchRecord(record)
-    ? '重複打卡'
+    ? `${typeText}（重複打卡）`
     : typeText;
 
   return {
@@ -1814,7 +1815,7 @@ function createPunchRecord(employee, options = {}) {
     const duplicateRecord = {
       id: employee.id,
       timestamp,
-      type: lastValidPunch.type,
+      type: options.type || lastValidPunch.type,
       shift: shiftName,
       status: '重複打卡',
       source,
@@ -1838,13 +1839,9 @@ function createPunchRecord(employee, options = {}) {
   return { record, duplicate: false };
 }
 
-function getEmployeeRecentRecords(employeeId, days = 7) {
-  const startDate = new Date();
-  startDate.setHours(0, 0, 0, 0);
-  startDate.setDate(startDate.getDate() - (days - 1));
-
+function getEmployeeRecentRecords(employeeId, range = punchHistoryWindow()) {
   return getAllPunchRecords()
-    .filter((record) => record.id === employeeId && record.timestamp >= startDate.getTime())
+    .filter((record) => record.id === employeeId && record.timestamp >= range.startAt && record.timestamp <= range.endAt)
     .sort((a, b) => b.timestamp - a.timestamp)
     .map(formatPunchRecord);
 }
@@ -3039,7 +3036,7 @@ function getAdminSecurityDatasets(includeDeviceLoginDiagnostics = false) {
 }
 
 function buildEmployeeSecurityState(employee, session = null) {
-  const settings = getBrowserSecuritySettings();
+  const settings = getEmployeeBrowserSecuritySettings(employee.id);
   const devices = dbModule.loadEmployeeDevices(employee.id);
   const currentDevice = session?.deviceId
     ? devices.find((device) => device.device_id === session.deviceId) || null
@@ -3245,7 +3242,7 @@ function getAdminDatasets(session = {}) {
       canView: canOvertimeView,
       canPaperCreate: canOvertimePaperCreate
     }) : null,
-    security: canSecurity ? { ...getAdminSecurityDatasets(hasAdminPermission(session, 'admin.security.view')), browserPunchPermissions: dbModule.getBrowserPunchPermissions().state(), requestHistorySettings: dbModule.getRequestHistory().state() } : null,
+    security: canSecurity ? { ...getAdminSecurityDatasets(hasAdminPermission(session, 'admin.security.view')), browserPunchPermissions: dbModule.getBrowserPunchPermissions().state(), requestHistorySettings: dbModule.getRequestHistory().state(), employeeBrowserSettings: hasAnyAdminPermission(session, ['admin.security.view', 'admin.security.manage']) ? dbModule.getEmployeeBrowserSettings().state() : null } : null,
     accountAccess: null,
     meals: hasAdminPermission(session, 'admin.meals.view') ? dbModule.getMeals().calendar() : null,
     settings: {
@@ -3299,11 +3296,13 @@ function getDeveloperDatasets(session = {}) {
 }
 
 function buildEmployeeDashboard(employee, session = null) {
-  const recentRecords = getEmployeeRecentRecords(employee.id, 7);
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const todayRecordCount = recentRecords.filter((record) => record.timestamp >= todayStart.getTime()).length;
-  const validRecordCount = recentRecords.filter((record) => record.status !== '重複打卡').length;
+  const now = Date.now(), weekWindow = punchHistoryWindow('recent7', now);
+  const historyWindow = punchHistoryWindow(dbModule.getEmployeeBrowserSettings().forEmployee(employee.id).punchHistoryMode, now);
+  const recentRecords = getEmployeeRecentRecords(employee.id, historyWindow);
+  const weekRecords = getEmployeeRecentRecords(employee.id, weekWindow);
+  const todayStart = Date.parse(`${new Date(now + 8 * 3600000).toISOString().slice(0, 10)}T00:00:00+08:00`);
+  const todayRecordCount = weekRecords.filter((record) => record.timestamp >= todayStart).length;
+  const validRecordCount = weekRecords.filter((record) => record.status !== '重複打卡').length;
   const nextPunchType = determinePunchType(employee.id) === 'in' ? '上班' : '下班';
   const currentShift = findShiftForDate();
   const leave = getEmployeeLeaveState(employee), overtime = getEmployeeOvertimeState(employee);
@@ -3318,7 +3317,7 @@ function buildEmployeeDashboard(employee, session = null) {
     summary: {
       todayRecordCount,
       validRecordCount,
-      weekRecordCount: recentRecords.length,
+      weekRecordCount: weekRecords.length,
       currentShiftName: currentShift?.name || '未設定',
       nextPunchType,
       lastPunch: recentRecords[0] || null
@@ -3326,7 +3325,9 @@ function buildEmployeeDashboard(employee, session = null) {
     security: buildEmployeeSecurityState(employee, session),
     punchAction: {
       label: `現在打卡（預計${nextPunchType}）`,
-      enabled: dbModule.getBrowserPunchPermissions().allowed(employee.id)
+      suggestedType: determinePunchType(employee.id),
+      latestValidPunch: getLastValidPunch(employee.id) ? { employeeId: employee.id, timestamp: getLastValidPunch(employee.id).timestamp, type: getLastValidPunch(employee.id).type } : null,
+      enabled: dbModule.getBrowserPunchPermissions().allowed(employee.id) && !session?.impersonation?.active && (!session?.realEmployeeId || session.realEmployeeId === employee.id)
     },
     leave,
     overtime,
@@ -3338,6 +3339,7 @@ function buildEmployeeDashboard(employee, session = null) {
         (['card', 'web_password'].includes(session?.authMethod) && !session?.impersonation?.active && (!session?.realEmployeeId || session.realEmployeeId === employee.id))),
       canUse: ['card', 'web_password'].includes(session?.authMethod) && !session?.impersonation?.active &&
         (!session?.realEmployeeId || session.realEmployeeId === employee.id) },
+    punchHistoryWindow: historyWindow,
     recentRecords
   };
 }
@@ -3587,6 +3589,7 @@ function buildSystemAdminDashboard() {
       },
       accountAccess,
       browserPunchPermissions: dbModule.getBrowserPunchPermissions().state(),
+      employeeBrowserSettings: dbModule.getEmployeeBrowserSettings().state(),
       requestHistorySettings: dbModule.getRequestHistory().state()
     }
   };
@@ -3781,11 +3784,16 @@ function buildEmployeeDeviceRecord(employeeId, deviceInfo, request, existingDevi
   };
 }
 
+function getEmployeeBrowserSecuritySettings(employeeId) {
+  const settings = getBrowserSecuritySettings();
+  return employeeId ? { ...settings, maxDevicesPerEmployee: dbModule.getEmployeeBrowserSettings().forEmployee(employeeId).effectiveDeviceLimit } : settings;
+}
+
 function writeDeviceLoginDiagnostic(request, { stage, success, error, employee = null } = {}) {
   // Diagnostics must never turn a successful binding into a failed response that loses its token.
   try {
     const data = buildDeviceLoginDiagnostic({ request, employee, stage, success, error,
-      settings: getBrowserSecuritySettings(),
+      settings: getEmployeeBrowserSecuritySettings(employee?.id),
       boundDeviceCount: employee ? dbModule.loadEmployeeDevices(employee.id).length : 0 });
     dbModule.addAuditLog({ timestamp: Date.now(), actor_id: data.employeeId || null,
       actor_name: data.employeeName || null, channel: 'browser', action: data.stage,
@@ -3798,7 +3806,7 @@ function writeDeviceLoginDiagnostic(request, { stage, success, error, employee =
 }
 
 function authorizeEmployeeDeviceForLogin(employee, request, deviceInfo = {}, options = {}) {
-  const securitySettings = getBrowserSecuritySettings();
+  const securitySettings = getEmployeeBrowserSecuritySettings(employee.id);
   const devices = dbModule.loadEmployeeDevices(employee.id);
   request.deviceAuthorization = { originalDeviceId: deviceInfo.deviceId || '', canonicalDeviceId: '',
     boundDeviceCountBefore: devices.length, boundDeviceCountAfter: devices.length, bindingOutcome: 'blocked',
@@ -5420,11 +5428,35 @@ function attachBrowserRoutes(server) {
         response.status(401).json({ success: false, error: errorMessage });
         return;
       }
+      if (request.browserSession.impersonation?.active || (request.browserSession.realEmployeeId && request.browserSession.realEmployeeId !== employee.id) || !['card', 'web_password'].includes(request.browserSession.authMethod)) {
+        throw createHttpError('身份模擬不能打卡；請使用本人卡號或個人網頁密碼登入。', 403);
+      }
+      const manualType = request.body?.forceType;
+      if (manualType !== undefined && !['in', 'out'].includes(manualType)) throw createHttpError('下一次打卡動作僅可為上班或下班。', 400);
       if (!dbModule.getBrowserPunchPermissions().allowed(employee.id)) {
         throw createHttpError(withSupportCode('P241', '此員工未開放網頁線上打卡，請使用實體打卡鐘。'), 403);
       }
       const { securitySettings, deviceRecord } = validateEmployeeSessionDevice(request.browserSession, request);
       const locationValidation = validatePunchLocationPayload(request.body?.location, securitySettings);
+      const latest = getLastValidPunch(employee.id);
+      const lastEvent = getAllPunchRecords().filter((record) => record.id === employee.id).sort((a, b) => b.timestamp - a.timestamp)[0] || null;
+      const expectedLatest = latest ? { employeeId: employee.id, timestamp: latest.timestamp, type: latest.type, lastEventTimestamp: lastEvent?.timestamp || null, lastEventStatus: lastEvent?.status || null } : null;
+      const suggestedType = determinePunchType(employee.id);
+      const requiresConfirmation = manualType !== undefined && (manualType === latest?.type || manualType !== suggestedType);
+      let confirmedManual = false;
+      if (requiresConfirmation || (manualType !== undefined && request.body.confirmationToken)) {
+        const pending = request.browserSession.manualPunchConfirmation;
+        const confirmed = pending && pending.token === request.body.confirmationToken && pending.type === manualType && pending.expiresAt > Date.now()
+          && JSON.stringify(pending.expectedLatest) === JSON.stringify(expectedLatest) && JSON.stringify(request.body.expectedLatest) === JSON.stringify(expectedLatest);
+        if (!confirmed) {
+          const token = crypto.randomBytes(24).toString('hex');
+          request.browserSession.manualPunchConfirmation = { token, type: manualType, expectedLatest, expiresAt: Date.now() + 2 * 60 * 1000 };
+          response.json({ success: true, confirmationRequired: true, confirmation: { token, expectedLatest, selectedType: manualType, suggestedType } });
+          return;
+        }
+        delete request.browserSession.manualPunchConfirmation;
+        confirmedManual = true;
+      }
       const updatedDevice = updateEmployeeDeviceLocation(
         employee.id,
         deviceRecord,
@@ -5433,6 +5465,7 @@ function attachBrowserRoutes(server) {
       );
       const punchResult = createPunchRecord(employee, {
         source: 'browser',
+        type: manualType,
         allowDuplicateRecord: true,
         ip_address: getRequestIpAddress(request),
         user_agent: request.headers['user-agent'] || null,
@@ -5458,6 +5491,10 @@ function attachBrowserRoutes(server) {
         summary: `${employee.id} ${employee.name} 於瀏覽器${punchResult.record.type === 'in' ? '上班' : '下班'}打卡`,
         after_data: {
           employee_id: employee.id,
+          manual_type: manualType || null,
+          actor_employee_id: request.browserSession.realEmployeeId || employee.id,
+          manual_reason: manualType ? (confirmedManual ? '使用者確認手動指定下一次打卡動作' : '使用者手動選擇系統建議動作') : null,
+          confirmed_latest: confirmedManual ? expectedLatest : null,
           type: punchResult.record.type,
           status: punchResult.record.status,
           source: punchResult.record.source,
@@ -5995,6 +6032,25 @@ function attachBrowserRoutes(server) {
     });
     notifyDesktop('employees', getBrowserSyncMeta(request));
     response.json({ success: true, message: '員工資料已刪除。' });
+  });
+
+  const requireEmployeeBrowserSettingsAccess = (write) => (request, response, next) => {
+    if (write && request.browserSession.impersonation?.active) return response.status(403).json({ success: false, error: '身份模擬不能修改員工個別設定。' });
+    if (request.browserSession.role === 'system_admin') return next();
+    if (!write && request.browserSession.role === 'admin' && hasAdminPermission(request.browserSession, 'admin.security.manage')) return next();
+    return requireAdminPermission(write ? 'admin.security.manage' : 'admin.security.view')(request, response, next);
+  };
+  server.get('/api/browser/employee-browser-settings', requireBrowserSession, requireEmployeeBrowserSettingsAccess(false), (request, response) => {
+    response.json({ success: true, settings: dbModule.getEmployeeBrowserSettings().state() });
+  });
+  server.post('/api/browser/employee-browser-settings', requireBrowserSession, requireEmployeeBrowserSettingsAccess(true), (request, response) => {
+    try {
+      const settings = dbModule.getEmployeeBrowserSettings().save(request.body || {}, (entry) => buildBrowserAuditLogEntry(request, entry));
+      notifyDesktop('securitySettings', getBrowserSyncMeta(request));
+      response.json({ success: true, settings, message: '員工打卡查詢範圍與裝置上限已更新。' });
+    } catch (error) {
+      response.status(error.status || 500).json({ success: false, error: error.status ? error.message : '員工個別設定儲存失敗，未儲存異動。' });
+    }
   });
 
   server.post('/api/browser/admin/browser-punch-permissions', requireBrowserSession, (request, response, next) => {

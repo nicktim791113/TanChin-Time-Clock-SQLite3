@@ -146,6 +146,7 @@ $projectFiles = @(
     "leave-type-pay.js",
     "admin-security-data.js",
     "supervisor-management.js",
+    "employee-browser-settings.js",
     "supervisor-routes.js",
     "browser-punch-permissions.js",
     "tailwind.config.js"

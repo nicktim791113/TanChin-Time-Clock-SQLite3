@@ -70,7 +70,8 @@ body[data-workbench-role="employee"] .dm-review-notice { padding: 10px 14px; mar
     .employee-clock-card { gap: 12px; }
     .employee-punch-context { min-width: 0; flex-basis: 100%; }
     .employee-clock-card .quick-actions { margin: 0; width: 100%; }
-    .employee-clock-card .quick-actions .primary-btn { flex: 1; }
+    .employee-clock-card .quick-actions > .field { flex: 1 1 100%; min-width: 0; }
+    .employee-clock-card .quick-actions .primary-btn { flex: 1 1 160px; }
     .employee-order-dialog { padding: 16px; }
     .employee-order-list li { gap: 7px; }
 }

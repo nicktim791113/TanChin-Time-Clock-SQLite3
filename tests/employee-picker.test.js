@@ -39,7 +39,7 @@ function picker(ids, { selected = [], disabled = [], limit = 0 } = {}) {
             querySelector: () => input };
     });
     field.querySelectorAll = (selector) => selector.includes('data-paper-employee-item') ? items : items.map((item) => item.input).filter((input) => !selector.includes(':checked') || input.checked);
-    field.querySelector = (selector) => selector.includes('employee-search') ? search : selector.includes('employee-department') ? department : selector.includes('employee-empty') ? empty : count;
+    field.querySelector = (selector) => selector === '[data-sp-employee]' ? items.map(item => item.input).find(input => input.hasAttribute?.('data-sp-employee')) || null : selector.includes('employee-search') ? search : selector.includes('employee-department') ? department : selector.includes('employee-empty') ? empty : count;
     const event = (action) => ({ preventDefault() {}, target: { closest: () => ({ dataset: { action }, closest: (selector) => selector === '[data-sp-form]' ? field.form : field }) } });
     return { field, items, count, empty, search, department, event };
 }
@@ -160,9 +160,9 @@ test('proxy leave and overtime forms appear immediately; meal and assignment pic
         assert.ok(html.includes(`data-sp-form="${kind}"`)); assert.ok(html.includes('name="proxyReason"'));
         assert.ok(html.includes('data-paper-selection-limit="100"')); assert.ok(!html.includes('data-action="sp-create"'));
         assert.ok(html.includes('data-action="sp-reset-form"')); assert.equal((html.match(/name="startDate"/g) || []).length, 1);
-        assert.ok(!html.includes('name="viewEmployeeId"'), 'creation must not show a second employee record selector');
-        const records = vm.runInContext("supervisorState.proxyView='records'; renderSupervisorWorkspace()", context);
-        assert.ok(records.includes('name="viewEmployeeId"')); assert.ok(records.includes('紀錄查詢對象'));
+        assert.ok(!html.includes('name="viewEmployeeIds"'), 'creation must not show a second employee record selector');
+        const records = vm.runInContext("supervisorState.proxyView='records'; supervisorState.recordEmployeeIds=['E1']; renderSupervisorWorkspace()", context);
+        assert.ok(records.includes('name="viewEmployeeIds"')); assert.ok(!records.includes('type="radio"')); assert.ok(records.includes('paper-clear-employees')); assert.ok(records.includes('paper-select-visible-employees')); assert.ok(records.includes('紀錄查詢對象'));
         assert.ok(!records.includes('name="employeeIds"')); assert.ok(!records.includes(`data-sp-form="${kind}"`));
         vm.runInContext("supervisorState.proxyView='create'", context);
     }
@@ -234,15 +234,19 @@ test('cross-session roster and assignment notifications retain unsaved batch sel
     }
 });
 
-test('canceling a single employee switch restores radio identity without erasing the unsaved form', async () => {
-    const context = setup(), dom = picker(['E1', 'E2'], { selected: ['E2'] });
-    dom.items.forEach((item) => { item.input.type = 'radio'; item.input.hasAttribute = (name) => name === 'data-sp-employee'; });
+test('canceling a record multi-selection change restores every previous checkbox without erasing the unsaved form', async () => {
+    const context = setup(), dom = picker(['E1', 'E2', 'E3'], { selected: ['E2', 'E3'] });
+    dom.items.forEach((item) => { item.input.hasAttribute = (name) => name === 'data-sp-employee'; });
     dom.items[1].input.matches = () => true;
     context.event = { target: dom.items[1].input };
-    vm.runInContext("supervisorState.employeeId = 'E1'; supervisorState.dirty = true; spDiscard = async () => false;", context);
+    vm.runInContext("supervisorState.recordEmployeeIds = ['E1', 'E3']; supervisorState.employeeId = 'E1'; supervisorState.form = 'unsaved-draft'; supervisorState.dirty = true; spDiscard = async () => false;", context);
     await vm.runInContext('handleDashboardChange(event)', context);
-    assert.equal(dom.items[0].input.checked, true); assert.equal(dom.items[1].input.checked, false);
-    assert.equal(dom.items[1].input.value, 'E2'); assert.equal(vm.runInContext('supervisorState.dirty', context), true);
+    assert.deepEqual(dom.items.map(item => item.input.checked), [true, false, true]);
+    assert.deepEqual(dom.items.map(item => item.input.value), ['E1', 'E2', 'E3']);
+    assert.deepEqual(Array.from(vm.runInContext('supervisorState.recordEmployeeIds', context)), ['E1', 'E3']);
+    assert.equal(vm.runInContext('supervisorState.form', context), 'unsaved-draft');
+    assert.equal(vm.runInContext('supervisorState.dirty', context), true);
+    assert.equal(dom.count.textContent, '已選 2 位 / 顯示 3 位');
 });
 
 test('existing paper correction remains single-person and read-only punch settings retain checked staff', async () => {

@@ -1,0 +1,9 @@
+.ebs-panel { min-width: 0; margin: 24px 0; padding-top: 16px; border-top: 1px solid var(--line, #cbdce7); }
+.ebs-table-scroll { min-width: 0; max-width: 100%; overflow-x: auto; }
+.ebs-table { width: 100%; min-width: 560px; border-collapse: collapse; text-align: left; }
+.ebs-table th, .ebs-table td { padding: 10px; border-bottom: 1px solid var(--line, #cbdce7); overflow-wrap: anywhere; }
+.ebs-table select { width: 100%; min-width: 170px; padding: 9px 10px; border: 1px solid var(--line, #cbdce7); border-radius: 8px; background: var(--surface, white); color: inherit; font: inherit; box-sizing: border-box; }
+.ebs-panel [hidden] { display: none !important; }
+.ebs-retained { display: block; color: #805600; margin-top: 5px; }
+.ebs-search { max-width: 460px; }
+@media (max-width: 600px) { .ebs-panel { margin-top: 18px; } .ebs-table th, .ebs-table td { padding: 8px; } }

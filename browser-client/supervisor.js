@@ -1,4 +1,4 @@
-const supervisorState = { identity: '', data: null, assignments: null, routes: null, month: '', employeeId: '',
+const supervisorState = { identity: '', data: null, assignments: null, routes: null, month: '', employeeId: '', recordEmployeeIds: null,
     date: '', kind: 'leave', proxyView: 'create', managementView: 'review', page: 1, form: '', loading: false, busy: false, dirty: false, sequence: 0, error: '' };
 Object.assign(auditActionLabels, { supervisor_assignment: '指定代辦主管', supervisor_proxy_create: '主管代申請', supervisor_proxy_withdraw: '主管代撤回' });
 auditActionLabels.browser_punch_permission = '網頁打卡權限設定';
@@ -105,12 +105,12 @@ function spCalendar(data) {
         ${['日', '一', '二', '三', '四', '五', '六'].map((day) => `<div class="meal-weekday">${day}</div>`).join('')}
         ${Array.from({ length: offset }, () => '<div class="meal-date-empty" aria-hidden="true"></div>').join('')}
         ${days.map((day) => {
-            const meal = supervisorState.kind === 'meals', row = meal ? day.rows[0] : null;
+            const meal = supervisorState.kind === 'meals', row = meal ? day.rows[0] : null, multi = meal && day.rows.length > 1;
             const choosing = supervisorState.proxyView === 'create';
-            const label = choosing ? meal ? (day.serving ? '供餐' : '未供餐') : '選擇日期' : meal ? !day.serving ? '未供餐' : !row.eligible ? '未參加' : row.eating ? '用餐' : '不用餐' : `${day.totalCount} 件`;
+            const label = choosing ? meal ? (day.serving ? '供餐' : '未供餐') : '選擇日期' : meal ? !day.serving ? '未供餐' : multi ? `用餐 ${day.rows.filter((r) => r.eating).length}／不用餐 ${day.rows.filter((r) => !r.eating).length}` : !row.eligible ? '未參加' : row.eating ? '用餐' : '不用餐' : `${day.totalCount} 件`;
             return `<button type="button" class="meal-date ${!choosing && !meal && day.totalCount > 0 ? 'has-records' : ''} ${day.date === supervisorState.date ? 'is-selected' : ''} ${meal && row.eating ? 'is-eating' : ''}" data-action="sp-date" data-date="${day.date}" aria-pressed="${day.date === supervisorState.date}" aria-label="${day.date} ${label}">
                 <span class="meal-date-number">${Number(day.date.slice(-2))}${day.date === spToday() ? '<small>今天</small>' : ''}</span><span class="meal-date-status ${!choosing && !meal ? 'sp-record-count' : ''}">${label}</span>
-                <small class="meal-date-deadline">${meal ? !day.serving ? '&nbsp;' : day.locked ? `<span>${day.revision ? '已結單' : '已截止'}</span>` : `<span>${day.cutoff}</span><span>截止</span>` : choosing ? '' : `<span>核准 ${day.approvedCount}</span><span>待審 ${day.pendingCount}</span>`}</small>
+                <small class="meal-date-deadline">${meal ? !day.serving ? '&nbsp;' : day.locked ? `<span>${day.revision ? '已結單' : '已截止'}</span>` : `<span>${day.cutoff}</span><span>截止</span>` : choosing ? '' : `<span class="${day.approvedCount > 0 ? 'sp-count-approved' : ''}">核准 ${day.approvedCount}</span><span class="${day.pendingCount > 0 ? 'sp-count-pending' : ''}">待審 ${day.pendingCount}</span>`}</small>
                 ${row?.warning ? '<span class="meal-warning-dot" title="全日請假仍預訂午餐">請假</span>' : ''}</button>`;
         }).join('')}</div>`;
 }
@@ -149,6 +149,7 @@ async function spLoadLeaveMeals(form, force = false) {
 function spMealDetail() {
     const day = supervisorState.data.meals.days.find((d) => d.date === supervisorState.date);
     if (!day) return '';
+    if (supervisorState.proxyView === 'records' && day.rows.length > 1) return `<section class="sp-day-detail"><h4>${day.date} 午餐紀錄</h4><p>${day.serving ? '供餐' : '未供餐'} · ${day.cutoff} 截止（台北時間）${day.revision ? ' · 已結單' : ''}</p>${day.rows.map((row) => `<article class="sp-record"><strong>${spEscape(row.employee_id)} ${spEscape(supervisorState.data.employees.find((e) => e.id === row.employee_id)?.name || '')}</strong><p>${!row.eligible ? '未參加' : row.eating ? '用餐' : '不用餐'}${row.submittedEating == null ? ' · 未交單' : row.submittedEating ? ' · 已交單：用餐' : ' · 已交單：不用餐'}${row.warning ? ' · 全日請假仍預訂午餐' : ''}</p></article>`).join('')}</section>`;
     const row = day.rows[0], allowed = day.serving && !day.locked && Date.now() < day.deadline;
     const creating = supervisorState.proxyView === 'create';
     return `<section class="sp-day-detail"><h4>${day.date} 午餐${creating ? '代登' : '紀錄'}</h4><p>${day.serving ? '供餐' : '未供餐'} · ${day.cutoff} 截止（台北時間）${creating ? '' : ` · ${spEscape(supervisorState.employeeId)} · ${row.eating ? '用餐' : '不用餐'}`}${day.revision ? ' · 已結單' : ''}${creating || row.submittedEating == null ? '' : ` · 已交單：${row.submittedEating ? '用餐' : '不用餐'}`}</p>
@@ -162,14 +163,14 @@ function spRequestDetail() {
         ${supervisorState.kind === 'leave' && typeof leBalanceTable === 'function' ? leBalanceTable(supervisorState.data.leaveBalances || []) : ''}
         <div class="sp-records">${detail.records.map((row) => `<article class="sp-record"><div class="sp-toolbar"><strong>${spEscape(row.leaveTypeName || '加班')} · ${spEscape(row.statusText)}</strong>
             ${row.canProxyWithdraw ? spButton('withdraw', '代撤回', `data-id="${spEscape(row.id)}"`, !spCanWrite()) : ''}</div>
-            <p>${spEscape(row.startText)} 至 ${spEscape(row.endText)} · ${spEscape(row.duration_hours)} 小時</p><p>${spEscape(row.reason)}</p>
+            <p>對象：${spEscape(row.employeeId)} ${spEscape(row.employeeName)}</p><p>${spEscape(row.startText)} 至 ${spEscape(row.endText)} · ${spEscape(row.duration_hours)} 小時</p><p>${spEscape(row.reason)}</p>
             ${supervisorState.kind === 'leave' ? renderLeaveDaysSummary(row) : ''}
-            <p>${spEscape(row.approvalModeText)}${row.applicantId || row.applicant_id ? ` · 申請人：${spEscape(row.applicantName || row.applicantId || row.applicant_id)}` : ''}</p>
+            <p>${spEscape(row.approvalModeText)}${row.applicantId || row.applicant_id ? ` · 申請人：${spEscape(row.applicantId || row.applicant_id)} ${spEscape(row.applicantName || '姓名未記錄')}` : ' · 申請人：未記錄'}</p>
             ${row.proxyReason || row.proxy_reason ? `<p>代辦原因：${spEscape(row.proxyReason || row.proxy_reason)}</p>` : ''}
             ${supervisorState.form === `withdraw:${row.id}` && row.canProxyWithdraw ? `<form data-sp-form="leave/withdraw" class="sp-form">
-                <input type="hidden" name="requestId" value="${spEscape(row.id)}"><input type="hidden" name="updatedAt" value="${row.updated_at}">
+                <input type="hidden" name="employeeId" value="${spEscape(row.employeeId)}"><input type="hidden" name="requestId" value="${spEscape(row.id)}"><input type="hidden" name="updatedAt" value="${row.updated_at}">
                 ${spField('代撤回原因', 'reason', 'text', '', 'maxlength="500"')}
-                <label class="sp-confirm"><input type="checkbox" name="confirmWithdrawal" required>確認代 ${spEscape(supervisorState.employeeId)} 撤回這筆請假</label>
+                <label class="sp-confirm"><input type="checkbox" name="confirmWithdrawal" required>確認代 ${spEscape(row.employeeId)} ${spEscape(row.employeeName)} 撤回這筆請假</label>
                 <div class="inline-actions"><button class="primary-btn" type="submit" ${!spCanWrite() ? 'disabled' : ''}>確認代撤回</button>${spButton('cancel-form', '取消')}</div>
             </form>` : ''}</article>`).join('') || '<p>本日沒有申請紀錄。</p>'}</div>
         ${detail.totalPages > 1 ? `<div class="inline-actions">${spButton('page', '←', `data-page="${detail.page - 1}" aria-label="上一頁"`, detail.page <= 1)}<span>${detail.page} / ${detail.totalPages}</span>${spButton('page', '→', `data-page="${detail.page + 1}" aria-label="下一頁"`, detail.page >= detail.totalPages)}</div>` : ''}</section>`;
@@ -180,15 +181,15 @@ function renderSupervisorWorkspace() {
         <div class="sp-toolbar"><h3>主管代辦</h3>${spButton('refresh', '重新整理', '', !canUse)}</div>
         <div class="inline-message sp-message" aria-live="polite">${spEscape(supervisorState.error)}</div>
         <p class="muted">指定代辦主管可用本人卡號或個人網頁密碼登入，僅能代辦明確指定的員工；申請仍依審核規則處理，並保留操作者與代辦原因。</p>
-        ${!spCanWrite() && canUse ? '<p role="status">身份模擬可查看紀錄並試填草稿；送出、撤回及儲存常用原因需主管本人登入。</p>' : ''}${!canUse ? '<p>目前沒有主管代辦檢視權限。</p>' : !data ? '<p role="status">讀取代辦資料中…</p>' : !data.employees.length ? '<p>目前沒有獲指定的代辦員工。</p>' : `
+        ${!spCanWrite() && canUse ? '<p role="status">身份模擬可查看紀錄並試填草稿；送出、撤回及儲存常用原因需主管本人登入。</p>' : ''}${!canUse ? '<p>目前沒有主管代辦檢視權限。</p>' : !data ? `<p role="status">${supervisorState.error ? '無法讀取目前查詢；可清除名單後重新選擇。' : '讀取代辦資料中…'}</p>${supervisorState.error ? spButton('reset-record-selection', '重新選擇查詢員工') : ''}` : !data.employees.length ? '<p>目前沒有獲指定的代辦員工。</p>' : `
         <div class="sp-mode-tabs" role="tablist" aria-label="代辦工作模式">${[['create', '建立代辦申請'], ['records', '查看代辦紀錄']].map(([view, label]) => `<button type="button" role="tab" data-action="sp-proxy-view" data-view="${view}" aria-selected="${supervisorState.proxyView === view}" class="${supervisorState.proxyView === view ? 'is-active' : ''}">${label}</button>`).join('')}</div>
-        <p class="sp-mode-description">${supervisorState.proxyView === 'create' ? '先選項目與日期，再在申請表勾選本次代辦對象。下方日曆僅用來選擇日期。' : '此頁只查看一位員工的紀錄；要新增申請請切換「建立代辦申請」。'}</p>
+        <p class="sp-mode-description">${supervisorState.proxyView === 'create' ? '先選項目與日期，再在申請表勾選本次代辦對象。下方日曆僅用來選擇日期。' : '可多選已授權員工合併查看紀錄；查詢名單不會帶入新增申請。'}</p>
         ${supervisorState.proxyView === 'records' ? renderAdminPaperEmployeePicker(data.employees, '紀錄查詢對象', [], {
-            name: 'viewEmployeeId', single: true, selectedIds: [supervisorState.employeeId], inputAttributes: 'data-sp-employee'
+            name: 'viewEmployeeIds', maxSelection: 100, selectedIds: supervisorState.recordEmployeeIds || [], inputAttributes: 'data-sp-employee'
         }) : ''}
         <div class="sp-toolbar"><div class="meal-month-controls">${spButton('month', '←', 'data-offset="-1" aria-label="上個月"')}<input type="month" data-sp-month aria-label="代辦月份" value="${supervisorState.month}" min="2000-01" max="2100-12">${spButton('month', '→', 'data-offset="1" aria-label="下個月"')}</div></div>
         <div class="meal-tabs" role="tablist" aria-label="代辦項目">${[['leave', '請假'], ['overtime', '加班'], ['meals', '午餐團膳']].map(([kind, label]) => `<button type="button" role="tab" data-action="sp-kind" data-kind="${kind}" aria-selected="${supervisorState.kind === kind}" class="${supervisorState.kind === kind ? 'is-active' : ''}">${label}</button>`).join('')}</div>
-        ${spCalendar(data)}${supervisorState.kind === 'meals' ? spMealDetail() : supervisorState.proxyView === 'create' ? spRequestForm() : spRequestDetail()}`}
+        ${supervisorState.proxyView === 'records' && !supervisorState.recordEmployeeIds?.length ? '<p class="sp-empty-records">請先選擇紀錄查詢員工。</p>' : `${spCalendar(data)}${supervisorState.kind === 'meals' ? spMealDetail() : supervisorState.proxyView === 'create' ? spRequestForm() : spRequestDetail()}`}`}
     </section>`;
 }
 function spPaint() {
@@ -224,13 +225,13 @@ async function spLoad() {
     try {
         const url = managing ? spCanAssignments() ? '/api/browser/supervisors/assignments' : '/api/browser/supervisors/reviewers' : `/api/browser/employee/supervisor?${new URLSearchParams({
             month: supervisorState.month, kind: supervisorState.kind === 'meals' ? 'leave' : supervisorState.kind, page: supervisorState.page,
-            ...(supervisorState.employeeId ? { employeeId: supervisorState.employeeId } : {}), ...(supervisorState.date ? { date: supervisorState.date } : {}) })}`;
+            ...(supervisorState.proxyView === 'records' && supervisorState.recordEmployeeIds !== null ? { employeeIds: supervisorState.recordEmployeeIds.join(',') } : supervisorState.employeeId ? { employeeId: supervisorState.employeeId } : {}), ...(supervisorState.date ? { date: supervisorState.date } : {}) })}`;
         const result = await requestJson(url, { auth: true });
         const routes = managing && spCanRoutes() ? spCanAssignments() ? (await requestJson('/api/browser/supervisors/reviewers', { auth: true })).routes : result.routes : null;
         if (identity !== supervisorState.identity || sequence !== supervisorState.sequence) return;
         if (managing) {
             supervisorState.routes = routes; supervisorState.assignments = result.assignments || null;
-        } else { supervisorState.data = result.proxy; supervisorState.employeeId = result.proxy.employeeId || ''; }
+        } else { supervisorState.data = result.proxy; supervisorState.employeeId = result.proxy.employeeId || ''; if (supervisorState.proxyView === 'records' || supervisorState.recordEmployeeIds === null) supervisorState.recordEmployeeIds = result.proxy.employeeIds || (result.proxy.employeeId ? [result.proxy.employeeId] : []); }
         supervisorState.dirty = false; supervisorState.error = ''; spPaint(); return true;
     } catch (error) {
         if (identity !== supervisorState.identity || sequence !== supervisorState.sequence) return;
@@ -243,7 +244,7 @@ renderDashboard = function renderDashboardWithSupervisor(dashboard) {
     const identity = `${state.token}/${dashboard.role}/${dashboard.user?.id || ''}`;
     if (identity !== supervisorState.identity) (document.querySelectorAll?.('.sp-reasons-dialog') || []).forEach((dialog) => { dialog.close(); dialog.remove(); });
     if (identity !== supervisorState.identity) Object.assign(supervisorState, { identity, data: null, assignments: null, routes: null, month: spToday().slice(0, 7),
-        date: spToday(), employeeId: '', assignmentId: '', kind: 'leave', proxyView: 'create', managementView: 'review', page: 1, form: '', loading: false, busy: false, dirty: false, error: '', sequence: supervisorState.sequence + 1 });
+        date: spToday(), employeeId: '', recordEmployeeIds: null, assignmentId: '', kind: 'leave', proxyView: 'create', managementView: 'review', page: 1, form: '', loading: false, busy: false, dirty: false, error: '', sequence: supervisorState.sequence + 1 });
     return spPreviousRender(dashboard);
 };
 const spPreviousItems = renderEmployeeWorkspaceItems;
@@ -264,6 +265,14 @@ postRenderSetup = function postRenderWithSupervisor() {
 const spPreviousClick = handleDashboardClick;
 handleDashboardClick = async function handleSupervisorClick(event) {
     const button = event.target.closest('[data-action]'), action = button?.dataset.action;
+    if (['paper-select-visible-employees', 'paper-clear-employees'].includes(action) && button.closest('[data-paper-employee-field]')?.querySelector('[data-sp-employee]')) {
+        event.preventDefault(); if (supervisorState.busy || !await spDiscard()) return;
+        const field = button.closest('[data-paper-employee-field]');
+        await spPreviousClick(event);
+        supervisorState.recordEmployeeIds = [...field.querySelectorAll('[data-sp-employee]:checked')].map((input) => input.value);
+        supervisorState.form = ''; supervisorState.dirty = false; supervisorState.page = 1;
+        await spLoad(); return;
+    }
     if (['paper-select-visible-employees', 'paper-clear-employees'].includes(action) && button.closest('[data-sp-form]')) {
         event.preventDefault(); if (supervisorState.busy) return;
         const field = button.closest('[data-paper-employee-field]');
@@ -298,7 +307,7 @@ handleDashboardClick = async function handleSupervisorClick(event) {
     if (action === 'sp-cancel-meal') {
         const form = spRoot()?.querySelector('[data-sp-form="meals"]');
         if (form) {
-            form.querySelectorAll('[name="employeeIds"]').forEach((input) => { input.checked = input.value === supervisorState.employeeId && !input.disabled; });
+            form.querySelectorAll('[name="employeeIds"]').forEach((input) => { input.checked = false; });
             syncAdminPaperEmployeePicker(form.querySelector('[data-paper-employee-field]'));
             form.elements.eating.value = 'false'; form.elements.reason.value = '全日請假提醒：主管代確認取消餐點'; supervisorState.dirty = true; form.elements.reason.focus();
         }
@@ -310,7 +319,8 @@ handleDashboardClick = async function handleSupervisorClick(event) {
     }
     if (!await spDiscard()) return;
     supervisorState.dirty = false; supervisorState.form = ''; supervisorState.page = 1;
-    if (action === 'sp-proxy-view') { if (!['create', 'records'].includes(button.dataset.view)) return; supervisorState.proxyView = button.dataset.view; spPaint(); return; }
+    if (action === 'sp-reset-record-selection') { supervisorState.proxyView = 'records'; supervisorState.recordEmployeeIds = []; supervisorState.employeeId = ''; supervisorState.page = 1; await spLoad(); return; }
+    if (action === 'sp-proxy-view') { if (!['create', 'records'].includes(button.dataset.view)) return; supervisorState.proxyView = button.dataset.view; supervisorState.page = 1; await spLoad(); return; }
     if (action === 'sp-reset-form' || action === 'sp-cancel-form') { spPaint(); return; }
     if (action === 'sp-date') supervisorState.date = button.dataset.date;
     if (action === 'sp-kind') supervisorState.kind = button.dataset.kind;
@@ -333,15 +343,15 @@ handleDashboardChange = async function handleSupervisorChange(event) {
         if (!await spDiscard()) {
             if (target.hasAttribute('data-sp-month')) target.value = supervisorState.month;
             else {
-                const selectedId = supervisorState.employeeId;
+                const selectedIds = supervisorState.recordEmployeeIds || [];
                 const field = target.closest('[data-paper-employee-field]');
-                field.querySelectorAll('[data-paper-employee-checkbox]').forEach((input) => { input.checked = input.value === selectedId; });
+                field.querySelectorAll('[data-paper-employee-checkbox]').forEach((input) => { input.checked = selectedIds.includes(input.value); });
                 syncAdminPaperEmployeePicker(field);
             }
             return;
         }
         supervisorState.dirty = false; supervisorState.form = ''; supervisorState.page = 1;
-        if (target.hasAttribute('data-sp-employee')) supervisorState.employeeId = target.value;
+        if (target.hasAttribute('data-sp-employee')) supervisorState.recordEmployeeIds = [...target.closest('[data-paper-employee-field]').querySelectorAll('[data-sp-employee]:checked')].map((input) => input.value);
         else { supervisorState.month = target.value; supervisorState.date = `${target.value}-01`; }
         await spLoad(); return;
     }
@@ -399,7 +409,7 @@ handleDashboardSubmit = async function handleSupervisorSubmit(event) {
         body.revisions = Object.fromEntries(supervisorState.routes.employees.filter((e) => body.employeeIds.includes(e.id)).map((e) => [e.id, e.revision]));
         delete body.reviewEmployeeIds; delete body.reviewSupervisorIds; delete body.reviewMode;
     } else {
-        body.employeeId = supervisorState.employeeId;
+        body.employeeId = operation === 'leave/withdraw' ? fields.get('employeeId') : supervisorState.employeeId;
         if (operation !== 'leave/withdraw') {
             body.employeeIds = fields.getAll('employeeIds');
             if (!body.employeeIds.length || body.employeeIds.length > 100) { spMessage('請選擇 1 至 100 位代辦員工。'); return; }

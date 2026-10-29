@@ -52,7 +52,7 @@
 .sp-mode-description { margin: 0 0 16px; color: var(--text-muted, #576d7b); font-size: 13px; line-height: 1.6; }
 /* Compact only supervisor proxy calendars; other meal calendars retain their size. */
 .sp-calendar .meal-date { min-height: 80px; padding: 6px; gap: 3px; }
-.sp-calendar .has-records .sp-record-count { color: #075b86; font-weight: 800; }
+.sp-calendar .has-records .sp-record-count { color: #187347; font-weight: 800; }
 .sp-calendar .has-records { border-color: #6a9fb9; }
 .sp-reason-label, .sp-reason-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .sp-reason-label > label { font-weight: 600; }
@@ -61,3 +61,6 @@
 .sp-reasons-dialog form { display: grid; gap: 14px; }
 .sp-reasons-dialog::backdrop { background: rgb(0 0 0 / 35%); }
 @media (max-width: 600px) { .sp-calendar .meal-date { min-height: 81px; padding: 4px 3px; gap: 3px; } }
+
+.sp-calendar .sp-count-approved { color: #187347; font-weight: 700; }
+.sp-calendar .sp-count-pending { color: #a35400; font-weight: 700; }

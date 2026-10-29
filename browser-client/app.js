@@ -5,7 +5,7 @@ const roleConfig = {
         accountPlaceholder: "輸入員工編號",
         secretLabel: "卡號",
         secretPlaceholder: "請輸入卡號",
-        help: "員工使用工號與卡號登入，登入後可看到個人資訊、目前班別與近 7 日打卡紀錄。"
+        help: "員工使用工號與卡號登入，登入後可看到個人資訊、目前班別與最近打卡紀錄（範圍由管理者指定，預設近 7 日）。"
     },
     admin: {
         title: "管理者登入",
@@ -1713,7 +1713,7 @@ function renderEmployeeDashboard(dashboard) {
                 <p id="employee-live-clock" class="clock-time">--:--:--</p>
                 <p id="employee-clock-subtext" class="clock-subtext"></p>
                 <div class="quick-actions">
-                    <button data-action="employee-punch" class="primary-btn" type="button">${escapeHtml(dashboard.punchAction.label)}</button>
+                    ${renderEmployeePunchActionSelector(dashboard)}<button data-action="employee-punch" class="primary-btn" type="button">${escapeHtml(dashboard.punchAction.label)}</button>
                     <button data-action="refresh-dashboard" class="secondary-btn" type="button">重新整理</button>
                 </div>
                 <p class="punch-note">最近一筆：${escapeHtml(lastPunchText)}</p>
@@ -1726,7 +1726,7 @@ function renderEmployeeDashboard(dashboard) {
             </article>
 
             <article class="record-card" style="grid-column: 1 / -1;">
-                <h3>近 7 日打卡紀錄</h3>
+                <h3>最近打卡紀錄</h3>
                 <p class="hero-copy">顯示今天與前 6 天的全部打卡結果，包含正常與重複打卡紀錄。</p>
                 ${renderRecords(dashboard.recentRecords)}
             </article>
@@ -7991,10 +7991,10 @@ function renderBrowserPunchPermissions(data) {
         </form></section>`;
 }
 
-function renderRequestHistorySettings(data) {
+function renderRequestHistorySettings(data, employeeSettings = null) {
     if (!data) return '';
     const canManage = state.dashboard?.role === 'system_admin' || hasCurrentAdminPermission('admin.security.manage');
-    return `<section aria-label="員工紀錄可見範圍"><h3>員工紀錄可見範圍</h3>
+    return `${typeof renderEmployeeBrowserSettings === 'function' ? renderEmployeeBrowserSettings(employeeSettings, 'history') : ''}<section aria-label="員工紀錄可見範圍"><h3>請假／加班紀錄可見範圍（全體員工）</h3>
         <form data-request-history-settings class="stack-form">
             <input type="hidden" name="revision" value="${escapeHtml(data.revision)}">
             <fieldset class="field-grid" ${canManage ? '' : 'disabled'}>${['leave', 'overtime'].map((kind) => {
@@ -8087,6 +8087,7 @@ function renderAdminSecuritySection(datasets) {
                         <button class="primary-btn" type="submit">儲存安全設定</button>
                     </div>` : '<p class="helper-text">目前僅有檢視權限；修改安全政策需要「安全設定管理」權限。</p>'}
                 </form>
+                ${typeof renderEmployeeBrowserSettings === 'function' ? renderEmployeeBrowserSettings(security.employeeBrowserSettings, 'devices') : ''}
             </article>
 
             <article class="table-card">
@@ -8109,7 +8110,7 @@ function renderAdminSecuritySection(datasets) {
                 ${recentPunchItems}
             </article>
             <article class="sub-panel">${renderBrowserPunchPermissions(security.browserPunchPermissions)}</article>
-            <article class="sub-panel">${renderRequestHistorySettings(security.requestHistorySettings)}</article>
+            <article class="sub-panel">${renderRequestHistorySettings(security.requestHistorySettings, security.employeeBrowserSettings)}</article>
             <article class="table-card">
                 <h3>裝置登入診斷</h3>
                 ${window.AdminDirectory.renderDiagnostics(datasets)}
@@ -8218,36 +8219,60 @@ handleLoginSubmit = async function handleLoginSubmitSecurityOverride(event) {
 // ★ [10] 瀏覽器打卡提交鎖，避免快速雙擊在第一個請求完成前重複送出。
 let employeePunchRequestInFlight = false;
 
+function renderEmployeePunchActionSelector(dashboard) {
+    const suggested = dashboard.punchAction?.suggestedType || (dashboard.summary?.nextPunchType === '下班' ? 'out' : 'in');
+    return '<label class="field"><span>下一次打卡動作</span><select data-employee-punch-type aria-label="下一次打卡動作" ' + (dashboard.punchAction?.enabled === false ? 'disabled' : '') + '><option value="in" ' + (suggested === 'in' ? 'selected' : '') + '>上班' + (suggested === 'in' ? '（系統建議）' : '') + '</option><option value="out" ' + (suggested === 'out' ? 'selected' : '') + '>下班' + (suggested === 'out' ? '（系統建議）' : '') + '</option></select></label>';
+}
+document.addEventListener('change', (event) => {
+    if (!event.target.matches?.('[data-employee-punch-type]')) return;
+    document.querySelectorAll('[data-action="employee-punch"]').forEach((button) => {
+        if (state.dashboard?.punchAction?.enabled !== false) button.textContent = '現在打卡（' + (event.target.value === 'out' ? '下班' : '上班') + '）';
+    });
+});
 handleEmployeePunch = async function handleEmployeePunchSecurityOverride() {
-    if (state.dashboard?.punchAction?.enabled === false) {
-        setMessage(ui.dashboardMessage, '未開放網頁線上打卡，請使用實體打卡鐘。', 'error'); return;
+    if (state.dashboard?.punchAction?.enabled === false || state.dashboard?.impersonation?.active) {
+        setMessage(ui.dashboardMessage, '未開放本人網頁線上打卡，請使用本人帳號或實體打卡鐘。', 'error'); return;
     }
     if (employeePunchRequestInFlight) return;
     employeePunchRequestInFlight = true;
+    const token = state.token, employeeId = state.dashboard?.user?.id;
+    const currentIdentity = () => state.token === token && state.dashboard?.user?.id === employeeId;
+    const selector = document.querySelector('[data-employee-punch-type]');
+    const forceType = selector?.value;
     document.querySelectorAll('[data-action="employee-punch"]').forEach((button) => {
-        button.disabled = true;
-        button.setAttribute("aria-busy", "true");
+        button.disabled = true; button.setAttribute('aria-busy', 'true');
     });
-
+    if (selector) selector.disabled = true;
     try {
         const security = state.dashboard?.security || {};
-        setMessage(ui.dashboardMessage, security.gpsRequiredOnPunch ? "正在取得 GPS 定位..." : "正在送出打卡...", "info");
+        setMessage(ui.dashboardMessage, security.gpsRequiredOnPunch ? '正在取得 GPS 定位...' : '正在送出打卡...', 'info');
         const location = security.gpsRequiredOnPunch ? await requestCurrentBrowserLocation() : null;
-        const result = await requestJson("/api/browser/punch", {
-            method: "POST",
-            auth: true,
-            body: { location }
-        });
+        if (!currentIdentity()) return;
+        let body = { location, ...(forceType ? { forceType } : {}) };
+        let result = await requestJson('/api/browser/punch', { method: 'POST', auth: true, body });
+        while (result.confirmationRequired) {
+            if (!currentIdentity()) return;
+            const confirmation = result.confirmation;
+            const label = confirmation.selectedType === 'in' ? '上班' : '下班';
+            const last = confirmation.expectedLatest;
+            const lastText = last ? new Date(last.timestamp).toLocaleString('zh-TW') + ' ' + (last.type === 'in' ? '上班' : '下班') : '無有效紀錄';
+            const message = '請確認下一次要打「' + label + '」卡。\n上一筆有效打卡：' + lastText + '。\n此選擇與上一筆動作相同，或不同於系統建議。確認後將依您選擇記錄，1 分鐘內仍標示重複打卡。';
+            if (!window.confirm(message)) { setMessage(ui.dashboardMessage, '已取消打卡，所選動作已保留。', 'info'); return; }
+            if (!currentIdentity()) return;
+            body = { location, forceType, confirmationToken: confirmation.token, expectedLatest: confirmation.expectedLatest };
+            result = await requestJson('/api/browser/punch', { method: 'POST', auth: true, body });
+        }
+        if (!currentIdentity()) return;
         renderDashboard(result.data.dashboard);
-        setMessage(ui.dashboardMessage, result.message, result.message.includes("重複打卡") ? "info" : "success");
+        setMessage(ui.dashboardMessage, result.message, result.message.includes('重複打卡') ? 'info' : 'success');
     } catch (error) {
-        setMessage(ui.dashboardMessage, formatBrowserPunchError(error), "error");
+        if (currentIdentity()) setMessage(ui.dashboardMessage, formatBrowserPunchError(error), 'error');
     } finally {
         employeePunchRequestInFlight = false;
         document.querySelectorAll('[data-action="employee-punch"]').forEach((button) => {
-            button.disabled = state.dashboard?.punchAction?.enabled === false;
-            button.removeAttribute("aria-busy");
+            button.disabled = state.dashboard?.punchAction?.enabled === false; button.removeAttribute('aria-busy');
         });
+        if (selector?.isConnected) selector.disabled = state.dashboard?.punchAction?.enabled === false;
     }
 };
 
@@ -9934,12 +9959,12 @@ function renderEmployeeWorkspaceItems(dashboard) {
         },
         {
             id: "records",
-            label: "近 7 日打卡紀錄",
-            meta: `${summary.weekRecordCount ?? records.length ?? 0} 筆`,
+            label: "最近打卡紀錄",
+            meta: `${records.length} 筆 · ${dashboard.punchHistoryWindow?.label || '最近 7 日'}`,
             html: `
                 <article class="record-card employee-workbench-panel" data-no-collapsible="true">
-                    <h3>近 7 日打卡紀錄</h3>
-                    <p class="hero-copy">查看最近 7 日內的打卡時間、班別與來源。</p>
+                    <h3>最近打卡紀錄</h3>
+                    <p class="hero-copy">可見範圍：${escapeHtml(dashboard.punchHistoryWindow?.label || '最近 7 日')}（台北時間）；查看本人的打卡時間、班別與來源。</p>
                     ${renderRecords(records)}
                 </article>
             `
@@ -10036,7 +10061,7 @@ renderEmployeeDashboard = function renderEmployeeDashboardWorkbenchOverride(dash
                         <p class="punch-note">最後一次打卡：${escapeHtml(lastPunchText)}</p>
                     </div>
                     <div class="quick-actions">
-                        <button data-action="employee-punch" class="primary-btn" type="button" ${dashboard.punchAction.enabled === false ? 'disabled' : ''}>${dashboard.punchAction.enabled === false ? '未開放網頁打卡' : escapeHtml(dashboard.punchAction.label)}</button>
+                        ${renderEmployeePunchActionSelector(dashboard)}<button data-action="employee-punch" class="primary-btn" type="button" ${dashboard.punchAction.enabled === false ? 'disabled' : ''}>${dashboard.punchAction.enabled === false ? '未開放網頁打卡' : escapeHtml(dashboard.punchAction.label)}</button>
                         <button data-action="refresh-dashboard" class="secondary-btn" type="button">重新整理</button>
                     </div>
                 </div>
@@ -11351,7 +11376,8 @@ function renderSystemAdminDashboard(dashboard) {
             })}
             ${renderSystemAdminCredentialsPanel(dashboard)}
             ${renderAccountAccessManager(dashboard?.datasets?.accountAccess)}
-            ${renderRequestHistorySettings(dashboard?.datasets?.requestHistorySettings)}
+            ${renderRequestHistorySettings(dashboard?.datasets?.requestHistorySettings, dashboard?.datasets?.employeeBrowserSettings)}
+            ${typeof renderEmployeeBrowserSettings === 'function' ? renderEmployeeBrowserSettings(dashboard?.datasets?.employeeBrowserSettings, 'devices') : ''}
         </div>
     `;
 }

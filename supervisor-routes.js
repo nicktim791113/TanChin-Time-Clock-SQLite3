@@ -95,16 +95,26 @@ function attachSupervisorRoutes(server, context) {
         const canWrite = !isSupervisorSimulation(request.browserSession);
         const range = monthRange(request.query.month);
         const employees = store().assignedEmployees(request.browserSession.employeeId);
-        const employeeId = request.query.employeeId || employees[0]?.id;
-        if (!employeeId) return response.json({ success: true, proxy: { employees, calendar: null, meals: null, leaveTypes: [] } });
-        targetFor(request, employeeId, true);
+        const explicitIds = Object.hasOwn(request.query, 'employeeIds');
+        if (explicitIds && request.query.employeeId !== undefined) fail('請勿同時指定 employeeIds 與 employeeId。');
+        const selection = explicitIds ? request.query.employeeIds : request.query.employeeId ?? employees[0]?.id ?? '';
+        const values = Array.isArray(selection) ? selection : [selection];
+        if (values.some((value) => typeof value !== 'string')) fail('無效的紀錄查詢員工。');
+        const tokens = values.flatMap((value) => value.split(','));
+        if (tokens.length > 1000) fail('最多選擇 100 位紀錄查詢員工。');
+        if (tokens.length > 1 && tokens.some((id) => !id.trim())) fail('紀錄查詢員工不可包含空值。');
+        const employeeIds = [...new Set(tokens.map((id) => id.trim()).filter(Boolean))];
+        if (employeeIds.length > 100) fail('最多選擇 100 位紀錄查詢員工。');
+        const employeeId = employeeIds[0] || '';
+        employeeIds.forEach((id) => { if (!employees.some((employee) => employee.id === id)) fail('只能查詢目前明確指定的員工。', 403); targetFor(request, id, true); });
         const kind = request.query.kind || 'leave';
         if (!['leave', 'overtime'].includes(kind)) fail('無效的代辦項目。');
         if (request.query.date && !range.dates.includes(request.query.date)) fail('日期必須位於選取月份。');
         const page = request.query.page == null ? 1 : Number(request.query.page);
         if (!Number.isSafeInteger(page) || page < 1) fail('無效頁碼。');
-        const rows = (kind === 'leave' ? db.queryLeaveRequests : db.queryOvertimeRequests)({ employeeId,
-            overlapStartAt: range.start, overlapEndAt: range.end - 1, limit: null }).filter((row) => leaveOverlapsRange(row, range.start, range.end));
+        const rows = employeeIds.flatMap((employeeId) => (kind === 'leave' ? db.queryLeaveRequests : db.queryOvertimeRequests)({ employeeId,
+            overlapStartAt: range.start, overlapEndAt: range.end - 1, limit: null })).filter((row) => leaveOverlapsRange(row, range.start, range.end))
+            .sort((a, b) => (b.created_at - a.created_at) || (String(a.id) < String(b.id) ? 1 : String(a.id) > String(b.id) ? -1 : 0) || String(a.employee_id).localeCompare(String(b.employee_id)));
         const calendar = buildCalendar(range.month, rows);
         const start = request.query.date ? Date.parse(`${request.query.date}T00:00:00+08:00`) : null;
         const details = start == null ? rows : rows.filter((row) => leaveOverlapsRange(row, start, start + 86400000));
@@ -112,19 +122,24 @@ function attachSupervisorRoutes(server, context) {
         const current = Math.min(page, totalPages);
         const lookup = buildLookup(kind);
         calendar.detail = { page: current, totalPages, totalCount: details.length, records: details.slice((current - 1) * 50, current * 50).map((row) => ({
-            ...formatRecord(kind, row, lookup), canProxyWithdraw: kind === 'leave' && ['pending_supervisor', 'pending_admin'].includes(row.status)
+            ...formatRecord(kind, row, lookup), employeeId: row.employee_id, employeeName: employees.find((e) => e.id === row.employee_id)?.name || '',
+            applicantId: row.applicant_id || '', applicantName: row.applicant_id ? lookup.employeeMap.get(row.applicant_id)?.name || '' : '', canProxyWithdraw: kind === 'leave' && ['pending_supervisor', 'pending_admin'].includes(row.status)
         })) };
         const mealDate = request.query.date || range.dates[0];
         const mealDay = db.getMeals().dayState(mealDate);
-        response.json({ success: true, proxy: { employees, employeeId, kind, calendar, canWrite,
+        const mealCalendars = employeeIds.map((id) => db.getMeals().calendar({ month: range.month, employeeId: id }));
+        const meals = mealCalendars.length ? { ...mealCalendars[0], days: mealCalendars[0].days.map((day, index) => ({ ...day,
+            rows: mealCalendars.flatMap((calendar) => calendar.days[index].rows),
+        })) } : { month: range.month, days: [] };
+        response.json({ success: true, proxy: { employees, employeeId, employeeIds, kind, calendar, canWrite,
             reasonPresets: { ...store().reasonPresets(request.browserSession.employeeId), canEdit: canWrite },
             batchMeal: { date: mealDate, version: mealDay.version, employees: employees.map((employee) => {
                 const row = mealDay.rows.find((item) => item.employee_id === employee.id);
                 return { id: employee.id, eligible: Boolean(row?.eligible), canChange: Boolean(row?.canChange), eating: Boolean(row?.eating) };
             }) },
             leaveTypes: db.loadLeaveTypes().filter((type) => type.enabled).map(({ id, name }) => ({ id, name })),
-            leaveBalances: db.getLeaveEntitlements().balances([employeeId], Number(range.month.slice(0, 4))).map(({ records, updated_by, revision, ...row }) => row),
-            meals: db.getMeals().calendar({ month: range.month, employeeId }) } });
+            leaveBalances: db.getLeaveEntitlements().balances(employeeIds, Number(range.month.slice(0, 4))).map(({ records, updated_by, revision, ...row }) => row),
+            meals } });
     }));
     server.post('/api/browser/employee/supervisor/leave/meal-options', requireSession, requireRole('employee'), handle((request, response) => {
         const targets = targetsFor(request, request.body || {}, true);
