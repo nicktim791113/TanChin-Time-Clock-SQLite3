@@ -92,11 +92,16 @@ function collectLeaveDays(form) {
     }
     return { dateSelectionMode: 'explicit_dates', dailyHours: rows.map((row) => ({ date: row.date, hours: Number(row.hours) })), durationHours: Math.round(rows.reduce((sum, row) => sum + Number(row.hours), 0) * 100) / 100 };
 }
-function renderLeaveDaysSummary(request) {
+// Optional static keyword markup for supervisor category cues; other workspaces keep plain labels.
+function ldCategoryKeyword(word, categoryKeywords = false) {
+    const kind = { '請假': 'leave', '午餐': 'meals' }[word];
+    return categoryKeywords && kind ? '<span class="ld-category-keyword ld-category-' + kind + '">' + ldEscape(word) + '</span>' : ldEscape(word);
+}
+function renderLeaveDaysSummary(request, { categoryKeywords = false } = {}) {
     if ((request?.dateSelectionMode || request?.date_selection_mode) === 'explicit_segments') {
         const rows = request.leaveSegments || request.leave_segments || [];
         const dates = new Set(rows.map((row) => row.date || lsDateTime(row.startAt).date));
-        return `<details class="ld-request-summary"><summary>實際請假 ${dates.size} 日 · ${rows.length} 段</summary><ul>${rows.map((row) => {
+        return `<details class="ld-request-summary"><summary>實際${ldCategoryKeyword('請假', categoryKeywords)} ${dates.size} 日 · ${rows.length} 段</summary><ul>${rows.map((row) => {
             const start = lsDateTime(row.startAt), end = lsDateTime(row.endAt);
             return `<li><span>${ldEscape(row.date || start.date)} ${ldEscape(start.time)}–${ldEscape(end.date !== start.date ? '24:00' : end.time)}${row.breakMinutes !== undefined && row.breakMinutes !== null ? `<small class="ls-break-summary">休息 ${ldEscape(row.breakMinutes)} 分鐘</small>` : ''}</span><strong>${ldEscape(row.hours)} 小時</strong></li>`;
         }).join('')}</ul><p>只計入列出的時段；日期之間及同日時段之間的空檔不算請假。</p></details>`;
@@ -106,24 +111,24 @@ function renderLeaveDaysSummary(request) {
     const format = (value) => new Date(Number(value) + 8 * 3600000).toISOString();
     let excluded = [];
     try { const start = format(request.start_at), end = format(request.end_at); excluded = leaveDayRange(start.slice(0, 10), start.slice(11, 16), end.slice(0, 10), end.slice(11, 16)).filter((row) => !selectedSet.has(row.date)); } catch (_) { /* Invalid historical period is not inferred. */ }
-    return `<details class="ld-request-summary"><summary>實際請假 ${selected.length} 日${excluded.length ? ` · 排除 ${excluded.length} 日` : ''}</summary><ul>${selected.map((row) => `<li><span>${ldEscape(row.date)}</span><strong>${ldEscape(row.hours)} 小時</strong></li>`).join('')}</ul>${excluded.length ? `<p>不請假：${excluded.map((row) => ldEscape(row.date)).join('、')}</p>` : ''}</details>`;
+    return `<details class="ld-request-summary"><summary>實際${ldCategoryKeyword('請假', categoryKeywords)} ${selected.length} 日${excluded.length ? ` · 排除 ${excluded.length} 日` : ''}</summary><ul>${selected.map((row) => `<li><span>${ldEscape(row.date)}</span><strong>${ldEscape(row.hours)} 小時</strong></li>`).join('')}</ul>${excluded.length ? `<p>不請假：${excluded.map((row) => ldEscape(row.date)).join('、')}</p>` : ''}</details>`;
 }
-function renderLeaveDaysAddTools({ autoHours = false } = {}) {
+function renderLeaveDaysAddTools({ autoHours = false, categoryKeywords = false } = {}) {
     return `<div class="ls-add-tools" data-ls-add-tools><label class="field"><span>每日休息（分鐘）</span><input type="number" min="0" max="1439" step="1" data-ls-batch-break aria-label="加入區間的每日休息分鐘"></label>
-        <label class="field"><span>每日實際請假時數${autoHours ? '（自動計算）' : ''}</span><input type="number" min="0.01" max="24" step="0.01" data-ls-batch-hours ${autoHours ? 'readonly aria-readonly="true"' : ''} placeholder="依起訖減休息計算" aria-label="加入區間的每日實際請假時數"></label>
+        <label class="field"><span>每日實際${ldCategoryKeyword('請假', categoryKeywords)}時數${autoHours ? '（自動計算）' : ''}</span><input type="number" min="0.01" max="24" step="0.01" data-ls-batch-hours ${autoHours ? 'readonly aria-readonly="true"' : ''} placeholder="依起訖減休息計算" aria-label="加入區間的每日實際請假時數"></label>
         <button type="button" class="outline-btn" data-ls-action="auto-batch">${autoHours ? '恢復預設休息' : '恢復自動計算'}</button>
         <label class="ls-weekends"><input type="checkbox" data-ls-weekends>多日區間包含週末</label>
         <button type="button" class="outline-btn" data-ls-action="add-range">加入上方日期區間</button>
         <button type="button" class="outline-btn" data-ls-action="add-one">新增單一時段</button></div>
         <p class="ld-note">完整涵蓋 12:20–13:00 時預帶休息 40 分鐘，其他時段預帶 0 分鐘；可另外修改休息分鐘，實際時數會重新計算${autoHours ? '，不能直接修改時數' : '，也可再自行調整實際時數'}。多日區間預設只加入週一至五，請自行核對假日與補班日。結束 00:00 表示該日 24:00，跨夜請拆成兩天。最多 740 段，最早至最晚日期最多 370 日。</p>`;
 }
-function renderLeaveDaysEditor({ batch = false, autoHours = false, externalTools = false } = {}) {
+function renderLeaveDaysEditor({ batch = false, autoHours = false, externalTools = false, categoryKeywords = false } = {}) {
     return `<section class="ld-editor ls-editor" data-leave-days data-ld-mode="segments" data-ld-batch="${batch}" data-ls-auto-hours="${autoHours}" data-ls-external-tools="${externalTools}" aria-label="多日期與時段請假">
         <input type="hidden" name="dateSelectionMode" value="explicit_segments"><input type="hidden" name="dailyHours" value="">
-        <div class="ld-heading"><div><h4>同一張單的請假時段</h4><p>同一假別可加入多個日期或區間，全部時段一起送出審核。</p></div><strong data-ld-summary aria-live="polite">尚未加入時段</strong></div>
+        <div class="ld-heading"><div><h4>同一張單的${ldCategoryKeyword('請假', categoryKeywords)}時段</h4><p>同一假別可加入多個日期或區間，全部時段一起送出審核。</p></div><strong data-ld-summary aria-live="polite">尚未加入時段</strong></div>
         <p class="ld-note">先填上方的新增區間與每日起訖，再加入下方清單。可重複加入其他日期，也可在同一天新增上午、下午等不重疊的時段。只列入清單中的時段。</p>
         ${batch ? '<p class="ld-note">所選員工共用下方所有時段與時數；每位員工各建立一張完整申請。班表不同時請分開送出。</p>' : ''}
-        ${externalTools ? '' : renderLeaveDaysAddTools({ autoHours })}
+        ${externalTools ? '' : renderLeaveDaysAddTools({ autoHours, categoryKeywords })}
         <p class="ld-message" data-ld-message role="status"></p><div class="ls-rows" data-ls-rows></div>
     </section>`;
 }
@@ -172,14 +177,14 @@ function leaveHasLunchOverlap(body) {
 }
 function leaveMealSelectionKey(row) { return `${row.employeeId}/${row.date}`; }
 function leaveMealState(holder) { return holder.leaveMeals ||= { key: '', sequence: 0, options: [], selected: {}, loading: false, error: '', promise: null }; }
-function renderLeaveMealOptions(holder, employees = []) {
+function renderLeaveMealOptions(holder, employees = [], { categoryKeywords = false } = {}) {
     const meals = leaveMealState(holder), options = meals.options.filter((row) => row.participates);
     if (meals.loading) return '<p class="ld-note" role="status">正在確認請假日期的團膳資格與截止時間…</p>';
     if (meals.error) return `<p class="ld-message" role="alert">${ldEscape(meals.error)}<button type="button" class="outline-btn" data-leave-meal-retry>重試午餐資格</button></p>`;
     if (!options.length) return '';
     const impersonating = Boolean(state.dashboard?.impersonation?.active);
     const proxyPreview = impersonating && holder?.dataset?.spForm === 'leave';
-    return `<fieldset class="leave-meal-options"><legend>午餐安排</legend><p>請假時段與 12:20–13:00 重疊，預設勾選有參加團膳且仍可取消的日期。送出請假時即取消午餐；請假退回或撤回不會自動恢復。</p>${options.map((row) => {
+    return `<fieldset class="leave-meal-options"><legend>${ldCategoryKeyword('午餐', categoryKeywords)}安排</legend><p>請假時段與 12:20–13:00 重疊，預設勾選有參加團膳且仍可取消的日期。送出請假時即取消午餐；請假退回或撤回不會自動恢復。</p>${options.map((row) => {
         const key = leaveMealSelectionKey(row), editable = (!impersonating || proxyPreview) && row.serving && row.canChange && row.eating;
         const employee = employees.find((item) => item.id === row.employeeId);
         return `<label class="leave-meal-choice ${editable ? '' : 'is-disabled'}"><input type="checkbox" data-leave-meal-choice="${ldEscape(key)}" ${editable && meals.selected[key] !== false ? 'checked' : ''} ${editable ? '' : 'disabled'}><span><strong>${ldEscape(row.date)}${employees.length > 1 ? ` · ${ldEscape(row.employeeId)} ${ldEscape(employee?.name || '')}` : ''}　當天不用餐</strong><small>${editable && proxyPreview ? '身份模擬可試選，不會送出或修改午餐安排' : impersonating ? '身份模擬不能修改午餐安排' : !row.serving ? '本日未供餐' : !row.eating ? '目前已登記不用餐，無須重複取消' : row.canChange ? '可取消勾選，保留原本的午餐安排' : ldEscape(row.reason || '已截止或結單，請聯絡團膳管理者')}</small></span></label>`;

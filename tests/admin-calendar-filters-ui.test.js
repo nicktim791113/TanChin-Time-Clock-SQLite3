@@ -24,9 +24,28 @@ test('admin calendar naturally sorts ids with stable lexical ties and requires t
     f.run("rcState('leave').filters.employeeId='E1'");
     const html = f.run("rcRender('leave')");
     assert.ok(html.indexOf('value="E1" selected') < html.indexOf('value="E02"'));
-    assert.match(html, /工號泛查/);
+    assert.match(html, /<span>工號<\/span>/);
+    assert.match(html, /aria-label="請假工號"/);
+    assert.ok(html.indexOf('data-rc-employee-query') < html.indexOf('data-rc-filter="employeeId"'));
     f.run("state.dashboard.role='employee'");
     assert.doesNotMatch(f.run("rcRender('leave')"), /data-rc-employee-query/);
+});
+test('compact admin records retain every detail, paper evidence, review progress, actions and pagination', () => {
+    const f = fixture();
+    f.context.renderLeaveDaysSummary = () => '<details>各段日期與淨時數完整</details>';
+    f.context.renderRequestReviewProgress = () => '<details>指定主管票權完整</details>';
+    f.context.row = { id: 'paper-one', employeeId: 'E2', employeeName: 'Employee', employeeDepartment: 'Quality', leaveTypeName: 'Leave',
+        status: 'approved', statusText: 'Approved', startText: '2026-10-01 08:20', endText: '2026-10-01 17:00', duration_hours: 8,
+        approvalModeText: 'Paper approved', approval_mode: 'admin_paper_approved', paperNo: 'PAPER-123', paperApprovedBy: 'Approver',
+        paperComment: 'Long evidence comment', reason: '完整理由\n第二行理由', applicantId: 'A1', applicantName: 'Applicant', calendarActions: {} };
+    const leave = f.run("rcEntries('leave',{records:[row]})");
+    for (const text of ['E2', 'Employee', 'Quality', '2026-10-01 08:20', '2026-10-01 17:00', '8 小時', 'Paper approved', 'PAPER-123', 'Approver', 'Long evidence comment', '完整理由\n第二行理由', '各段日期與淨時數完整', '指定主管票權完整', 'paper-leave-correct', 'paper-leave-cancel']) assert.ok(leave.includes(text), text);
+    const overtime = f.run("rcEntries('overtime',{records:[row]})");
+    assert.match(overtime, /申請人/); assert.match(overtime, /A1 Applicant/);
+    assert.match(f.run("rcRender('leave')"), /rc-admin-workspace/);
+    assert.match(f.run("rcRender('leave')"), /rc-pagination/);
+    f.run("state.dashboard.role='employee'");
+    assert.doesNotMatch(f.run("rcRender('leave')"), /rc-admin-workspace/);
 });
 test('fuzzy choice, direct employee selection, month and clear share exactly the same filters', async () => {
     const f = fixture();

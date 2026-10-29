@@ -46,7 +46,7 @@ test('category cues cover all three proxy categories in create and records modes
             const html = run('renderSupervisorWorkspace()');
             assert.match(html,new RegExp(`sp-category-panel sp-category-${kind}`));
             assert.match(html,/sp-kind-tabs/); assert.match(html,new RegExp(`sp-category-word-${kind}`));
-            assert.match(html,/淡藍色.*淡紫色.*淡綠色/);
+            assert.match(html,/底色：請假淡藍、加班淡紫、午餐團膳淡綠/);
         }
     }
 });
@@ -64,12 +64,23 @@ test('category-specific submit labels remain correct when busy, simulated, or re
         }
     }
 });
-test('shared leave tool hours title and saved period summary have precise category color hooks', () => {
+test('supervisor keyword markup colors only static category words and is opt-in for shared leave UI', () => {
     const { run, context } = client();
     vm.runInContext(fs.readFileSync(require.resolve('../browser-client/leave-days.js'), 'utf8'), context);
-    const tools = run('renderLeaveDaysAddTools({autoHours:true})');
-    assert.match(tools, /<label class="field"><span>每日實際請假時數（自動計算）<\/span><input[^>]*data-ls-batch-hours/);
+    const plain = run('renderLeaveDaysAddTools({autoHours:true})');
+    assert.match(plain, /<span>每日實際請假時數（自動計算）<\/span>/); assert.doesNotMatch(plain, /ld-category-keyword/);
+    const tools = run('renderLeaveDaysAddTools({autoHours:true,categoryKeywords:true})');
+    assert.match(tools, /<span>每日實際<span class="ld-category-keyword ld-category-leave">請假<\/span>時數（自動計算）<\/span>/);
+    assert.match(tools, /aria-label="加入區間的每日實際請假時數"/);
+    const editor = run('renderLeaveDaysEditor({externalTools:true,categoryKeywords:true})');
+    assert.match(editor, /<h4>同一張單的<span class="ld-category-keyword ld-category-leave">請假<\/span>時段<\/h4>/);
+    const summary = run("renderLeaveDaysSummary({dateSelectionMode:'explicit_segments',leaveSegments:[]},{categoryKeywords:true})");
+    assert.match(summary, /<summary>實際<span class="ld-category-keyword ld-category-leave">請假<\/span> 0 日/);
+    context.holder={}; context.state.dashboard.impersonation={active:false};
+    run("leaveMealState(holder).options=[{participates:true,date:'2026-10-29',employeeId:'E001',serving:true,canChange:true,eating:true}]");
+    const meal = run('renderLeaveMealOptions(holder,[],{categoryKeywords:true})');
+    assert.match(meal, /<legend><span class="ld-category-keyword ld-category-meals">午餐<\/span>安排<\/legend>/);
     const css = fs.readFileSync(require.resolve('../browser-client/supervisor.css'), 'utf8');
-    assert.match(css, /\.sp-category-leave \[data-ls-add-tools\] label:has\(> \[data-ls-batch-hours\]\) > span,\s*\.sp-category-leave \.ld-request-summary > summary \{ color: #205d91; \}/);
-    assert.doesNotMatch(css, /\.sp-category-leave\s+(?:input|p|\.ls-rows)\s*\{[^}]*color:/);
+    assert.match(css, /ld-category-leave \{ color: #b42332;/); assert.match(css, /sp-category-word-overtime \{ color: #9a4300;/); assert.match(css, /ld-category-meals \{ color: #174ea6;/);
+    assert.doesNotMatch(css, /\.sp-category-leave \.ld-heading h4|label:has|\.ld-request-summary > summary|leave-meal-options > legend/);
 });

@@ -39,7 +39,7 @@ function rcEmployeeMatches(employees, query) {
 }
 function rcEmployeeSearch(kind, current, employees) {
     const matches = rcEmployeeMatches(employees, current.employeeQuery);
-    return `<label class="field rc-employee-search"><span>工號泛查</span><input type="search" data-rc-employee-query data-kind="${kind}" value="${rcEscape(current.employeeQuery || '')}" placeholder="輸入至少 2 字元工號" aria-label="${requestCalendarLabels[kind]}工號泛查" aria-controls="rc-${kind}-employee-matches" autocomplete="off"><select id="rc-${kind}-employee-matches" data-rc-employee-match data-kind="${kind}" aria-label="${requestCalendarLabels[kind]}工號符合名單" size="4" ${current.employeeSearchOpen && matches.length ? '' : 'hidden'}><option value="" disabled selected>請選擇員工</option>${matches.map((row) => `<option value="${rcEscape(row.id)}">${rcEscape(row.id)} ${rcEscape(row.name)}</option>`).join('')}</select><small data-rc-employee-hint>${[...String(current.employeeQuery || '').trim()].length < 2 ? '至少輸入 2 字元才顯示名單' : matches.length ? `${matches.length} 位符合` : '沒有符合工號'}</small></label>`;
+    return `<label class="field rc-employee-search"><span>工號</span><input type="search" data-rc-employee-query data-kind="${kind}" value="${rcEscape(current.employeeQuery || '')}" placeholder="輸入至少 2 字元工號" aria-label="${requestCalendarLabels[kind]}工號" aria-controls="rc-${kind}-employee-matches" autocomplete="off"><select id="rc-${kind}-employee-matches" data-rc-employee-match data-kind="${kind}" aria-label="${requestCalendarLabels[kind]}工號符合名單" size="4" ${current.employeeSearchOpen && matches.length ? '' : 'hidden'}><option value="" disabled selected>請選擇員工</option>${matches.map((row) => `<option value="${rcEscape(row.id)}">${rcEscape(row.id)} ${rcEscape(row.name)}</option>`).join('')}</select><small data-rc-employee-hint>${[...String(current.employeeQuery || '').trim()].length < 2 ? '至少輸入 2 字元才顯示名單' : matches.length ? `${matches.length} 位符合` : '沒有符合工號'}</small></label>`;
 }
 function rcForgetEmployeeNames(kind, current) {
     current.sequence += 1; current.loading = false;
@@ -120,8 +120,8 @@ function rcRender(kind, advancedHtml = '') {
         <div class="rc-view-toolbar"><div class="rc-views" role="group" aria-label="紀錄呈現方式">${['calendar', 'list'].map((view) => `<button type="button" data-action="rc-view" data-kind="${kind}" data-view="${view}" aria-pressed="${current.view === view}">${view === 'calendar' ? '日曆' : '列表'}</button>`).join('')}</div>
         ${rcAdmin() ? rcButton(kind, 'view', '進階查詢／匯出', 'data-view="advanced"') : ''}</div>
         <div class="rc-filters">
-            ${rcAdmin() || kind === 'overtime' || current.scope === 'review' ? rcSelect(kind, 'employeeId', '員工', employees.map((e) => [e.id, `${e.id} ${e.name}`]), current.filters.employeeId, '全部員工') : ''}
             ${rcAdmin() ? rcEmployeeSearch(kind, current, employees) : ''}
+            ${rcAdmin() || kind === 'overtime' || current.scope === 'review' ? rcSelect(kind, 'employeeId', '員工', employees.map((e) => [e.id, `${e.id} ${e.name}`]), current.filters.employeeId, '全部員工') : ''}
             ${rcAdmin() ? rcSelect(kind, 'department', '部門', (data?.departments || []).map((d) => [d, d]), current.filters.department, '全部部門') : ''}
             ${current.scope !== 'review' || rcAdmin() ? rcSelect(kind, 'status', '狀態', statuses, current.filters.status, '全部狀態') : ''}
             ${kind === 'leave' ? rcSelect(kind, 'leaveTypeId', '假別', (data?.leaveTypes || []).map((t) => [t.id, t.name]), current.filters.leaveTypeId, '全部假別') : ''}

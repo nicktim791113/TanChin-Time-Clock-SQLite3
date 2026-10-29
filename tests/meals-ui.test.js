@@ -22,6 +22,15 @@ function fixture() {
     return { context, calls, pending, listeners, run: (code) => vm.runInContext(code, context) };
 }
 function data(month = '2026-10') { return { month, today: '2026-10-24', days: [], employees: [{ id: '085', name: '員工甲', department: '製造部' }, { id: '088', name: '員工乙', department: '品保部' }], memberships: [{ employee_id: '085', name: '員工甲', department: '製造部', effective_date: '2026-10-01', participating: 1, updated_at: Date.parse('2026-09-20T08:00:00+08:00') }, { employee_id: '085', name: '員工甲', department: '製造部', effective_date: '2026-11-01', participating: 0, updated_at: Date.parse('2026-10-20T10:00:00+08:00') }], membershipVersions: { '085': 'membership-version', '088': 'empty-version' } }; }
+test('admin meal summary retains heading and badges without the removed helper paragraph or collapse controls', () => {
+    const f = fixture(); f.context.sample = data();
+    f.run('mealState.data=sample; mealState.month=sample.month');
+    const html = f.run('renderMealWorkspace()');
+    const summary = html.match(/<article class="workspace-card workspace-summary-card"[\s\S]*?<\/article>/)?.[0];
+    assert.ok(summary); assert.match(summary, /data-no-collapsible="true"/);
+    assert.match(summary, /<h3>午餐團膳<\/h3>/); assert.match(summary, /目前月份 2026-10/); assert.match(summary, /供餐 0 日/);
+    assert.doesNotMatch(summary, /helper-text|按既有團膳權限|<details|展開/);
+});
 
 test('admin meal entry without prefetched meals loads the Taipei month and ignores superseded responses', async () => {
     const f = fixture();
