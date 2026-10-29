@@ -64,3 +64,20 @@
 
 .sp-calendar .sp-count-approved { color: #187347; font-weight: 700; }
 .sp-calendar .sp-count-pending { color: #a35400; font-weight: 700; }
+/* Category cues apply to proxy workspaces in both create and records modes. */
+.sp-category-panel { min-width: 0; padding: 12px 16px 16px; border: 1px solid var(--sp-category-border); border-radius: 10px; background: var(--sp-category-bg); }
+.sp-category-leave { --sp-category-bg: #f0f7ff; --sp-category-border: #c0d8ef; }
+.sp-category-overtime { --sp-category-bg: #f7f2fc; --sp-category-border: #d9c9ed; }
+.sp-category-meals { --sp-category-bg: #f0f8f2; --sp-category-border: #bfdcc7; }
+.sp-workspace .sp-kind-tabs { font-size: 14px; gap: 6px; }
+.sp-workspace .sp-kind-tabs button { font-size: 2em; line-height: 1.35; padding: 10px 16px; }
+.sp-workspace .sp-kind-tabs .sp-kind-leave, .sp-category-word-leave, .sp-category-leave .ld-heading h4 { color: #205d91; }
+.sp-workspace .sp-kind-tabs .sp-kind-overtime, .sp-category-word-overtime { color: #68428e; }
+.sp-workspace .sp-kind-tabs .sp-kind-meals, .sp-category-word-meals { color: #24613b; }
+.sp-workspace .sp-kind-tabs button.is-active { border-bottom-color: currentColor; background: #ffffffb3; border-radius: 6px 6px 0 0; }
+.sp-category-help { margin: 4px 0 12px; font-size: 13px; color: #526171; line-height: 1.6; }
+@media (max-width: 600px) { .sp-category-panel { padding: 8px; } .sp-workspace .sp-kind-tabs button { padding: 10px 8px; } }
+.sp-category-panel .leave-meal-options > legend { color: #24613b; }
+/* Only the static leave-hours field title and saved leave-period summary carry the category cue. */
+.sp-category-leave [data-ls-add-tools] label:has(> [data-ls-batch-hours]) > span,
+.sp-category-leave .ld-request-summary > summary { color: #205d91; }

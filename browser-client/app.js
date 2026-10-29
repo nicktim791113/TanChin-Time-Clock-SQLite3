@@ -9050,7 +9050,7 @@ function renderEmployeeLeaveModule(dashboard) {
                 <div class="field-grid dense-form">
                     <label class="field">
                         <span>假別</span>
-                        <select name="leaveTypeId" required>${renderLeaveTypeOptions(leaveTypes)}</select>
+                        <select name="leaveTypeId" required><option value="">請選擇假別</option>${renderLeaveTypeOptions(leaveTypes)}</select>
                     </label>
                     <label class="field">
                         <span>開始日期</span>
@@ -9641,7 +9641,7 @@ function renderAdminRequestFilters(kind, datasets, pageState) {
     const filters = pageState.filters || {};
     const isLeave = kind === "leave";
     const formId = isLeave ? "admin-leave-records-filter-form" : "admin-overtime-records-filter-form";
-    const employees = datasets.employees || [];
+    const employees = [...(datasets.employees || [])].sort((a, b) => String(a.id).localeCompare(String(b.id), 'en', { numeric: true, sensitivity: 'base' }) || String(a.id).localeCompare(String(b.id), 'en'));
     const departments = datasets.departments || [];
     const statusItems = isLeave
         ? [
@@ -9881,7 +9881,7 @@ function renderEmployeeLeaveApplicationPanel(dashboard) {
                 <div class="request-meta-grid dense-form">
                     <label class="field">
                         <span>假別</span>
-                        <select name="leaveTypeId" required>${renderLeaveTypeOptions(leaveTypes)}</select>
+                        <select name="leaveTypeId" required><option value="">請選擇假別</option>${renderLeaveTypeOptions(leaveTypes)}</select>
                     </label>
                     <label class="field">
                         <span>請假時數</span>

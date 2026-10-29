@@ -14,6 +14,15 @@
 .rc-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; min-height: 24px; color: #53665b; font-size: 13px; }
 .rc-date { height: 124px; min-height: 124px; overflow: hidden; }
 .rc-date.has-records { background: #f5faf7; }
+.rc-admin-workspace .rc-date { height: 93px; min-height: 93px; padding: 4px 6px; gap: 1px; }
+.rc-admin-workspace .meal-date-number { font-size: 15px; }
+.rc-admin-workspace .rc-approved, .rc-admin-workspace .rc-pending, .rc-admin-workspace .rc-other { font-size: 11px; line-height: 1.2; }
+.rc-admin-workspace .rc-approved small { display: inline; margin-left: 3px; font-size: inherit; }
+.rc-employee-search [hidden] { display: none !important; }
+.rc-employee-search { position: relative; }
+.rc-employee-search input { width: 100%; min-width: 0; box-sizing: border-box; }
+.rc-employee-search [data-rc-employee-hint] { position: absolute; top: calc(100% + 2px); left: 0; max-width: 100%; font-size: 11px; line-height: 16px; white-space: nowrap; color: #647069; }
+.rc-employee-search select { position: absolute; top: calc(100% + 20px); left: 0; z-index: 30; width: 100%; max-width: 100%; margin: 0; padding: 4px; box-sizing: border-box; border: 1px solid #a8bdb0; border-radius: 4px; background: #fff; color: #243a30; box-shadow: 0 5px 16px #20372a26; }
 .rc-date:focus-visible, .rc-views button:focus-visible { outline: 2px solid #187349; outline-offset: 2px; }
 .rc-approved, .rc-pending, .rc-other { font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
 .rc-approved { color: #14653c; }
@@ -44,9 +53,11 @@
 @media (max-width: 600px) {
     .rc-workspace { padding: 12px 0; }
     .rc-date { height: 132px; min-height: 132px; gap: 4px; }
+    .rc-admin-workspace .rc-date { height: 99px; min-height: 99px; gap: 2px; }
     .rc-approved, .rc-pending, .rc-other { font-size: 10px; }
     .rc-entry { padding: 12px; }
     .rc-entry-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .rc-filters .field { flex-basis: 110px; }
+    .rc-filters { row-gap: 22px; }
     .rc-summary { gap: 8px; font-size: 12px; }
 }

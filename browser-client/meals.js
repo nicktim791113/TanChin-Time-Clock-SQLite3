@@ -150,6 +150,7 @@ function renderMealWorkspace() {
             `<button type="button" class="workspace-subnav-item ${mealState.panel === id ? 'is-active' : ''}" data-action="meal-panel" data-panel="${id}" aria-current="${mealState.panel === id ? 'page' : 'false'}"><span>${label}</span></button>`).join('')}</div>
         </div></div></aside>`;
     return `<section id="meal-workspace" class="meal-workspace meal-admin-workspace workspace-stack workspace-subnav-stack" data-workspace-role="admin" data-workspace-section="meals" aria-label="午餐團膳">
+        <article class="workspace-card workspace-summary-card" data-no-collapsible="true"><div class="list-toolbar"><div><p class="sub-kicker">管理者工作台</p><h3>午餐團膳</h3></div><div class="badge-row">${data ? `<span class="badge">目前月份 ${mealEscape(data.month)}</span><span class="badge">供餐 ${data.days.filter((day) => day.serving).length} 日</span>` : '<span class="badge">資料載入中</span>'}</div></div><p class="helper-text">按既有團膳權限查看午餐日曆與交單、參加資格及供餐制度；結單僅保存交單紀錄，不會自動傳送訂單。</p></article>
         <div class="workspace-subnav-layout">${sidebar}<section class="workspace-subnav-content" aria-live="polite">
             <article class="table-card meal-admin-panel" data-no-collapsible="true"><div class="meal-toolbar">
                 ${mealState.panel === 'calendar' ? `${controls}${mealButton('export', '匯出月報')}` : mealButton('refresh', '重新整理')}</div>

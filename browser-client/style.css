@@ -4144,3 +4144,10 @@ body::after {
 .meal-admin-panel .meal-toolbar, .meal-admin-workspace .meal-toolbar { min-width: 0; }
 .meal-admin-workspace .meal-month-controls { max-width: 100%; }
 #leave-audit-filter-form .field-grid { grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); }
+.meal-admin-workspace .meal-calendar > .meal-date { height: 80px; min-height: 80px; padding: 5px 6px; gap: 2px; }
+.meal-admin-workspace .meal-calendar .meal-date-number { font-size: 15px; }
+.meal-admin-workspace .meal-calendar .meal-date-status { font-size: 12px; }
+.meal-admin-workspace .meal-calendar .meal-date small { font-size: 10px; line-height: 1.2; }
+@media (max-width: 600px) {
+    .meal-admin-workspace .meal-calendar > .meal-date { height: 81px; min-height: 81px; padding: 4px 3px; gap: 2px; }
+}

@@ -114,10 +114,19 @@ function spCalendar(data) {
                 ${row?.warning ? '<span class="meal-warning-dot" title="全日請假仍預訂午餐">請假</span>' : ''}</button>`;
         }).join('')}</div>`;
 }
+function spCategoryLabel(kind = supervisorState.kind) {
+    return { leave: '請假', overtime: '加班', meals: '午餐團膳' }[kind] || '請假';
+}
+function spCategoryTitle(text) {
+    return spEscape(text).replace(/午餐團膳|午餐|團膳|請假|加班/g, (word) => {
+        const kind = word === '請假' ? 'leave' : word === '加班' ? 'overtime' : 'meals';
+        return '<span class="sp-category-word sp-category-word-' + kind + '">' + word + '</span>';
+    });
+}
 function spRequestForm() {
     const kind = supervisorState.kind, leave = kind === 'leave', date = supervisorState.date;
     return `<form data-sp-form="${kind}" class="sp-form">
-        <h4>代申請${leave ? '請假' : '加班'}</h4>${spTargets()}
+        <h4>${spCategoryTitle(`代申請${spCategoryLabel(kind)}`)}</h4>${spTargets()}
         <div class="request-period-grid">${spField('開始日期', 'startDate', 'date', date)}${spField('開始時間', 'startTime', 'time', leave ? '08:20' : '17:30')}
         ${spField('結束日期', 'endDate', 'date', date)}${spField('結束時間', 'endTime', 'time', leave ? '17:00' : '19:30')}</div>
         <div class="sp-form-grid">${leave ? `<label class="field"><span>假別</span><select name="leaveTypeId" required><option value="">請選擇假別</option>${supervisorState.data.leaveTypes.map((t) => `<option value="${spEscape(t.id)}">${spEscape(t.name)}</option>`).join('')}</select></label>` : ''}
@@ -125,7 +134,7 @@ function spRequestForm() {
         ${leave ? `${renderLeaveDaysAddTools({ autoHours: true })}${renderLeaveDaysEditor({ batch: true, autoHours: true, externalTools: true })}<div data-sp-leave-meals></div>` : ''}
         ${spField('申請事由', 'reason', 'text', '', 'maxlength="2000"')}${spReasonField('proxyReason')}
         <label class="sp-confirm"><input type="checkbox" name="confirmApproval" required>確認替所有勾選員工代申請相同內容；多主管設定依各人審核規則送審，原單主管代辦流程保留</label>
-        <div class="inline-actions"><button class="primary-btn" type="submit" ${supervisorState.busy || !spCanWrite() ? 'disabled' : ''}>送出代申請</button>${spButton('reset-form', '重設表單')}</div>
+        <div class="inline-actions"><button class="primary-btn" type="submit" ${supervisorState.busy || !spCanWrite() ? 'disabled' : ''}>代送出${spCategoryLabel(kind)}申請</button>${spButton('reset-form', '重設表單')}</div>
     </form>`;
 }
 function spPaintLeaveMeals(form) {
@@ -149,19 +158,19 @@ async function spLoadLeaveMeals(form, force = false) {
 function spMealDetail() {
     const day = supervisorState.data.meals.days.find((d) => d.date === supervisorState.date);
     if (!day) return '';
-    if (supervisorState.proxyView === 'records' && day.rows.length > 1) return `<section class="sp-day-detail"><h4>${day.date} 午餐紀錄</h4><p>${day.serving ? '供餐' : '未供餐'} · ${day.cutoff} 截止（台北時間）${day.revision ? ' · 已結單' : ''}</p>${day.rows.map((row) => `<article class="sp-record"><strong>${spEscape(row.employee_id)} ${spEscape(supervisorState.data.employees.find((e) => e.id === row.employee_id)?.name || '')}</strong><p>${!row.eligible ? '未參加' : row.eating ? '用餐' : '不用餐'}${row.submittedEating == null ? ' · 未交單' : row.submittedEating ? ' · 已交單：用餐' : ' · 已交單：不用餐'}${row.warning ? ' · 全日請假仍預訂午餐' : ''}</p></article>`).join('')}</section>`;
+    if (supervisorState.proxyView === 'records' && day.rows.length > 1) return `<section class="sp-day-detail"><h4>${day.date} ${spCategoryTitle('午餐團膳紀錄')}</h4><p>${day.serving ? '供餐' : '未供餐'} · ${day.cutoff} 截止（台北時間）${day.revision ? ' · 已結單' : ''}</p>${day.rows.map((row) => `<article class="sp-record"><strong>${spEscape(row.employee_id)} ${spEscape(supervisorState.data.employees.find((e) => e.id === row.employee_id)?.name || '')}</strong><p>${!row.eligible ? '未參加' : row.eating ? '用餐' : '不用餐'}${row.submittedEating == null ? ' · 未交單' : row.submittedEating ? ' · 已交單：用餐' : ' · 已交單：不用餐'}${row.warning ? ' · 全日請假仍預訂午餐' : ''}</p></article>`).join('')}</section>`;
     const row = day.rows[0], allowed = day.serving && !day.locked && Date.now() < day.deadline;
     const creating = supervisorState.proxyView === 'create';
-    return `<section class="sp-day-detail"><h4>${day.date} 午餐${creating ? '代登' : '紀錄'}</h4><p>${day.serving ? '供餐' : '未供餐'} · ${day.cutoff} 截止（台北時間）${creating ? '' : ` · ${spEscape(supervisorState.employeeId)} · ${row.eating ? '用餐' : '不用餐'}`}${day.revision ? ' · 已結單' : ''}${creating || row.submittedEating == null ? '' : ` · 已交單：${row.submittedEating ? '用餐' : '不用餐'}`}</p>
+    return `<section class="sp-day-detail"><h4>${day.date} ${spCategoryTitle(`午餐團膳${creating ? '代登' : '紀錄'}`)}</h4><p>${day.serving ? '供餐' : '未供餐'} · ${day.cutoff} 截止（台北時間）${creating ? '' : ` · ${spEscape(supervisorState.employeeId)} · ${row.eating ? '用餐' : '不用餐'}`}${day.revision ? ' · 已結單' : ''}${creating || row.submittedEating == null ? '' : ` · 已交單：${row.submittedEating ? '用餐' : '不用餐'}`}</p>
         ${!creating && row.warning ? '<div class="meal-warning-row"><span>全日請假仍預訂午餐；請至「建立代辦申請」修改午餐安排。</span></div>' : ''}
         ${creating && allowed ? `<form data-sp-form="meals" class="sp-form">${spTargets(true)}<label class="field"><span>是否用餐</span><select name="eating"><option value="true">用餐</option><option value="false">不用餐</option></select></label>
-        ${spReasonField('reason')}<button class="primary-btn" type="submit" ${supervisorState.busy || !spCanWrite() ? 'disabled' : ''}>儲存午餐代登</button></form>` : creating ? `<p class="meal-lock">${!day.serving ? '本日未供餐' : '已截止或已結單，請聯絡團膳管理者。'}</p>` : ''}</section>`;
+        ${spReasonField('reason')}<button class="primary-btn" type="submit" ${supervisorState.busy || !spCanWrite() ? 'disabled' : ''}>代送出午餐團膳申請</button></form>` : creating ? `<p class="meal-lock">${!day.serving ? '本日未供餐' : '已截止或已結單，請聯絡團膳管理者。'}</p>` : ''}</section>`;
 }
 function spRequestDetail() {
     const detail = supervisorState.data.calendar.detail;
-    return `<section class="sp-day-detail"><div class="sp-toolbar"><h4>${supervisorState.date} ${supervisorState.kind === 'leave' ? '請假' : '加班'}</h4></div>
+    return `<section class="sp-day-detail"><div class="sp-toolbar"><h4>${supervisorState.date} ${spCategoryTitle(spCategoryLabel())}</h4></div>
         ${supervisorState.kind === 'leave' && typeof leBalanceTable === 'function' ? leBalanceTable(supervisorState.data.leaveBalances || []) : ''}
-        <div class="sp-records">${detail.records.map((row) => `<article class="sp-record"><div class="sp-toolbar"><strong>${spEscape(row.leaveTypeName || '加班')} · ${spEscape(row.statusText)}</strong>
+        <div class="sp-records">${detail.records.map((row) => `<article class="sp-record"><div class="sp-toolbar"><strong>${spCategoryTitle(row.leaveTypeName || '加班')} · ${spEscape(row.statusText)}</strong>
             ${row.canProxyWithdraw ? spButton('withdraw', '代撤回', `data-id="${spEscape(row.id)}"`, !spCanWrite()) : ''}</div>
             <p>對象：${spEscape(row.employeeId)} ${spEscape(row.employeeName)}</p><p>${spEscape(row.startText)} 至 ${spEscape(row.endText)} · ${spEscape(row.duration_hours)} 小時</p><p>${spEscape(row.reason)}</p>
             ${supervisorState.kind === 'leave' ? renderLeaveDaysSummary(row) : ''}
@@ -188,8 +197,9 @@ function renderSupervisorWorkspace() {
             name: 'viewEmployeeIds', maxSelection: 100, selectedIds: supervisorState.recordEmployeeIds || [], inputAttributes: 'data-sp-employee'
         }) : ''}
         <div class="sp-toolbar"><div class="meal-month-controls">${spButton('month', '←', 'data-offset="-1" aria-label="上個月"')}<input type="month" data-sp-month aria-label="代辦月份" value="${supervisorState.month}" min="2000-01" max="2100-12">${spButton('month', '→', 'data-offset="1" aria-label="下個月"')}</div></div>
-        <div class="meal-tabs" role="tablist" aria-label="代辦項目">${[['leave', '請假'], ['overtime', '加班'], ['meals', '午餐團膳']].map(([kind, label]) => `<button type="button" role="tab" data-action="sp-kind" data-kind="${kind}" aria-selected="${supervisorState.kind === kind}" class="${supervisorState.kind === kind ? 'is-active' : ''}">${label}</button>`).join('')}</div>
-        ${supervisorState.proxyView === 'records' && !supervisorState.recordEmployeeIds?.length ? '<p class="sp-empty-records">請先選擇紀錄查詢員工。</p>' : `${spCalendar(data)}${supervisorState.kind === 'meals' ? spMealDetail() : supervisorState.proxyView === 'create' ? spRequestForm() : spRequestDetail()}`}`}
+        <section class="sp-category-panel sp-category-${supervisorState.kind}" aria-label="${spCategoryLabel()}代辦"><div class="meal-tabs sp-kind-tabs" role="tablist" aria-label="代辦項目">${[['leave', '請假'], ['overtime', '加班'], ['meals', '午餐團膳']].map(([kind, label]) => `<button type="button" role="tab" data-action="sp-kind" data-kind="${kind}" aria-selected="${supervisorState.kind === kind}" class="sp-kind-${kind} ${supervisorState.kind === kind ? 'is-active' : ''}">${label}</button>`).join('')}</div>
+        <p class="sp-category-help">請假為淡藍色、加班為淡紫色、午餐團膳為淡綠色；切換項目後，依下方標題核對目前建立或查看的類別。</p>
+        ${supervisorState.proxyView === 'records' && !supervisorState.recordEmployeeIds?.length ? '<p class="sp-empty-records">請先選擇紀錄查詢員工。</p>' : `${spCalendar(data)}${supervisorState.kind === 'meals' ? spMealDetail() : supervisorState.proxyView === 'create' ? spRequestForm() : spRequestDetail()}`}</section>`}
     </section>`;
 }
 function spPaint() {
