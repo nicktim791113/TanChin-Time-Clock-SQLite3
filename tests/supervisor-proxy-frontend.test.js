@@ -46,7 +46,7 @@ test('category cues cover all three proxy categories in create and records modes
             const html = run('renderSupervisorWorkspace()');
             assert.match(html,new RegExp(`sp-category-panel sp-category-${kind}`));
             assert.match(html,/sp-kind-tabs/); assert.match(html,new RegExp(`sp-category-word-${kind}`));
-            assert.match(html,/底色：請假淡藍、加班淡紫、午餐團膳淡綠/);
+            assert.doesNotMatch(html,/sp-category-help/);
         }
     }
 });
@@ -83,4 +83,55 @@ test('supervisor keyword markup colors only static category words and is opt-in 
     const css = fs.readFileSync(require.resolve('../browser-client/supervisor.css'), 'utf8');
     assert.match(css, /ld-category-leave \{ color: #b42332;/); assert.match(css, /sp-category-word-overtime \{ color: #9a4300;/); assert.match(css, /ld-category-meals \{ color: #174ea6;/);
     assert.doesNotMatch(css, /\.sp-category-leave \.ld-heading h4|label:has|\.ld-request-summary > summary|leave-meal-options > legend/);
+});
+test('supervisor leave entry packs eight fields and overtime five, with compact opt-in steps and readonly hours', () => {
+    const { run, context } = client();
+    vm.runInContext(fs.readFileSync(require.resolve('../browser-client/leave-days.js'), 'utf8'), context);
+    run("supervisorState.data={employees:[],leaveTypes:[]}; supervisorState.kind='leave'");
+    const html = run('spRequestForm()');
+    const entry = html.slice(html.indexOf('class="sp-entry-grid'), html.indexOf('<section class="ld-editor'));
+    assert.equal((entry.match(/class="field"/g)||[]).length,8);
+    assert.match(entry,/開始日期/); assert.match(entry,/每日開始時間/); assert.match(entry,/每日結束時間/);
+    assert.doesNotMatch(entry,/新增區間開始日期|新增區間結束日期|時數（自動計算）/);
+    assert.match(entry,/data-ls-batch-hours readonly aria-readonly="true"/);
+    assert.match(entry,/<details class="sp-time-details">/);
+    assert.match(html,/1　填日期時間/); assert.match(html,/2　加入清單/); assert.match(html,/3　核對後代送出/);
+    assert.equal((html.match(/<svg /g)||[]).length,3);
+    assert.match(html,/同日不同時段/); assert.match(html,/不同班表請分開申請/);
+    run("supervisorState.kind='overtime'");
+    const overtime = run('spRequestForm()');
+    const overtimeEntry = overtime.slice(overtime.indexOf('class="sp-entry-grid'), overtime.indexOf('</div>', overtime.indexOf('class="sp-entry-grid')));
+    assert.equal((overtimeEntry.match(/class="field"/g)||[]).length,5);
+    assert.match(overtime,/sp-entry-overtime/);
+    const shared = run('renderLeaveDaysEditor({batch:true})');
+    assert.doesNotMatch(shared,/sp-leave-steps/); assert.match(shared,/先填上方的新增區間/);
+});
+test('real leave sync keeps supervisor short date labels while paper retains range labels and automatic hours', () => {
+    const { run, context } = client();
+    vm.runInContext(fs.readFileSync(require.resolve('../browser-client/leave-days.js'), 'utf8'), context);
+    run(`var labels=Object.fromEntries(['startDate','startTime','endDate','endTime'].map(key=>[key,{textContent:key,dataset:{}}]));
+        var values={startDate:'2026-10-30',startTime:'08:20',endDate:'2026-10-30',endTime:'17:00',durationHours:'',dailyHours:''};
+        var controls=Object.fromEntries(Object.entries(values).map(([key,value])=>[key,{value,closest:()=>({querySelector:()=>labels[key]})}]));
+        var rest={value:''}, hours={value:'',readOnly:true}, summary={}, message={};
+        var editor={dataset:{ldMode:'segments',lsAutoHours:'true',lsExternalTools:'true',lsSupervisorSteps:'true'},querySelector(selector){return selector.includes('summary')?summary:message;}};
+        var form={elements:{namedItem:key=>controls[key]},querySelectorAll:()=>[],querySelector(selector){return selector==='[data-leave-days]'?editor:selector.includes('batch-break')?rest:hours;}};
+        syncLeaveDaysEditor(form);`);
+    assert.equal(run('labels.startDate.textContent'),'開始日期'); assert.equal(run('labels.endDate.textContent'),'結束日期');
+    assert.equal(run('hours.value'),'8'); assert.equal(run('hours.readOnly'),true);
+    run("controls.endTime.value='12:20'; syncLeaveDaysEditor(form)");
+    assert.equal(run('labels.startDate.textContent'),'開始日期'); assert.equal(run('hours.value'),'4');
+    run("editor.dataset.lsSupervisorSteps='false'; syncLeaveDaysEditor(form)");
+    assert.equal(run('labels.startDate.textContent'),'新增區間開始日期'); assert.equal(run('labels.endDate.textContent'),'新增區間結束日期');
+});
+test('supervisor steps replace the old batch paragraph through render and mode-reset sync; paper retains it', () => {
+    const { run, context } = client();
+    vm.runInContext(fs.readFileSync(require.resolve('../browser-client/leave-days.js'), 'utf8'), context);
+    assert.doesNotMatch(run('renderLeaveDaysEditor({batch:true,supervisorSteps:true})'),/所選員工共用下方所有時段/);
+    assert.match(run('renderLeaveDaysEditor({batch:true})'),/所選員工共用下方所有時段/);
+    assert.match(run('renderLegacyLeaveDaysEditor({batch:true})'),/所選員工共用以下日期/);
+    run(`var rebuilt=''; var initialEditor={dataset:{ldMode:'legacy',ldBatch:'true',lsAutoHours:'true',lsExternalTools:'true',lsSupervisorSteps:'true',lsCategoryKeywords:'true'},set outerHTML(html){rebuilt=html;this.dataset.ldMode='segments';}};
+        var form={querySelector:()=>initialEditor,elements:{namedItem:()=>null}};
+        var savedSync=lsSyncBatch, savedPaint=lsPaintRows; lsSyncBatch=()=>{};lsPaintRows=()=>{};
+        syncLeaveDaysEditor(form,{reset:true}); lsSyncBatch=savedSync;lsPaintRows=savedPaint;`);
+    const rebuilt=run('rebuilt'); assert.match(rebuilt,/sp-leave-steps/);assert.match(rebuilt,/不同班表請分開申請/);assert.doesNotMatch(rebuilt,/所選員工共用下方所有時段/);
 });

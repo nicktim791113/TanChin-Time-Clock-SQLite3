@@ -68,3 +68,15 @@
  .directory-range { align-items: flex-start; flex-direction: column; gap: 5px; }
  .directory-diagnostic-fields { grid-template-columns: 1fr; }
 }
+
+/* Restore the complete roster typography to the pre-v1.39.1 scale; retain equal-width wrapping table geometry. */
+.employee-roster-card { font-size: 1rem; }
+.employee-roster-card .sub-kicker { font-size: .75rem; }
+.employee-roster-card .badge { font-size: .84rem; }
+.employee-roster-card .employee-column-option { font-size: .7rem; }
+.employee-roster-card .employee-column-option input { inline-size: .78rem; block-size: .78rem; }
+
+.employee-roster-card .employee-table-wrap .employee-roster-table :is(th, td) { font-size: .88rem; }
+.employee-roster-card .employee-table-wrap .employee-roster-table th { font-size: .82rem; }
+.employee-roster-card .employee-table-wrap .supervisor-hint { font-size: .72rem; }
+.employee-roster-card .employee-table-wrap .mini-btn { font-size: .86rem; }

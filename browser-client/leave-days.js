@@ -113,24 +113,29 @@ function renderLeaveDaysSummary(request, { categoryKeywords = false } = {}) {
     try { const start = format(request.start_at), end = format(request.end_at); excluded = leaveDayRange(start.slice(0, 10), start.slice(11, 16), end.slice(0, 10), end.slice(11, 16)).filter((row) => !selectedSet.has(row.date)); } catch (_) { /* Invalid historical period is not inferred. */ }
     return `<details class="ld-request-summary"><summary>實際${ldCategoryKeyword('請假', categoryKeywords)} ${selected.length} 日${excluded.length ? ` · 排除 ${excluded.length} 日` : ''}</summary><ul>${selected.map((row) => `<li><span>${ldEscape(row.date)}</span><strong>${ldEscape(row.hours)} 小時</strong></li>`).join('')}</ul>${excluded.length ? `<p>不請假：${excluded.map((row) => ldEscape(row.date)).join('、')}</p>` : ''}</details>`;
 }
-function renderLeaveDaysAddTools({ autoHours = false, categoryKeywords = false } = {}) {
-    return `<div class="ls-add-tools" data-ls-add-tools><label class="field"><span>每日休息（分鐘）</span><input type="number" min="0" max="1439" step="1" data-ls-batch-break aria-label="加入區間的每日休息分鐘"></label>
-        <label class="field"><span>每日實際${ldCategoryKeyword('請假', categoryKeywords)}時數${autoHours ? '（自動計算）' : ''}</span><input type="number" min="0.01" max="24" step="0.01" data-ls-batch-hours ${autoHours ? 'readonly aria-readonly="true"' : ''} placeholder="依起訖減休息計算" aria-label="加入區間的每日實際請假時數"></label>
-        <button type="button" class="outline-btn" data-ls-action="auto-batch">${autoHours ? '恢復預設休息' : '恢復自動計算'}</button>
+function renderLeaveDaysAddTools({ autoHours = false, categoryKeywords = false, supervisorLayout = false } = {}) {
+    return `<div class="ls-add-tools ${supervisorLayout ? 'sp-inline-tools' : ''}" data-ls-add-tools><label class="field"><span>每日休息（分鐘）</span><input type="number" min="0" max="1439" step="1" data-ls-batch-break aria-label="加入區間的每日休息分鐘"></label>
+        <label class="field"><span>每日實際${ldCategoryKeyword('請假', categoryKeywords)}時數${autoHours && !supervisorLayout ? '（自動計算）' : ''}</span><input type="number" min="0.01" max="24" step="0.01" data-ls-batch-hours ${autoHours ? 'readonly aria-readonly="true"' : ''} placeholder="依起訖減休息計算" aria-label="加入區間的每日實際請假時數"></label>
+        ${supervisorLayout ? '<div class="sp-tools-actions">' : ''}<button type="button" class="outline-btn" data-ls-action="auto-batch">${autoHours ? '恢復預設休息' : '恢復自動計算'}</button>
         <label class="ls-weekends"><input type="checkbox" data-ls-weekends>多日區間包含週末</label>
         <button type="button" class="outline-btn" data-ls-action="add-range">加入上方日期區間</button>
-        <button type="button" class="outline-btn" data-ls-action="add-one">新增單一時段</button></div>
-        <p class="ld-note">完整涵蓋 12:20–13:00 時預帶休息 40 分鐘，其他時段預帶 0 分鐘；可另外修改休息分鐘，實際時數會重新計算${autoHours ? '，不能直接修改時數' : '，也可再自行調整實際時數'}。多日區間預設只加入週一至五，請自行核對假日與補班日。結束 00:00 表示該日 24:00，跨夜請拆成兩天。最多 740 段，最早至最晚日期最多 370 日。</p>`;
+        <button type="button" class="outline-btn" data-ls-action="add-one">新增單一時段</button>${supervisorLayout ? '</div>' : ''}</div>
+        ${supervisorLayout ? '<details class="sp-time-details"><summary>休息、週末及跨夜規則</summary>' : ''}<p class="ld-note">完整涵蓋 12:20–13:00 時預帶休息 40 分鐘，其他時段預帶 0 分鐘；可另外修改休息分鐘，實際時數會重新計算${autoHours ? '，不能直接修改時數' : '，也可再自行調整實際時數'}。多日區間預設只加入週一至五，請自行核對假日與補班日。結束 00:00 表示該日 24:00，跨夜請拆成兩天。最多 740 段，最早至最晚日期最多 370 日。</p>${supervisorLayout ? '</details>' : ''}`;
 }
-function renderLeaveDaysEditor({ batch = false, autoHours = false, externalTools = false, categoryKeywords = false } = {}) {
-    return `<section class="ld-editor ls-editor" data-leave-days data-ld-mode="segments" data-ld-batch="${batch}" data-ls-auto-hours="${autoHours}" data-ls-external-tools="${externalTools}" aria-label="多日期與時段請假">
+function renderLeaveDaysEditor({ batch = false, autoHours = false, externalTools = false, categoryKeywords = false, supervisorSteps = false } = {}) {
+    return `<section class="ld-editor ls-editor" data-leave-days data-ld-mode="segments" data-ld-batch="${batch}" data-ls-auto-hours="${autoHours}" data-ls-external-tools="${externalTools}" data-ls-supervisor-steps="${supervisorSteps}" data-ls-category-keywords="${categoryKeywords}" aria-label="多日期與時段請假">
         <input type="hidden" name="dateSelectionMode" value="explicit_segments"><input type="hidden" name="dailyHours" value="">
         <div class="ld-heading"><div><h4>同一張單的${ldCategoryKeyword('請假', categoryKeywords)}時段</h4><p>同一假別可加入多個日期或區間，全部時段一起送出審核。</p></div><strong data-ld-summary aria-live="polite">尚未加入時段</strong></div>
-        <p class="ld-note">先填上方的新增區間與每日起訖，再加入下方清單。可重複加入其他日期，也可在同一天新增上午、下午等不重疊的時段。只列入清單中的時段。</p>
-        ${batch ? '<p class="ld-note">所選員工共用下方所有時段與時數；每位員工各建立一張完整申請。班表不同時請分開送出。</p>' : ''}
+        ${supervisorSteps ? renderSupervisorLeaveSteps() : '<p class="ld-note">先填上方的新增區間與每日起訖，再加入下方清單。可重複加入其他日期，也可在同一天新增上午、下午等不重疊的時段。只列入清單中的時段。</p>'}
+        ${batch && !supervisorSteps ? '<p class="ld-note">所選員工共用下方所有時段與時數；每位員工各建立一張完整申請。班表不同時請分開送出。</p>' : ''}
         ${externalTools ? '' : renderLeaveDaysAddTools({ autoHours, categoryKeywords })}
         <p class="ld-message" data-ld-message role="status"></p><div class="ls-rows" data-ls-rows></div>
     </section>`;
+}
+function renderSupervisorLeaveSteps() {
+    const icons = ['M4 5h16v15H4z M8 3v4 M16 3v4 M4 10h16', 'M5 6h14 M5 12h14 M5 18h10', 'M4 12l5 5L20 6'];
+    const labels = ['填日期時間', '加入清單', '核對後代送出'];
+    return '<ol class="sp-leave-steps">' + labels.map((label, index) => '<li><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="' + icons[index] + '"/></svg><span>' + (index + 1) + '　' + label + '</span></li>').join('') + '</ol><p class="sp-step-note">可再加其他日期，或同日不同時段；只有清單內的時段會送出。所選員工共用時段與時數，不同班表請分開申請。</p>';
 }
 function lsDateTime(timestamp) {
     const value = Number(timestamp);
@@ -307,10 +312,11 @@ function syncLeaveDaysEditor(form, { reset = false, request = null } = {}) {
     let editor = form?.querySelector('[data-leave-days]'); if (!editor) return;
     const mode = request ? ((request.dateSelectionMode || request.date_selection_mode) === 'explicit_segments' ? 'segments' : 'legacy') : reset ? 'segments' : editor.dataset.ldMode;
     if (editor.dataset.ldMode !== mode) {
-        editor.outerHTML = mode === 'segments' ? renderLeaveDaysEditor({ batch: editor.dataset.ldBatch === 'true', autoHours: editor.dataset.lsAutoHours === 'true', externalTools: editor.dataset.lsExternalTools === 'true' }) : renderLegacyLeaveDaysEditor({ batch: editor.dataset.ldBatch === 'true' });
+        editor.outerHTML = mode === 'segments' ? renderLeaveDaysEditor({ batch: editor.dataset.ldBatch === 'true', autoHours: editor.dataset.lsAutoHours === 'true', externalTools: editor.dataset.lsExternalTools === 'true', supervisorSteps: editor.dataset.lsSupervisorSteps === 'true', categoryKeywords: editor.dataset.lsCategoryKeywords === 'true' }) : renderLegacyLeaveDaysEditor({ batch: editor.dataset.ldBatch === 'true' });
         editor = form.querySelector('[data-leave-days]'); leaveDayEditors.delete(form);
     }
-    const labels = { startDate: '新增區間開始日期', endDate: '新增區間結束日期', startTime: '每日開始時間', endTime: '每日結束時間' };
+    const supervisorLabels = editor.dataset.lsSupervisorSteps === 'true';
+    const labels = { startDate: supervisorLabels ? '開始日期' : '新增區間開始日期', endDate: supervisorLabels ? '結束日期' : '新增區間結束日期', startTime: '每日開始時間', endTime: '每日結束時間' };
     for (const [name, text] of Object.entries(labels)) {
         const field = form.elements.namedItem(name), label = field?.closest('label')?.querySelector('span');
         if (!label) continue;

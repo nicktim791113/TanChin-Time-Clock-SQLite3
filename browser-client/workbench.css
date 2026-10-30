@@ -49,4 +49,16 @@ body[data-workbench-role="admin"] .primary-btn:hover { background: #1848ac; }
 .wb-version-button { font: inherit; cursor: pointer; }
 .wb-version-button:hover { outline: 2px solid #245bce55; }
 .wb-version-button:focus-visible, .wb-dialog button:focus-visible { outline: 3px solid #245bce; outline-offset: 3px; }
+.workspace-subnav-layout.workspace-single-page-layout { grid-template-columns: minmax(0, 1fr); }
+[data-workspace-section="reports"] .workspace-subnav-content > article { padding: 14px 16px; }
+[data-workspace-section="reports"] .workspace-subnav-content h3 { margin: 0 0 10px; font-size: 17px; line-height: 1.4; }
+[data-workspace-section="reports"] .report-query-panel .helper-text { margin: 2px 0; font-size: 13px; }
+[data-workspace-section="reports"] .report-export-help { font-size: 13px; }
+[data-workspace-section="reports"] .report-export-help summary { cursor: pointer; color: #245bce; }
+[data-workspace-section="reports"] .report-summary-panel .sub-kicker { margin: 0 0 4px; }
+[data-workspace-section="reports"] .report-summary-panel h3 { font-size: 14px; margin: 0; }
+[data-workspace-section="reports"] .report-summary-panel .stats-grid { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-top: 10px; }
+[data-workspace-section="reports"] .report-summary-panel .stat-card { padding: 8px 10px; }
+[data-workspace-section="reports"] .report-summary-panel .stat-label { margin: 0 0 3px; font-size: 12px; }
+[data-workspace-section="reports"] .report-summary-panel .stat-value { font-size: 21px; line-height: 1.3; }
 @media (max-width: 600px) { .wb-page-toolbar { padding: 12px; } .wb-page-toolbar h3 { font-size: 15px; } .wb-dialog { width: calc(100vw - 16px); max-height: 92dvh; border-radius: 12px; } .wb-dialog-header { padding: 16px; } .wb-dialog-header h2 { font-size: 18px; } .wb-dialog-body { padding: 0 16px 20px; } .wb-help-tools { flex-direction: column; align-items: stretch; } .wb-help-tools input { max-width: none; } .wb-help-controls > div { grid-template-columns: 1fr; gap: 5px; } }

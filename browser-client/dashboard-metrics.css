@@ -133,3 +133,59 @@
 @media (prefers-reduced-motion: reduce) { .dm-metric-row, .dm-day { transition: none; } }
 
 .dm-salary-card .dm-card-body{gap:1px}.dm-salary-card .dm-metric-row{min-height:30px;padding-top:4px;padding-bottom:4px}.dm-salary-card .dm-metric-row strong{font-size:1.03rem;white-space:nowrap}.dm-salary-card .dm-metric-row>span{font-size:.78rem}.dm-card-choice select{width:100%;min-width:0;border:1px solid var(--border,#cbd5e1);border-radius:8px;padding:7px 9px;background:var(--surface,#fff);color:inherit;font:inherit;font-weight:600}.dm-order-list li>div{min-width:0}.dm-card-choice{display:block}.dm-sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+
+/* Record details reserve the remaining modal height for the paged personnel list.
+   If controls or expanded rows need more space, the body scrolls rather than
+   shrinking the table into a one-row nested viewport. Legacy insights keep their layout. */
+body:has(#dashboard-insight-modal:not(.hidden)) #back-to-top { display: none !important; }
+#dashboard-insight-modal:has(.dm-record-detail) .modal-card {
+    display: flex; flex-direction: column; box-sizing: border-box;
+    height: min(900px, calc(100vh - 28px)); height: min(900px, calc(100dvh - 28px));
+    max-height: calc(100vh - 28px); max-height: calc(100dvh - 28px);
+    padding: 12px; overflow: hidden;
+}
+#dashboard-insight-modal:has(.dm-record-detail) .modal-header { flex: 0 0 auto; gap: 8px; margin-bottom: 7px; }
+#dashboard-insight-modal:has(.dm-record-detail) .modal-header h2 { min-width: 0; font-size: 18px; line-height: 1.3; overflow-wrap: anywhere; }
+#dashboard-insight-modal:has(.dm-record-detail) .modal-header button { flex-shrink: 0; min-height: 34px; padding: 5px 9px; font-size: 12px; }
+#dashboard-insight-modal:has(.dm-record-detail) > .modal-card > .modal-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.dm-record-detail { display: flex; flex-direction: column; height: 100%; min-height: 100%; box-sizing: border-box; }
+.dm-record-detail > :not(.data-table-wrap) { flex: 0 0 auto; }
+.dm-record-detail .dm-detail-tabs { gap: 5px; margin-bottom: 7px; }
+.dm-record-detail .dm-detail-tabs button { min-height: 36px; padding: 5px 10px; gap: 10px; font-size: 12px; }
+.dm-record-detail .dm-detail-tabs button strong { font-size: 17px; }
+.dm-record-detail .dm-week-tabs { flex: 0 0 auto; min-height: 54px; margin-bottom: 7px; gap: 5px; }
+.dm-record-detail .dm-week-tabs .dm-day { min-height: 54px; padding: 4px 2px; gap: 1px; }
+.dm-record-detail .dm-week-tabs .dm-day strong { font-size: 18px; }
+.dm-record-detail .dm-week-tabs .dm-day > span:not(.dm-bar-track), .dm-record-detail .dm-week-tabs .dm-day small { margin-top: 1px; font-size: 11px; }
+.dm-record-detail .dm-summary { margin: 5px 0 7px; padding: 0; gap: 5px 18px; }
+.dm-record-detail .dm-summary > div { padding: 0 0 6px; margin: 0; gap: 6px; }
+.dm-record-detail .dm-summary strong { font-size: 23px; }
+.dm-record-detail .dm-summary span { font-size: 11px; }
+.dm-record-detail .dm-detail-heading { margin-bottom: 5px; }
+.dm-record-detail .dm-detail-heading h3 { margin-bottom: 2px; font-size: 14px; }
+.dm-record-detail .dm-detail-heading p { font-size: 11px; line-height: 1.4; }
+.dm-record-detail .dm-filters { gap: 7px; margin: 5px 0 8px; padding: 7px 8px; }
+.dm-record-detail .dm-filters label { gap: 3px; flex-basis: 140px; min-width: 0; }
+.dm-record-detail .dm-filters input, .dm-record-detail .dm-filters select { height: 34px; padding: 5px 8px; }
+.dm-record-detail .dm-filters .primary-btn, .dm-record-detail .dm-filters .outline-btn { min-height: 34px; padding: 5px 9px; }
+.dm-record-detail > .data-table-wrap { flex: 1 0 220px; min-height: 220px; max-height: none; overflow: auto; }
+.dm-record-detail .data-table td, .dm-record-detail .data-table th { padding: 7px 9px; }
+.dm-record-detail .dm-pagination { gap: 6px; margin-top: 7px; padding-bottom: 2px; }
+.dm-record-detail .dm-pagination > div { gap: 7px; }
+.dm-record-detail .dm-pagination button { min-height: 34px; padding: 5px 9px; }
+@media (max-width: 600px) {
+    #dashboard-insight-modal:has(.dm-record-detail) .modal-card { width: 100%; padding: 10px; }
+    #dashboard-insight-modal:has(.dm-record-detail) .modal-header { flex-wrap: wrap; }
+    #dashboard-insight-modal:has(.dm-record-detail) .modal-header h2 { font-size: 16px; }
+    #dashboard-insight-modal:has(.dm-record-detail) .modal-header button { min-height: 40px; }
+    .dm-record-detail .dm-week-tabs { gap: 3px; }
+    .dm-record-detail .dm-week-tabs .dm-day { min-height: 58px; }
+    .dm-record-detail .dm-week-tabs .dm-day > span:not(.dm-bar-track), .dm-record-detail .dm-week-tabs .dm-day small { font-size: 10px; }
+    .dm-record-detail .dm-detail-tabs button { min-height: 40px; }
+    .dm-record-detail .dm-summary { column-gap: 12px; }
+    .dm-record-detail .dm-summary strong { font-size: 21px; }
+    .dm-record-detail .dm-filters label { flex: 1 1 calc(50% - 7px); }
+    .dm-record-detail .dm-filters input, .dm-record-detail .dm-filters select { height: 40px; }
+    .dm-record-detail .dm-filters .primary-btn, .dm-record-detail .dm-filters .outline-btn, .dm-record-detail .dm-pagination button { min-height: 40px; }
+    .dm-record-detail .data-table td, .dm-record-detail .data-table th { padding: 7px; }
+}

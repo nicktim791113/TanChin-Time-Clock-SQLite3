@@ -1960,8 +1960,8 @@ function renderAdminReportSection(datasets) {
                 <p class="helper-text">支援查詢全部員工或單一員工在指定日期區間內的出勤資料，查詢完成後可直接匯出目前結果為 CSV。</p>
             </article>
 
-            <article class="sub-panel">
-                <h3>查詢條件</h3>
+            <article class="sub-panel report-query-panel">
+                <h3>查詢條件與匯出</h3>
                 <form id="attendance-report-form" class="stack-form">
                     <div class="field-grid three">
                         <label class="field">
@@ -1991,23 +1991,16 @@ function renderAdminReportSection(datasets) {
                             <button class="outline-btn" type="button" data-action="export-admin-report" data-template="payroll_leave_overtime">匯出薪資請假／加班明細 CSV</button>
                         </div>
                     </div>
-                    <p class="helper-text">精簡版固定 9 欄，保留舊薪資／ERP 匯入相容性；詳細版使用相同員工與日期條件，另列已核准請假與已核准加班單的起訖、核准時數、單號與原因。待審、駁回、撤回或取消的加班單不會進入薪資明細；跨日單會依各日涵蓋時段比例分攤原單核准時數。</p>
+                    <p class="helper-text">修改條件後請重新查詢；下方摘要、明細與匯出均以最後一次成功查詢為準。</p>
+                    <details class="report-export-help"><summary>兩種匯出格式有什麼不同？</summary><p class="helper-text">精簡版固定 9 欄，保留舊薪資／ERP 匯入相容性；詳細版使用相同員工與日期條件，另列已核准請假與已核准加班單的起訖、核准時數、單號與原因。待審、駁回、撤回或取消的加班單不會進入薪資明細；跨日單會依各日涵蓋時段比例分攤原單核准時數。</p></details>
                 </form>
             </article>
 
-            <article class="workspace-card">
+            <article class="workspace-card report-summary-panel">
                 <div class="list-toolbar">
                     <div>
                         <p class="sub-kicker">查詢摘要</p>
                         <h3>${escapeHtml(selectedEmployeeLabel)} / ${escapeHtml(reportState.filters.startDate)} 至 ${escapeHtml(reportState.filters.endDate)}</h3>
-                    </div>
-                    <div class="badge-row">
-                        ${renderBadge(`正常 ${reportState.summary?.validCount ?? 0} 筆`, "success")}
-                        ${renderBadge(`請假 ${reportState.summary?.leaveCount ?? 0} 筆`, reportState.summary?.leaveCount ? "success" : "")}
-                        ${renderBadge(`異常 ${reportState.summary?.abnormalCount ?? 0} 筆`, reportState.summary?.abnormalCount ? "warning" : "success")}
-                        ${renderBadge(`重複 ${reportState.summary?.duplicateCount ?? 0} 筆`)}
-                        ${renderBadge(`上班 ${reportState.summary?.inCount ?? 0} 筆`)}
-                        ${renderBadge(`下班 ${reportState.summary?.outCount ?? 0} 筆`)}
                     </div>
                 </div>
                 ${reportState.queried
@@ -2015,6 +2008,7 @@ function renderAdminReportSection(datasets) {
                         recordCount: "查詢筆數",
                         validCount: "正常筆數",
                         leaveCount: "請假筆數",
+                        overtimeCount: "加班筆數",
                         abnormalCount: "異常筆數",
                         duplicateCount: "重複筆數",
                         employeeCount: "涵蓋員工數",
@@ -2024,7 +2018,7 @@ function renderAdminReportSection(datasets) {
                     : `<p class="helper-text">尚未查詢。請先設定日期區間與員工條件，再按「查詢報表」。</p>`}
             </article>
 
-            <article class="table-card">
+            <article class="table-card report-detail-panel">
                 <h3>考勤明細</h3>
                 ${renderAdminReportRows(reportState)}
             </article>
@@ -12411,13 +12405,13 @@ const workspaceSubnavConfigs = {
                     label: "人員主檔",
                     items: [
                         { id: "form", label: "新增 / 編輯員工", panelIndex: 1 },
-                        { id: "departments", label: "部門設定", panelIndex: 2 },
                         {
                             id: "roster",
                             label: "員工名冊資料",
                             panelIndex: 3,
                             badge: (datasets) => `${filterAdminEmployees(datasets.employees || []).length}/${(datasets.employees || []).length}`
-                        }
+                        },
+                        { id: "departments", label: "部門設定", panelIndex: 2 }
                     ]
                 }
             ]
@@ -12463,13 +12457,12 @@ const workspaceSubnavConfigs = {
         },
         reports: {
             introIndexes: [0],
+            singlePage: true,
             groups: [
                 {
                     label: "查詢輸出",
                     items: [
-                        { id: "query", label: "查詢條件 / 匯出", panelIndex: 1 },
-                        { id: "summary", label: "查詢摘要", panelIndex: 2 },
-                        { id: "details", label: "考勤明細", panelIndex: 3 }
+                        { id: "query", label: "考勤查詢與匯出", panelIndexes: [1, 2, 3] }
                     ]
                 }
             ]
@@ -12844,8 +12837,8 @@ function renderWorkspaceSubnavSection(role, sectionId, datasets, config, baseRen
     return `
         <div class="workspace-stack workspace-subnav-stack" data-workspace-role="${escapeHtml(role)}" data-workspace-section="${escapeHtml(sectionId)}">
             ${introHtml}
-            <div class="workspace-subnav-layout">
-                ${renderWorkspaceSubnav(role, sectionId, groups, activeItem)}
+            <div class="workspace-subnav-layout${config.singlePage ? ' workspace-single-page-layout' : ''}">
+                ${config.singlePage ? '' : renderWorkspaceSubnav(role, sectionId, groups, activeItem)}
                 <section class="workspace-subnav-content" aria-live="polite">
                     ${activeItem.panelHtml}
                 </section>

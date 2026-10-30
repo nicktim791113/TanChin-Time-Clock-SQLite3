@@ -75,5 +75,23 @@
 .sp-workspace .sp-kind-tabs .sp-kind-overtime, .sp-category-word-overtime { color: #9a4300; }
 .sp-workspace .sp-kind-tabs .sp-kind-meals, .sp-category-word-meals, .sp-category-panel .ld-category-meals { color: #174ea6; }
 .sp-workspace .sp-kind-tabs button.is-active { border-bottom-color: currentColor; background: #ffffffb3; border-radius: 6px 6px 0 0; }
-.sp-category-help { margin: 4px 0 12px; font-size: 13px; color: #526171; line-height: 1.6; }
 @media (max-width: 600px) { .sp-category-panel { padding: 8px; } .sp-workspace .sp-kind-tabs button { padding: 10px 8px; } }
+.sp-category-panel { container-type: inline-size; }
+.sp-entry-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: end; min-width: 0; }
+.sp-entry-grid .field { min-width: 0; }
+.sp-entry-grid input, .sp-entry-grid select { width: 100%; min-width: 0; box-sizing: border-box; }
+.sp-entry-grid .sp-inline-tools { display: contents; }
+.sp-tools-actions { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.sp-tools-actions .ls-weekends { display: flex; align-items: center; gap: 6px; }
+.sp-tools-actions input[type="checkbox"] { width: auto; }
+.sp-time-details { grid-column: 1 / -1; font-size: 13px; }
+.sp-time-details summary { cursor: pointer; }
+.sp-leave-steps { display: flex; flex-wrap: wrap; gap: 12px; padding: 0; margin: 12px 0; list-style: none; }
+.sp-leave-steps li { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+.sp-leave-steps svg { flex-shrink: 0; color: #526171; }
+.sp-step-note { font-size: 13px; line-height: 1.6; margin: 8px 0 12px; }
+@container (min-width: 640px) { .sp-entry-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@container (min-width: 800px) { .sp-entry-overtime { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+@container (min-width: 1180px) { .sp-entry-leave { grid-template-columns: repeat(8, minmax(0, 1fr)); } }
+@container (max-width: 359px) { .sp-entry-grid { grid-template-columns: minmax(0, 1fr); } }
+.sp-entry-grid .sp-inline-tools .field { max-width: none; }

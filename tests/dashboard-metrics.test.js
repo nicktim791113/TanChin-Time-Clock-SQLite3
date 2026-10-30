@@ -237,3 +237,37 @@ test('metric rendering has eight cards, escapes reviewer data, exposes jump cont
     vm.runInContext("dmState.identity = 'undefined/admin/'; renderDashboard(dashboard)", context);
     assert.equal(vm.runInContext('dmState.detail', context), null); assert.equal(refreshed, 1);
 });
+
+test('record metric layout preserves full navigation, summaries, scoped filters, paged rows and expanded details', () => {
+    const context = vm.createContext({ URLSearchParams, state: {}, ui: {}, auditActionLabels: {}, auditTargetTypeLabels: {}, document: { getElementById() {} },
+        escapeHtml: (value) => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;'),
+        renderAdminEmployeeInsight() {}, renderAdminTodayNormalInsight() {}, renderAdminAbnormalInsight() {}, getAdminInsightTitle() {}, renderAdminDashboardInsightContent() {},
+        handleDashboardClick() {}, renderEmployeeDashboard: () => '', renderDashboard() {}, handleRealtimeSyncMessage() {}, handleLogout() {},
+        renderInsightTable: (headers, rows) => `<div class="data-table-wrap insight-table-wrap"><table><thead>${headers.join('|')}</thead><tbody>${rows.join('')}</tbody></table></div>`,
+        renderLeaveDaysSummary: () => '<details>精確請假日期與各段時數</details>' });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../browser-client/dashboard-metrics.js'), 'utf8'), context);
+    context.dashboard = { dashboardMetrics: { today: '2026-10-30', groups: METRIC_GROUPS,
+        catalog: METRIC_GROUPS.flatMap((group) => group.items.map((key) => ({ key, label: key, available: true, value: 25, date: key.startsWith('salary') ? '2026-10' : '2026-10-30', subtitle: '完整授權範圍' }))) } };
+    context.state.dashboard = context.dashboard;
+    for (const key of ['leaveDay:0', 'leavePendingSupervisor', 'leavePendingAdmin', 'overtimeDay:0', 'overtimePendingSupervisor', 'salaryPendingAmount', 'salaryApprovedAmount']) {
+        context.key = key;
+        const salary = key.startsWith('salary');
+        context.detail = { metric: { key }, kind: salary ? 'salary' : key.startsWith('leave') ? 'leave' : 'overtime', summary: { people: 62, requestHours: 496, dayHours: 8, requests: 62, requestedAmount: 62000, approvedAmount: 31000 },
+            filters: { keyword: 'Employee', department: 'QA' }, departments: ['QA'], page: 2, totalPages: 2, totalRecords: 62, unfilteredRecords: 80,
+            records: [{ employeeId: 'E001', employeeName: 'Employee', applicantId: 'A001', applicantName: 'Applicant', employeeDepartment: 'QA', startText: '2026-10-30 08:20', endText: '2026-10-30 17:00', duration_hours: 8, dayHours: 8,
+                status: 'pending_supervisor', statusText: '待主管審核', leaveTypeName: 'Leave', reason: '完整原因 <long>\n第二行',
+                reviewPolicy: { mode: 'required', reviewers: [{ id: 'S001', name: 'Reviewer', required: true, decision: 'pending', comment: '完整審核意見' }] },
+                requestedAmount: 1000, approvedAmount: null, updatedAt: 1793320800000, revision: 3, requestId: 'advance-123' }] };
+        vm.runInContext('dmState.detail=detail', context);
+        const html = vm.runInContext('renderAdminDashboardInsightContent(key,dashboard)', context);
+        assert.match(html, /class="dm-detail dm-record-detail"/);
+        for (const token of ['Employee', 'E001', 'data-dm-filter', 'value="Employee"', 'value="QA" selected', 'data-dm-clear', 'dm-summary', 'dm-pagination', 'data-dm-page="1"', 'data-dm-page="3"', '2 \/ 2']) assert.ok(html.includes(token.replace('\\/', '/')), `${key}: ${token}`);
+        if (key.includes('Pending') && !salary) { assert.match(html, /申請人/); assert.match(html, /Applicant/); assert.match(html, /A001/); }
+        if (!salary) { assert.match(html, /完整原因 &lt;long>/); assert.match(html, /完整審核意見/); assert.match(html, /S001/); assert.match(html, /dm-request-detail/); }
+        if (key.startsWith('leave')) assert.match(html, /精確請假日期與各段時數/);
+        if (key.includes('Day:')) assert.match(html, /dm-week-tabs/); else assert.match(html, /dm-detail-tabs/);
+        if (salary) { assert.match(html, /advance-123/); assert.match(html, /v3/); assert.match(html, /NT\$ 1,000/); }
+    }
+    context.dashboard.dashboardMetrics.catalog.forEach((item) => { item.available = false; });
+    assert.doesNotMatch(vm.runInContext('renderAdminDashboardInsightContent(key,dashboard)', context), /Employee|advance-123|dm-record-detail/);
+});
