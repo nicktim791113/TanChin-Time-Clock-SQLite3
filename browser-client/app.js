@@ -1288,6 +1288,12 @@ function measureCellContentWidth(cell) {
 }
 
 function getColumnWidthLimits(table, columnIndex) {
+    if (table.closest?.('.dm-review-detail')) {
+        // Keep pending-review identities visible without measuring folded vote history as one long line.
+        const widths = [[95, 110], [90, 110], [65, 80], [165, 175], [65, 70], [90, 100], [180, 220], [105, 130]];
+        const width = widths[columnIndex];
+        if (width) return { min: width[0], max: width[1] };
+    }
     const cells = Array.from(table.querySelectorAll("tr"))
         .map((row) => row.cells?.[columnIndex])
         .filter(Boolean);

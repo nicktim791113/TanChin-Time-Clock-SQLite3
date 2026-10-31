@@ -7,10 +7,10 @@ const { metricApplicant } = require('../dashboard-metrics');
 const employees = new Map([['E1', { name: '對象' }], ['A1', { name: '代辦主管' }]]);
 
 test('metric applicant uses the recorded applicant for self and proxy, without inferring missing history', () => {
-    assert.deepEqual(metricApplicant({ employee_id: 'E1', applicant_id: 'E1' }, employees), { applicantId: 'E1', applicantName: '對象' });
-    assert.deepEqual(metricApplicant({ employee_id: 'E1', applicant_id: 'A1' }, employees), { applicantId: 'A1', applicantName: '代辦主管' });
-    assert.deepEqual(metricApplicant({ employee_id: 'E1' }, employees), { applicantId: '', applicantName: '' });
-    assert.deepEqual(metricApplicant({ employee_id: 'E1', applicant_id: 'deleted' }, employees), { applicantId: 'deleted', applicantName: '' });
+    assert.deepEqual(metricApplicant({ employee_id: 'E1', applicant_id: 'E1' }, employees), { applicantId: 'E1', applicantName: '對象', applicantIsSelf: true });
+    assert.deepEqual(metricApplicant({ employee_id: 'E1', applicant_id: 'A1' }, employees), { applicantId: 'A1', applicantName: '代辦主管', applicantIsSelf: false });
+    assert.deepEqual(metricApplicant({ employee_id: 'E1' }, employees), { applicantId: '', applicantName: '', applicantIsSelf: false });
+    assert.deepEqual(metricApplicant({ employee_id: 'E1', applicant_id: 'deleted' }, employees), { applicantId: 'deleted', applicantName: '', applicantIsSelf: false });
 });
 function renderer() {
     const context = vm.createContext({ URLSearchParams, state: {}, ui: {}, auditActionLabels: {}, auditTargetTypeLabels: {}, document: { getElementById() {} },
@@ -34,9 +34,43 @@ for (const key of ['leavePendingSupervisor', 'leavePendingAdmin', 'overtimePendi
     vm.runInContext("dmState.detail = { metric:{key},kind:key.startsWith('leave')?'leave':'overtime',records,summary:{},filters:{},page:1,totalPages:1,totalRecords:4,unfilteredRecords:4 }", context);
     const html = vm.runInContext('renderAdminDashboardInsightContent(key,dashboard)', context);
     assert.match(html, /<th>人員<\/th><th>申請人<\/th>/);
+    assert.match(html, /<td><strong>對象<\/strong><small class="dm-cell-secondary">E1<\/small><\/td><td><strong>本人<\/strong><\/td>/);
     assert.match(html, /<td><strong>對象<\/strong><small class="dm-cell-secondary">E1<\/small><\/td><td><strong>代辦主管<\/strong><small class="dm-cell-secondary">A1<\/small>/);
     assert.match(html, /<td><span class="dm-cell-secondary">未記錄<\/span><\/td>/);
     assert.ok(!html.includes('<script>')); assert.ok(!html.includes('<evil>'));
+});
+
+for (const key of ['leavePendingSupervisor', 'leavePendingAdmin', 'overtimePendingSupervisor']) test(key + ' separates current reviewers from request content and preserves review history', () => {
+    const context = renderer();
+    context.key = key;
+    context.dashboard = { dashboardMetrics: { catalog: [{ key, available: true, label: '待審核' }], groups: [] } };
+    context.records = [{ employeeId: 'E1', employeeName: '對象', applicantId: 'E1', status: key === 'leavePendingAdmin' ? 'pending_admin' : 'pending_supervisor', reason: '事由文字',
+        reviewActors: { pendingSupervisors: key === 'leavePendingAdmin' ? [] : [{ id: 'A1', name: '待審主管', required: true }], approvedSupervisors: [{ id: 'A2', name: '核准主管', required: true }], pendingAdmin: key === 'leavePendingAdmin' },
+        reviewPolicy: { mode: 'required', reviewers: [{ id: 'A1', name: '待審主管', required: true }, { id: 'A2', name: '核准主管', required: true, decision: 'approved', comment: '核准備註' }] }
+    }];
+    vm.runInContext("dmState.detail = { metric:{key},kind:key.startsWith('leave')?'leave':'overtime',records,summary:{},filters:{},page:1,totalPages:1,totalRecords:1,unfilteredRecords:1 }", context);
+    const html = vm.runInContext('renderAdminDashboardInsightContent(key,dashboard)', context);
+    assert.match(html, /<th>狀態<\/th><th>待審查人／核准人<\/th><th>申請內容<\/th>/);
+    const cell = html.match(/<td>(<div class="dm-review-actors">[\s\S]*?)<\/td>/)[1];
+    assert.match(cell, /已核准：<\/span>核准主管（A2）（必審）/);
+    assert.match(cell, key === 'leavePendingAdmin' ? /待審查：<\/span>管理部複核/ : /待審查：<\/span>待審主管（A1）（必審）/);
+    assert.match(cell, /必審 1\/2 已核准/);
+    assert.match(cell, /核准備註/);
+    const content = html.match(/<details class="dm-request-detail">([\s\S]*?)<\/td>/)[1];
+    assert.match(content, /事由文字/); assert.doesNotMatch(content, /dm-review-progress|核准備註/);
+});
+
+test('reviewer display preserves unknown identities, escapes data and leaves weekly detail columns unchanged', () => {
+    const context = renderer();
+    context.row = { status: 'pending_supervisor' };
+    assert.match(vm.runInContext('dmReviewActorsCell(row)', context), /待審查人未記錄/);
+    context.row = { reviewActors: { approvedSupervisors: [{ id: '<id>', name: '<script>' }], approvedAdmin: { id: 'D1', name: '' } } };
+    const cell = vm.runInContext('dmReviewActorsCell(row)', context);
+    assert.ok(!cell.includes('<script>')); assert.ok(!cell.includes('<id>'));
+    assert.match(cell, /管理部核准：<\/span>姓名未記錄（D1）/);
+    context.key = 'leaveDay:0'; context.dashboard = { dashboardMetrics: { catalog: [{ key: context.key, available: true }], groups: [] } };
+    vm.runInContext("dmState.detail={metric:{key},kind:'leave',records:[],summary:{},page:1,totalPages:1,totalRecords:0,unfilteredRecords:0}", context);
+    assert.doesNotMatch(vm.runInContext('renderAdminDashboardInsightContent(key,dashboard)', context), /<th>待審查人／核准人|<th>申請人/);
 });
 
 test('detail endpoint overrides formatter employee fallback with recorded applicant identity for both request kinds', () => {
@@ -50,7 +84,7 @@ test('detail endpoint overrides formatter employee fallback with recorded applic
     let status = 'pending_supervisor';
     const rows = () => source.map(r => ({ ...r, status, duration_hours: 1 }));
     attachDashboardMetricRoutes({ post() {}, get(route, ...handlers) { routes[route] = handlers.at(-1); } }, {
-        db: { queryLeaveRequests: rows, queryOvertimeRequests: rows, loadEmployees: () => [...employees].map(([id, value]) => ({ id, ...value })) },
+        db: { queryLeaveRequests: rows, queryOvertimeRequests: rows, loadEmployees: () => [...employees].map(([id, value]) => ({ id, ...value })), getReviewWorkflow: () => ({ canReview: () => false }) },
         requireSession() {}, requireAdmin() {}, can: (_session, p) => ['admin.leave.review', 'admin.overtime.view'].includes(p),
         formatRecord: (_kind, r) => ({ employeeId: r.employee_id, applicantId: r.applicant_id || r.employee_id, applicantName: 'unsafe fallback' })
     });

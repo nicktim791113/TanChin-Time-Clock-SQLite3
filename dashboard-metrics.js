@@ -102,7 +102,27 @@ function buildDashboardMetrics(db, can, summary = {}, now = Date.now(), supplied
 }
 function metricApplicant(row, employees) {
     const applicantId = String(row.applicant_id || '').trim();
-    return { applicantId, applicantName: applicantId ? employees.get(applicantId)?.name || '' : '' };
+    return { applicantId, applicantName: applicantId ? employees.get(applicantId)?.name || '' : '', applicantIsSelf: Boolean(applicantId && applicantId === row.employee_id) };
+}
+function metricReviewActors(kind, row, policy, employees, workflow) {
+    const person = (id) => ({ id, name: employees.get(id)?.name || '' });
+    const pendingSupervisors = [], approvedSupervisors = [];
+    if (policy) {
+        for (const reviewer of policy.reviewers || []) {
+            if (!reviewer.id || reviewer.revoked) continue;
+            if (reviewer.decision === 'pending' && employees.has(reviewer.id) && workflow.canReview(kind, row, reviewer.id)) {
+                pendingSupervisors.push({ ...person(reviewer.id), required: Boolean(reviewer.required) });
+            }
+            if (reviewer.decision === 'approved') approvedSupervisors.push({ ...person(reviewer.id), required: Boolean(reviewer.required), decidedAt: reviewer.decidedAt ?? null, revoked: false });
+        }
+    } else {
+        const id = String(row.supervisor_id || '').trim();
+        if (id && !['approved', 'rejected'].includes(row.supervisor_decision) && employees.has(id) && workflow.canReview(kind, row, id)) pendingSupervisors.push({ ...person(id), required: false });
+        if (id && row.supervisor_decision === 'approved') approvedSupervisors.push({ ...person(id), required: false, decidedAt: row.supervisor_decided_at ?? null, revoked: false });
+    }
+    const adminId = String(row.admin_decision_by || '').trim();
+    return { pendingSupervisors, approvedSupervisors, pendingAdmin: kind === 'leave' && row.status === 'pending_admin',
+        approvedAdmin: kind === 'leave' && row.status === 'approved' && adminId ? { ...person(adminId), decidedAt: row.admin_decided_at ?? null } : null };
 }
 function attachDashboardMetricRoutes(server, { db, requireSession, requireAdmin, can, auditEntry, notify, formatRecord }) {
     const handle = (callback) => (request, response) => { try { callback(request, response); } catch (error) { response.status(error.statusCode || 500).json({ success: false, error: error.statusCode ? error.message : '指標處理失敗，未儲存異動。' }); } };
@@ -144,7 +164,12 @@ function attachDashboardMetricRoutes(server, { db, requireSession, requireAdmin,
         const page = request.query.page == null ? 1 : Number(request.query.page);
         if (!Number.isSafeInteger(page) || page < 1) fail('頁碼不正確。');
         const totalPages = Math.max(1, Math.ceil(rows.length / 50)), current = Math.min(page, totalPages);
-        response.json({ success: true, detail: { metric, kind, page: current, totalPages, totalRecords: rows.length, unfilteredRecords, summary, departments, filters: { keyword, department }, records: rows.slice((current - 1) * 50, current * 50).map((r) => kind === 'salary' ? ({ requestId: r.requestId, employeeId: r.employeeId, employeeName: r.employeeName, employeeDepartment: r.department, applicationMonth: r.applicationMonth, status: r.status, entryMode: r.entryMode, requestedAmount: r.requestedAmount, approvedAmount: r.approvedAmount, revision: r.revision, updatedAt: r.updatedAt }) : kind === 'meal' ? ({ employeeId: r.employee_id, employeeName: r.name, employeeDepartment: r.department, eating: r.eating, submittedEating: r.submittedEating }) : ({ ...formatRecord(kind, r), ...metricApplicant(r, employees), ...(isLeaveDay ? { dayHours: dayHours(r) } : {}) })) } });
+        const requestRecord = (row) => {
+            const formatted = formatRecord(kind, row);
+            return { ...formatted, ...metricApplicant(row, employees), reviewActors: metricReviewActors(kind, row, formatted.reviewPolicy, employees, db.getReviewWorkflow()),
+                ...(isLeaveDay ? { dayHours: dayHours(row) } : {}) };
+        };
+        response.json({ success: true, detail: { metric, kind, page: current, totalPages, totalRecords: rows.length, unfilteredRecords, summary, departments, filters: { keyword, department }, records: rows.slice((current - 1) * 50, current * 50).map((r) => kind === 'salary' ? ({ requestId: r.requestId, employeeId: r.employeeId, employeeName: r.employeeName, employeeDepartment: r.department, applicationMonth: r.applicationMonth, status: r.status, entryMode: r.entryMode, requestedAmount: r.requestedAmount, approvedAmount: r.approvedAmount, revision: r.revision, updatedAt: r.updatedAt }) : kind === 'meal' ? ({ employeeId: r.employee_id, employeeName: r.name, employeeDepartment: r.department, eating: r.eating, submittedEating: r.submittedEating }) : requestRecord(r)) } });
     }));
 }
 module.exports = { metricApplicant, DEFAULT_CARDS, METRIC_GROUPS, createDashboardMetricStore, buildDashboardMetrics, attachDashboardMetricRoutes };

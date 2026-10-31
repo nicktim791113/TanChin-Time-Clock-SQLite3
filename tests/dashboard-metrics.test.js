@@ -260,7 +260,7 @@ test('record metric layout preserves full navigation, summaries, scoped filters,
                 requestedAmount: 1000, approvedAmount: null, updatedAt: 1793320800000, revision: 3, requestId: 'advance-123' }] };
         vm.runInContext('dmState.detail=detail', context);
         const html = vm.runInContext('renderAdminDashboardInsightContent(key,dashboard)', context);
-        assert.match(html, /class="dm-detail dm-record-detail"/);
+        assert.match(html, /class="dm-detail dm-record-detail(?: dm-review-detail)?"/);
         for (const token of ['Employee', 'E001', 'data-dm-filter', 'value="Employee"', 'value="QA" selected', 'data-dm-clear', 'dm-summary', 'dm-pagination', 'data-dm-page="1"', 'data-dm-page="3"', '2 \/ 2']) assert.ok(html.includes(token.replace('\\/', '/')), `${key}: ${token}`);
         if (key.includes('Pending') && !salary) { assert.match(html, /申請人/); assert.match(html, /Applicant/); assert.match(html, /A001/); }
         if (!salary) { assert.match(html, /完整原因 &lt;long>/); assert.match(html, /完整審核意見/); assert.match(html, /S001/); assert.match(html, /dm-request-detail/); }
