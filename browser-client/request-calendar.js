@@ -135,7 +135,7 @@ function rcRender(kind, advancedHtml = '') {
             <section class="rc-detail" aria-label="${current.view === 'calendar' ? current.date + ' 明細' : '月內紀錄'}"><div class="rc-toolbar"><h3>${current.view === 'calendar' ? current.date : current.month + ' 月內紀錄'} <small>${detail.totalCount} 筆</small></h3>
                 ${current.view === 'calendar' && ((!rcAdmin() && current.scope === 'mine') || (rcAdmin() && hasCurrentAdminPermission(`admin.${kind}.paperCreate`))) ? rcButton(kind, 'create', rcAdmin() ? '紙本補登' : `申請${label}`) : ''}
             </div>${rcEntries(kind, detail)}
-            <div class="rc-pagination">${rcButton(kind, 'page', '←', `data-page="${detail.page - 1}" aria-label="上一頁" title="上一頁" ${detail.page <= 1 ? 'disabled' : ''}`)}<span>第 ${detail.page}／${detail.totalPages} 頁</span>${rcButton(kind, 'page', '→', `data-page="${detail.page + 1}" aria-label="下一頁" title="下一頁" ${detail.page >= detail.totalPages ? 'disabled' : ''}`)}</div>
+            <div class="rc-pagination">${rcButton(kind, 'page', '←', `data-page="${detail.page - 1}" aria-label="上一頁" title="上一頁" ${detail.page <= 1 ? 'disabled' : ''}`)}<span>第 ${detail.page}／${detail.totalPages} 頁${rcAdmin() && kind === 'overtime' && current.view === 'list' && detail.pageSize ? ` · 每頁 ${detail.pageSize} 筆` : ''}</span>${rcButton(kind, 'page', '→', `data-page="${detail.page + 1}" aria-label="下一頁" title="下一頁" ${detail.page >= detail.totalPages ? 'disabled' : ''}`)}</div>
             </section>`}
         ${rcReviewQueue(kind)}
     </section>`;

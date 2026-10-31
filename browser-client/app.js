@@ -351,26 +351,26 @@ function ensureDeveloperAuditState() {
 
 const EMPLOYEE_ROSTER_FIXED_COLUMNS = ["id", "name", "gender", "department", "job_title", "card", "password", "nationality"];
 const EMPLOYEE_ROSTER_COLUMNS = [
-    { key: "id", label: "工號", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.id || "-") },
-    { key: "name", label: "姓名", cellClass: "nowrap-cell", render: (employee) => renderEmployeeNameWithSupervisorHint(employee) },
-    { key: "gender", label: "性別", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.gender || "-") },
-    { key: "department", label: "部門", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.department || "-") },
-    { key: "job_title", label: "職稱", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.job_title || "-") },
-    { key: "card", label: "卡號", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.card || "-") },
-    { key: "password", label: "密碼", cellClass: "nowrap-cell", render: () => `<span class="mono-text">********</span>` },
-    { key: "nationality", label: "國籍", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.nationality || "-") },
-    { key: "national_id", label: "身分證字號", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.national_id || "-") },
-    { key: "birth_date", label: "出生日", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.birth_date || "-") },
-    { key: "hire_date", label: "到職日", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.hire_date || "-") },
-    { key: "termination_date", label: "離職日", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.termination_date || "-") },
-    { key: "bank_account", label: "銀行帳戶號碼", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.bank_account || "-") },
-    { key: "mobile_phone", label: "聯絡手機", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.mobile_phone || "-") },
-    { key: "emergency_contact", label: "緊急聯絡人", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.emergency_contact || "-") },
-    { key: "emergency_phone", label: "緊急聯絡電話", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.emergency_phone || "-") },
-    { key: "contact_address", label: "聯絡地址", cellClass: "multiline-cell", render: (employee) => escapeHtml(employee.contact_address || "-") },
-    { key: "registered_address", label: "戶籍地址", cellClass: "multiline-cell", render: (employee) => escapeHtml(employee.registered_address || "-") },
-    { key: "family_status", label: "家庭概況", cellClass: "multiline-cell", render: (employee) => escapeHtml(employee.family_status || "-") },
-    { key: "notes", label: "備註", cellClass: "multiline-cell", render: (employee) => escapeHtml(employee.notes || "-") }
+    { key: "id", widthRem: 5.5, label: "工號", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.id || "-") },
+    { key: "name", widthRem: 10, label: "姓名", cellClass: "nowrap-cell", render: (employee) => renderEmployeeNameWithSupervisorHint(employee) },
+    { key: "gender", widthRem: 4.5, label: "性別", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.gender || "-") },
+    { key: "department", widthRem: 9, label: "部門", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.department || "-") },
+    { key: "job_title", widthRem: 9, label: "職稱", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.job_title || "-") },
+    { key: "card", widthRem: 10, label: "卡號", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.card || "-") },
+    { key: "password", widthRem: 8, label: "密碼", cellClass: "nowrap-cell", render: () => `<span class="mono-text">********</span>` },
+    { key: "nationality", widthRem: 6, label: "國籍", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.nationality || "-") },
+    { key: "national_id", widthRem: 10, label: "身分證字號", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.national_id || "-") },
+    { key: "birth_date", widthRem: 9, label: "出生日", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.birth_date || "-") },
+    { key: "hire_date", widthRem: 9, label: "到職日", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.hire_date || "-") },
+    { key: "termination_date", widthRem: 9, label: "離職日", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.termination_date || "-") },
+    { key: "bank_account", widthRem: 14, label: "銀行帳戶號碼", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.bank_account || "-") },
+    { key: "mobile_phone", widthRem: 11, label: "聯絡手機", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.mobile_phone || "-") },
+    { key: "emergency_contact", widthRem: 10, label: "緊急聯絡人", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.emergency_contact || "-") },
+    { key: "emergency_phone", widthRem: 12, label: "緊急聯絡電話", cellClass: "nowrap-cell", render: (employee) => escapeHtml(employee.emergency_phone || "-") },
+    { key: "contact_address", widthRem: 22, label: "聯絡地址", cellClass: "multiline-cell", render: (employee) => escapeHtml(employee.contact_address || "-") },
+    { key: "registered_address", widthRem: 22, label: "戶籍地址", cellClass: "multiline-cell", render: (employee) => escapeHtml(employee.registered_address || "-") },
+    { key: "family_status", widthRem: 18, label: "家庭概況", cellClass: "multiline-cell", render: (employee) => escapeHtml(employee.family_status || "-") },
+    { key: "notes", widthRem: 22, label: "備註", cellClass: "multiline-cell", render: (employee) => escapeHtml(employee.notes || "-") }
 ];
 const EMPLOYEE_ROSTER_OPTIONAL_COLUMNS = EMPLOYEE_ROSTER_COLUMNS.filter((column) => !EMPLOYEE_ROSTER_FIXED_COLUMNS.includes(column.key));
 
@@ -1299,8 +1299,8 @@ function getColumnWidthLimits(table, columnIndex) {
 }
 
 function fitDataTableColumnsForTable(table) {
-    // The roster has equal-width columns; content measurement must not resize them.
-    if (table?.dataset?.columnLayout === "uniform") return;
+    // Explicit roster geometry must not receive a second measured colgroup.
+    if (table?.dataset?.columnLayout === "uniform" || (table?.dataset?.columnLayout === "content" && table.matches?.(".employee-roster-table"))) return;
     if (!table?.rows?.length) return;
     const columnCount = Math.max(...Array.from(table.rows).map((row) => row.cells.length), 0);
     if (!columnCount) return;
@@ -1838,10 +1838,13 @@ function renderEmployeeRows(employees, visibleRows = "25") {
     if (!employees.length) return renderEmptyState("目前沒有符合條件的員工資料。");
     const tableHeight = visibleRows === "50" ? "48rem" : "32rem";
     const visibleColumns = getActiveEmployeeRosterColumns();
+    const actionsWidthRem = 12;
+    const tableWidthRem = visibleColumns.reduce((total, column) => total + column.widthRem, actionsWidthRem);
 
     return `
         <div class="data-table-wrap employee-table-wrap" style="--employee-table-height: ${tableHeight};" role="region" aria-label="員工名冊，可左右捲動查看完整欄位" tabindex="0">
-            <table class="data-table employee-roster-table" data-column-layout="uniform" style="--employee-column-count: ${visibleColumns.length + 1};">
+            <table class="data-table employee-roster-table" data-column-layout="content" style="--employee-table-width: ${tableWidthRem}rem;">
+                <colgroup>${visibleColumns.map((column) => `<col data-column="${column.key}" style="width: ${column.widthRem}rem;">`).join('')}<col data-column="actions" style="width: ${actionsWidthRem}rem;"></colgroup>
                 <thead>
                     <tr>
                         ${visibleColumns.map((column) => `<th scope="col" class="${column.cellClass || ""}">${escapeHtml(column.label)}</th>`).join("")}
@@ -5040,7 +5043,7 @@ renderAdminPeopleSection = function renderAdminPeopleSectionTabsOverride(dataset
                 <div class="list-toolbar">
                     <div>
                         <h3>員工名冊</h3>
-                        <p class="helper-text">固定顯示核心 8 欄，其它欄位可自由勾選。每欄等寬、內容完整換行；在名冊內左右捲動可查看所有欄位。</p>
+                        <p class="helper-text">固定顯示核心 8 欄，其它欄位可自由勾選。欄寬依內容類型分配、內容完整換行；在名冊內左右捲動可查看所有欄位。</p>
                     </div>
                     <div class="badge-row">
                         <span id="employee-filter-badge">${renderBadge(`顯示 ${filteredEmployees.length} / ${datasets.employees.length} 筆`, "success")}</span>
@@ -12457,7 +12460,6 @@ const workspaceSubnavConfigs = {
         },
         reports: {
             introIndexes: [0],
-            singlePage: true,
             groups: [
                 {
                     label: "查詢輸出",
@@ -12837,8 +12839,8 @@ function renderWorkspaceSubnavSection(role, sectionId, datasets, config, baseRen
     return `
         <div class="workspace-stack workspace-subnav-stack" data-workspace-role="${escapeHtml(role)}" data-workspace-section="${escapeHtml(sectionId)}">
             ${introHtml}
-            <div class="workspace-subnav-layout${config.singlePage ? ' workspace-single-page-layout' : ''}">
-                ${config.singlePage ? '' : renderWorkspaceSubnav(role, sectionId, groups, activeItem)}
+            <div class="workspace-subnav-layout">
+                ${renderWorkspaceSubnav(role, sectionId, groups, activeItem)}
                 <section class="workspace-subnav-content" aria-live="polite">
                     ${activeItem.panelHtml}
                 </section>

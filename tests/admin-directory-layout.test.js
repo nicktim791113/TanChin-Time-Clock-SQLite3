@@ -14,7 +14,7 @@ test('people subnavigation reorders labels without changing panel bindings or ro
     assert.deepEqual(Array.from(items, item => [item.id, item.panelIndex]), [['form', 1], ['roster', 3], ['departments', 2]]);
     assert.equal(items[1].badge({ employees: [{ visible: true }, { visible: false }] }), '1/2');
 });
-test('roster typography resets after base styling while retaining equal-width wrapping geometry', () => {
+test('roster typography resets after base styling while retaining wrapping geometry', () => {
     const html = read('index.html'), base = read('style.css'), directory = read('admin-directory.css');
     assert.ok(html.indexOf('./admin-directory.css') > html.indexOf('./style.css'));
     assert.match(directory, /\.employee-roster-card\s*\{\s*font-size:\s*1rem/);
@@ -25,4 +25,41 @@ test('roster typography resets after base styling while retaining equal-width wr
     assert.match(directory, /\.mini-btn\s*\{\s*font-size:\s*\.86rem/);
     const overrides = directory.slice(directory.indexOf('/* Restore the complete roster'));
     assert.ok(!/table-layout|column-width|white-space|overflow-wrap|overflow-x/.test(overrides), 'font reset must preserve table layout and wrapping');
+});
+test('roster column geometry follows visible content fields without losing cells, masked secrets or actions', () => {
+    const source = read('app.js');
+    const context = vm.createContext({ escapeHtml: value => String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'), renderEmployeeNameWithSupervisorHint: employee => employee.name, renderEmptyState: text => text });
+    const configStart=source.indexOf('const EMPLOYEE_ROSTER_FIXED_COLUMNS');
+    vm.runInContext(source.slice(configStart,source.indexOf('function getEmployeeRosterVisibleColumns',configStart)),context);
+    vm.runInContext('var optional=[]; function getActiveEmployeeRosterColumns(){return EMPLOYEE_ROSTER_COLUMNS.filter(c=>EMPLOYEE_ROSTER_FIXED_COLUMNS.includes(c.key)||optional.includes(c.key));}',context);
+    const start=source.indexOf('function renderEmployeeRows(');
+    vm.runInContext(source.slice(start,source.indexOf('function renderShiftRows(',start)),context);
+    context.staff=[{id:'E001',name:'員工',gender:'男',card:'long-card-123456789',password:'never-show',notes:'<script>unsafe</script>',contact_address:'長地址\n第二行'}];
+    const render=()=>vm.runInContext('renderEmployeeRows(staff)',context);
+    const core=render();
+    assert.equal((core.match(/<col data-column=/g)||[]).length,9);
+    assert.doesNotMatch(core,/never-show/);assert.match(core,/\*{8}/);
+    const initialWidth=Number(core.match(/--employee-table-width: ([\d.]+)rem/)[1]);
+    vm.runInContext("optional=['notes','contact_address']",context);
+    const extended=render();
+    assert.equal((extended.match(/<col data-column=/g)||[]).length,11);
+    const width=key=>Number(extended.match(new RegExp(`<col data-column="${key}" style="width: ([\\d.]+)rem;"`))[1]);
+    assert.ok(width('gender')<width('card'));assert.ok(width('contact_address')>width('card'));assert.ok(width('notes')>width('name'));
+    assert.equal(Number(extended.match(/--employee-table-width: ([\d.]+)rem/)[1]),initialWidth+width('notes')+width('contact_address'));
+    assert.match(extended,/&lt;script&gt;unsafe/);assert.match(extended,/長地址\n第二行/);
+    assert.match(extended,/data-action="edit-employee"/);assert.match(extended,/data-action="delete-employee"/);
+    vm.runInContext('optional=[]',context);assert.equal(render(),core);
+});
+test('repeated density fitting leaves explicit roster colgroup untouched while other content tables still fit', () => {
+    const source=read('app.js'),start=source.indexOf('function fitDataTableColumnsForTable(');
+    let additions=0;
+    const context=vm.createContext({document:{createElement(){additions++;return{dataset:{},children:[],appendChild(col){this.children.push(col);}};}},measureCellContentWidth:()=>100,getColumnWidthLimits:()=>({min:72,max:340})});
+    vm.runInContext(source.slice(start,source.indexOf('function fitDataTableColumns(',start)),context);
+    const table={dataset:{columnLayout:'content'},matches:selector=>selector==='.employee-roster-table',get rows(){throw new Error('explicit roster must return before measuring or adding columns');}};
+    for(let i=0;i<4;i++)context.fitDataTableColumnsForTable(table);
+    assert.equal(additions,0);assert.equal(table.dataset.columnFit,undefined);
+    const other={dataset:{columnLayout:'content'},matches:()=>false,rows:[{cells:[{colSpan:1}]}],querySelector:()=>null,querySelectorAll:()=>[{cells:[{colSpan:1}]}],prepend(group){this.group=group;}};
+    context.document.createElement=(tag)=>{additions++;return tag==='colgroup'?{dataset:{},children:[],appendChild(col){this.children.push(col);}}:{style:{}};};
+    context.fitDataTableColumnsForTable(other);
+    assert.equal(other.dataset.columnFit,'ready');assert.equal(other.group.children.length,1);assert.equal(other.group.children[0].style.width,'111px');
 });

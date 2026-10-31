@@ -69,7 +69,13 @@
  .directory-diagnostic-fields { grid-template-columns: 1fr; }
 }
 
-/* Restore the complete roster typography to the pre-v1.39.1 scale; retain equal-width wrapping table geometry. */
+/* Content-sized colgroups keep compact fields narrow and give long text room to wrap. */
+.employee-table-wrap .employee-roster-table[data-column-layout="content"] {
+    table-layout: fixed;
+    width: max(100%, var(--employee-table-width));
+    min-width: var(--employee-table-width);
+}
+/* Restore the complete roster typography to the pre-v1.39.1 scale; retain wrapping and horizontal scrolling. */
 .employee-roster-card { font-size: 1rem; }
 .employee-roster-card .sub-kicker { font-size: .75rem; }
 .employee-roster-card .badge { font-size: .84rem; }

@@ -49,7 +49,7 @@ test('old report summary/detail subsection state converges to one query page wit
         assert.equal(f.state.activeSubSections.admin.reports,'query');
         assert.equal((html.match(/id="attendance-report-form"/g)||[]).length,1);
         for(const panel of ['report-query-panel','report-summary-panel','report-detail-panel'])assert.equal((html.match(new RegExp(panel,'g'))||[]).length,1);
-        assert.match(html,/workspace-single-page-layout/);assert.doesNotMatch(html,/<aside|switch-workspace-subsection/);
+        assert.doesNotMatch(html,/workspace-single-page-layout/);assert.match(html,/<aside/);assert.match(html,/switch-workspace-subsection/);
         assert.equal((html.match(/data-action="export-admin-report"/g)||[]).length,2);
         assert.match(html,/data-template="payroll_leave_overtime"/);
     }

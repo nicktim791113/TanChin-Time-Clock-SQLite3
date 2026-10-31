@@ -118,6 +118,36 @@ test('calendar browser endpoints retain complete history, permission scopes, fil
             assert.equal(result.calendar.days[0].pendingCount, 20);
         }
     });
+    await t.test('admin overtime monthly list uses fifteen complete records per page without changing daily or other workspaces', async () => {
+        const route = '/admin/overtime/calendar?month=2026-10';
+        const first = await request(route, manager.token);
+        assert.equal(first.status, 200);
+        assert.equal(first.calendar.detail.pageSize, 15);
+        assert.equal(first.calendar.detail.records.length, 15);
+        assert.equal(first.calendar.detail.totalCount, 621);
+        assert.equal(first.calendar.detail.totalPages, 42);
+        assert.equal(first.calendar.events.length, 621);
+        assert.equal(first.calendar.days[0].totalCount, 621);
+        const ids = new Set();
+        for (let page = 1; page <= 42; page++) {
+            const detail = (await request(route + `&page=${page}`, manager.token)).calendar.detail;
+            assert.equal(detail.page, page);
+            assert.equal(detail.records.length, page === 42 ? 6 : 15);
+            for (const row of detail.records) { assert.ok(!ids.has(row.id)); ids.add(row.id); }
+        }
+        assert.equal(ids.size, 621);
+        const filtered = (await request(route + '&status=pending_supervisor&employeeId=E001&page=2', manager.token)).calendar;
+        assert.equal(filtered.detail.pageSize, 15); assert.equal(filtered.detail.totalCount, 19);
+        assert.equal(filtered.detail.totalPages, 2); assert.equal(filtered.detail.records.length, 4);
+        assert.ok(filtered.detail.records.every((row) => row.employee_id === 'E001' && row.status === 'pending_supervisor'));
+        const next = (await request('/admin/overtime/calendar?month=2026-11&page=42', manager.token)).calendar;
+        assert.equal(next.detail.page, 1); assert.equal(next.detail.totalPages, 1); assert.equal(next.detail.records.length, 1);
+        assert.equal((await request(route + '&page=999', manager.token)).calendar.detail.page, 42);
+        for (const unchanged of ['/admin/overtime/calendar?month=2026-10&date=2026-10-01', '/admin/leave/calendar?month=2026-10']) {
+            assert.equal((await request(unchanged, manager.token)).calendar.detail.pageSize, 50);
+        }
+        for (const suffix of ['', '&scope=review']) assert.equal((await request('/employee/overtime/calendar?month=2026-10' + suffix, employee.token)).calendar.detail.pageSize, 50);
+    });
     await t.test('employee scopes ignore attempts to claim another employee, retain overtime proxy and isolate review queue', async () => {
         const own = await request('/employee/leave/calendar?month=2026-10', employee.token);
         assert.equal(own.calendar.totalCount, 620);

@@ -135,11 +135,12 @@ function attachRequestCalendarRoutes(server, context) {
                             const start = Date.parse(`${input.date}T00:00:00+08:00`);
                             detailRows = rows.filter((row) => leaveOverlapsRange(row, start, start + DAY_MS));
                         }
-                        const totalPages = Math.max(1, Math.ceil(detailRows.length / PAGE_SIZE));
+                        const pageSize = role === 'admin' && kind === 'overtime' && !input.date ? 15 : PAGE_SIZE;
+                        const totalPages = Math.max(1, Math.ceil(detailRows.length / pageSize));
                         const currentPage = Math.min(page, totalPages);
                         calendar.detail = {
-                            date: input.date || '', totalCount: detailRows.length, page: currentPage, totalPages, pageSize: PAGE_SIZE,
-                            records: detailRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE).map(detailFor)
+                            date: input.date || '', totalCount: detailRows.length, page: currentPage, totalPages, pageSize,
+                            records: detailRows.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(detailFor)
                         };
                         response.json({ success: true, calendar });
                     } catch (error) {

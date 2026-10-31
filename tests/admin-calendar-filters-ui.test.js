@@ -72,6 +72,23 @@ test('fuzzy choice, direct employee selection, month and clear share exactly the
     assert.equal(f.run("Object.keys(rcState('leave').filters).length"), 0);
     assert.equal(f.run("rcState('leave').employeeQuery"), '');
 });
+test('admin overtime monthly pagination retains filters and resets on month changes while daily view sends its date', async () => {
+    const f = fixture();
+    f.run("Object.assign(rcState('overtime'),{month:'2026-10',date:'2026-10-01',view:'list',page:1,filters:{employeeId:'E10',status:'approved'},data:{employees:[],days:[],totalCount:616,detail:{page:1,totalPages:42,totalCount:616,pageSize:15,records:[]}}})");
+    assert.match(f.run("rcRender('overtime')"), /第 1／42 頁 · 每頁 15 筆/);
+    f.context.button = { dataset: { kind: 'overtime', action: 'rc-page', page: '2' } };
+    await f.run('handleDashboardClick({target:{closest(){return button}},preventDefault(){}})');
+    let params = new URL(f.requests.at(-1), 'http://fixture').searchParams;
+    assert.equal(params.get('page'), '2'); assert.equal(params.get('employeeId'), 'E10'); assert.equal(params.get('status'), 'approved'); assert.equal(params.has('date'), false);
+    f.context.target = { dataset: { kind: 'overtime' }, value: '2026-11', matches: () => true, hasAttribute: (name) => name === 'data-rc-month' };
+    for (const listener of f.listeners.change) listener({ target: f.context.target });
+    await new Promise(setImmediate);
+    params = new URL(f.requests.at(-1), 'http://fixture').searchParams;
+    assert.equal(params.get('page'), '1'); assert.equal(params.get('month'), '2026-11'); assert.equal(params.get('employeeId'), 'E10');
+    await f.run("rcState('overtime').view='calendar'; rcLoad('overtime')");
+    params = new URL(f.requests.at(-1), 'http://fixture').searchParams;
+    assert.equal(params.get('date'), '2026-11-01');
+});
 test('Escape closes employee candidates without clearing selected filters, and input can reopen the list', () => {
     const f = fixture();
     f.run("Object.assign(rcState('leave'),{employeeQuery:'E1',employeeSearchOpen:true,filters:{employeeId:'E10',status:'approved'}})");
