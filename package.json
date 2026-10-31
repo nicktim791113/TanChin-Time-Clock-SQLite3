@@ -12,14 +12,15 @@
     "prebuild": "npm run build:css",
     "start": "electron .",
     "pack": "electron-builder --dir",
-    "build": "electron-builder",
-    "publish": "electron-builder --publish always",
+    "build": "node scripts/build-installer.js",
+    "publish": "node scripts/build-installer.js --publish always",
     "test": "node scripts/run-tests.js",
     "postinstall": "electron-builder install-app-deps"
   },
   "_scriptNotes": {
     "postinstall": "Runs electron-builder install-app-deps for native modules.",
-    "tailwind": "build:css runs before start, pack, and build so the bundled CSS stays current."
+    "tailwind": "build:css runs before start, pack, and build so the bundled CSS stays current.",
+    "installer": "Windows NSIS builds statically extract the stock uninstaller without executing a temporary Setup. See docs/Windows安裝檔建置與SmartAppControl說明.md."
   },
   "dependencies": {
     "better-sqlite3": "^12.2.0",

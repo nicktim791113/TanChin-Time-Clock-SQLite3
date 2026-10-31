@@ -8,8 +8,8 @@
   "scripts": {
     "start": "electron .", // 啟動開發模式，直接執行 Electron 應用程式
     "pack": "electron-builder --dir", // 使用 electron-builder 打包成資料夾（未壓縮）
-    "build": "electron-builder", // 使用 electron-builder 打包成本地安裝檔（不發布）
-    "publish": "electron-builder --publish always", // 打包並自動發布到 GitHub（需設定 GitHub Token）
+    "build": "node scripts/build-installer.js", // 靜態取出官方 NSIS 解除安裝程式，不執行暫存 Setup
+    "publish": "node scripts/build-installer.js --publish always", // 相同安全建置流程並發布 GitHub（需設定 GitHub Token）
     "postinstall": "electron-builder install-app-deps" // 安裝依賴後，重建本機原生模組（包含 sqlite3）
   },
   "_scriptNotes": {
