@@ -16,6 +16,7 @@ const { isSupervisorSimulation } = require('./supervisor-management');
 const { punchHistoryWindow } = require('./employee-browser-settings');
 const { attachRequestHistoryRoutes } = require('./request-history');
 const { attachLeaveEntitlementRoutes } = require('./leave-entitlement-routes');
+const { attachLeaveUsageRoutes } = require('./leave-usage');
 const { attachAnnualLeaveRoutes, ANNUAL_LEAVE_PERMISSIONS } = require('./annual-leave-routes');
 const { attachSalaryAdvanceRoutes, SALARY_ADVANCE_PERMISSIONS } = require('./salary-advance-routes');
 const { buildDashboardMetrics, attachDashboardMetricRoutes } = require('./dashboard-metrics');
@@ -2848,10 +2849,15 @@ function getAdminOvertimeState(employees = dbModule.loadEmployees(), options = {
       .map((request) => formatOvertimeRequestForDashboard(request, lookup))
     : [];
   const alerts = canView ? buildOvertimeAttendanceAlerts({ employees }) : [];
+  const summaryMonth = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 7);
+  const summaryRange = leaveAuditMonthRange(summaryMonth);
+  const monthTotalCount = canView ? dbModule.countOvertimeRequests({ overlapStartAt: summaryRange.start, overlapEndAt: summaryRange.end - 1 }) : 0;
   return {
     requests: requestsPage.records,
     requestsPage,
     alerts,
+    summaryMonth,
+    monthTotalCount,
     pendingSupervisor,
     pendingSupervisorTotalCount
   };
@@ -6684,6 +6690,7 @@ function attachBrowserRoutes(server) {
 
   server.post('/api/browser/admin/overtime/paper-approved', requireBrowserSession, requireAdminPermission('admin.overtime.paperCreate'), (request, response) => {
     try {
+      if (request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能儲存紙本加班補登。', 403);
       const employees = dbModule.loadEmployees();
       const employeeIds = parsePaperApprovalEmployeeIds(request.body);
       if (!employeeIds.length) throw createHttpError('請至少選擇一位加班員工。', 400);
@@ -6701,7 +6708,8 @@ function attachBrowserRoutes(server) {
       const endAt = parseLeaveDateTime(request.body?.endDate, request.body?.endTime, '20:00');
       if (endAt <= startAt) throw createHttpError('加班結束時間必須晚於開始時間。', 400);
 
-      const durationHours = calculateLeaveDurationHours(startAt, endAt, request.body?.durationHours);
+      const period = calculateOvertimePeriod(startAt, endAt, request.body || {}, { rejectLegacyHoursMismatch: true });
+      const durationHours = period.duration_hours;
       if (durationHours <= 0) throw createHttpError('請輸入有效的加班時數。', 400);
       const overlappingEmployees = selectedEmployees.filter((employee) => dbModule.hasOverlappingOvertimeRequest(employee.id, startAt, endAt));
       if (overlappingEmployees.length) {
@@ -6718,7 +6726,7 @@ function attachBrowserRoutes(server) {
         approvedBy: paperApprovedBy,
         comment: paperNote
       });
-      const createdRequests = selectedEmployees.map((employee, index) => {
+      const createdRequests = dbModule.getSupervisors().transaction(() => selectedEmployees.map((employee, index) => {
         const overtimeRequest = {
           id: `overtime_paper_${now}_${index}_${crypto.randomBytes(4).toString('hex')}`,
           employee_id: employee.id,
@@ -6727,6 +6735,7 @@ function attachBrowserRoutes(server) {
           start_at: startAt,
           end_at: endAt,
           duration_hours: durationHours,
+          break_minutes: period.break_minutes,
           reason: String(request.body?.reason || '').trim(),
           status: 'approved',
           supervisor_id: request.browserSession.employeeId,
@@ -6742,7 +6751,7 @@ function attachBrowserRoutes(server) {
           updated_at: now
         };
         dbModule.createOvertimeRequest(overtimeRequest);
-        writeBrowserAuditLog(request, {
+        dbModule.addAuditLog(buildBrowserAuditLogEntry(request, {
           action: 'create',
           target_type: 'overtime_request',
           target_id: overtimeRequest.id,
@@ -6753,9 +6762,10 @@ function attachBrowserRoutes(server) {
             paper_approved_by: paperApprovedBy,
             batch_employee_ids: employeeIds
           }
-        });
+        }));
         return overtimeRequest;
-      });
+      }));
+      notifyDesktop('auditLogs', getBrowserSyncMeta(request));
       notifyDesktop('overtimeRequests', getBrowserSyncMeta(request));
       response.json({
         success: true,
@@ -6772,6 +6782,7 @@ function attachBrowserRoutes(server) {
 
   server.post('/api/browser/admin/overtime/paper-approved/correct', requireBrowserSession, requireAdminPermission('admin.overtime.paperCreate'), (request, response) => {
     try {
+      if (request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能儲存紙本加班補登。', 403);
       const requestId = String(request.body?.requestId || '').trim();
       const original = dbModule.getOvertimeRequestById(requestId);
       if (!original) throw createHttpError('找不到要修正的加班補登紀錄。', 404);
@@ -6791,7 +6802,10 @@ function attachBrowserRoutes(server) {
       const startAt = parseLeaveDateTime(request.body?.startDate, request.body?.startTime, '18:00');
       const endAt = parseLeaveDateTime(request.body?.endDate, request.body?.endTime, '20:00');
       if (endAt <= startAt) throw createHttpError('加班結束時間必須晚於開始時間。', 400);
-      const durationHours = calculateLeaveDurationHours(startAt, endAt, request.body?.durationHours);
+      if (!Object.hasOwn(request.body || {}, 'breakMinutes') && !Object.hasOwn(request.body || {}, 'break_minutes')) throw createHttpError('修正紙本加班時請明確填寫休息分鐘。', 400);
+      if (original.break_minutes == null && request.body?.confirmLegacyBreak !== true) throw createHttpError('舊紙本加班未記錄休息，請核對休息分鐘與重算時數並確認後再儲存。', 400);
+      const period = calculateOvertimePeriod(startAt, endAt, request.body || {}, { rejectLegacyHoursMismatch: true });
+      const durationHours = period.duration_hours;
       if (durationHours <= 0) throw createHttpError('請輸入有效的加班時數。', 400);
       if (dbModule.hasOverlappingOvertimeRequest(employee.id, startAt, endAt, original.id)) {
         throw createHttpError(`${employee.id} ${employee.name || ''} 在此時段已有其他待審或已核准的加班申請。`, 409);
@@ -6813,6 +6827,7 @@ function attachBrowserRoutes(server) {
         start_at: startAt,
         end_at: endAt,
         duration_hours: durationHours,
+        break_minutes: period.break_minutes,
         reason: String(request.body?.reason || '').trim(),
         supervisor_id: original.supervisor_id || request.browserSession.employeeId,
         supervisor_decision: 'approved',
@@ -7998,6 +8013,10 @@ function createServerApp() {
     hasPermission: hasAdminPermission,
     auditEntry: buildBrowserAuditLogEntry,
     notify: (request) => { notifyDesktop('leaveEntitlements', getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); }
+  });
+  attachLeaveUsageRoutes(server, {
+    db: dbModule, requireSession: requireBrowserSession, requirePermission: requireAdminPermission,
+    formatRecord: (row) => formatLeaveRequestForDashboard(row)
   });
   attachAnnualLeaveRoutes(server, {
     validateBoundDevice: validateBoundEmployeeDevice,

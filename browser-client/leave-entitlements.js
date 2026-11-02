@@ -1,11 +1,12 @@
 const leState = { identity: '', data: null, year: new Date(Date.now() + 8 * 3600000).getUTCFullYear(), typeId: 'annual', preview: null, body: null, loading: false, busy: false, dirty: false, sequence: 0, error: '' };
 auditActionLabels.leave_entitlement = '設定假別額度';
+auditActionLabels.leave_entitlement_default = '非特休預設額度';
 auditActionLabels.leave_entitlement_settings = '額度制度設定';
 auditActionLabels.leave_entitlement_allocation = '每日扣抵分配';
 auditTargetTypeLabels.leave_entitlement = '假別額度';
 const leEscape = (value) => escapeHtml(String(value ?? ''));
 const leNumber = (value) => value == null ? '待確認' : Number(value.toFixed(2)).toString();
-const leCanManage = () => state.dashboard?.role === 'system_admin' || hasCurrentAdminPermission('admin.leave.balances.manage');
+const leCanManage = () => !state.dashboard?.impersonation?.active && (state.dashboard?.role === 'system_admin' || hasCurrentAdminPermission('admin.leave.balances.manage'));
 const leField = (label, name, type, value, attributes = '') => `<label class="field"><span>${label}</span><input name="${name}" type="${type}" value="${leEscape(value)}" ${attributes}></label>`;
 function leSelectedTypeInfo(data = leState.data) {
     const type = data?.leaveTypes?.find((item) => item.id === leState.typeId) || {};
@@ -28,16 +29,27 @@ function leBalanceTable(rows, people = [], types = [], preview = false) {
     const scopeNote = rows.some((r) => r.summaryScope === 'overlapping_source_lifetimes') ? '<p class="helper-text">週年制：所選年交集來源的全期餘額（含跨年使用），不是當年請假發生量。</p>' : '';
     const dayLabel = (r) => r.mixedDayHours ? '依來源工時' : `${leNumber(r.dayHours)} 小時／日`;
     const table = `${scopeNote}<div class="le-table-scroll"><table class="le-table"><thead><tr>${people.length ? '<th>員工</th>' : ''}<th>假別</th><th>年度</th><th>額度小時</th><th>結轉</th><th>調整</th><th>已核准</th><th>待審預占</th><th>可用小時</th><th>可用天數</th><th>扣抵起日</th>${preview ? '<th>設定原因</th>' : ''}</tr></thead><tbody>${rows.map((r) => `<tr>
-        ${people.length ? `<td>${leEscape(r.employee_id)} ${leEscape(people.find((e) => e.id === r.employee_id)?.name)}</td>` : ''}
+        ${people.length ? `<td>${!preview && leCanManage() && r.mode !== 'annual_ledger' ? `<button type="button" class="le-edit-employee" data-action="le-edit-employee" data-employee="${leEscape(r.employee_id)}">${leEscape(r.employee_id)} ${leEscape(people.find((e) => e.id === r.employee_id)?.name)}</button>` : `${leEscape(r.employee_id)} ${leEscape(people.find((e) => e.id === r.employee_id)?.name)}`}<small>${r.source === 'default' ? '套用預設額度' : r.mode === 'annual_ledger' ? '年資特休權利帳' : '個人額度'}</small></td>` : ''}
         <td>${leEscape(types.find((t) => t.id === r.leave_type_id)?.name || state.dashboard?.leave?.leaveTypes?.find((t) => t.id === r.leave_type_id)?.name || r.leave_type_id)}<small>${dayLabel(r)}</small></td>
         <td>${r.year}</td><td>${leNumber(r.grantHours)}</td><td>${leNumber(r.carryHours)}</td><td>${leNumber(r.adjustmentHours)}${r.mode === 'annual_ledger' ? '<small>含結算扣除</small>' : ''}</td><td>${leNumber(r.usedHours)}</td><td>${leNumber(r.heldHours)}</td>
-        <td class="${r.availableHours < 0 ? 'le-warning' : ''}">${leNumber(r.availableHours)}</td><td>${leNumber(r.availableDays)}</td><td>${leEscape(r.accounting_start)}<small>${r.mode === 'annual_ledger' ? '年資特休權利帳' : r.mode === 'remaining' ? '期中剩餘額度' : '全年總額'}</small></td>${preview ? `<td class="le-reason">${leEscape(r.reason)}</td>` : ''}</tr>
+        <td class="${r.availableHours < 0 ? 'le-warning' : ''}">${leNumber(r.availableHours)}</td><td>${leNumber(r.availableDays)}</td><td>${leEscape(r.accounting_start)}<small>${r.mode === 'annual_ledger' ? '年資特休權利帳' : r.mode === 'default' ? '預設全年額度' : r.mode === 'remaining' ? '期中剩餘額度' : '全年總額'}</small></td>${preview ? `<td class="le-reason">${leEscape(r.reason)}</td>` : ''}</tr>
         ${r.warnings?.length ? `<tr><td colspan="${(people.length ? 11 : 10) + (preview ? 1 : 0)}" class="le-warning">${r.warnings.map(leEscape).join('<br>')}</td></tr>` : ''}`).join('')}</tbody></table></div>`;
     if (people.length || preview) return table;
     return `<h4>${rows[0].year} 年假別餘額</h4>${scopeNote}<table class="le-table le-own-table"><thead><tr><th>假別</th><th>可用</th><th>已核准</th><th>預占</th></tr></thead><tbody>${rows.map((r) => `<tr>
         <td>${leEscape(typeName(r))}<small>${dayLabel(r)}</small></td>
         <td class="${r.availableHours < 0 || r.availableHours == null ? 'le-warning' : ''}">${leNumber(r.availableHours)}${r.availableHours == null ? '' : ' 小時'}<small>${r.availableDays == null ? '需管理者確認' : `${leNumber(r.availableDays)} 天`}</small></td>
         <td>${leNumber(r.usedHours)} 小時</td><td>${leNumber(r.heldHours)} 小時</td></tr>`).join('')}</tbody></table><details class="le-own-details"><summary>額度明細</summary>${table}</details>`;
+}
+function leDefaultForm(data, type) {
+    if (!leCanManage() || leIsAnnualType(type) || type.defaultEligible === false) return '';
+    const rule = (data.defaultRules || []).filter((r) => r.leaveTypeId === type.id && (r.effectiveYear === Number(leState.year) || r.futureYears && r.effectiveYear <= Number(leState.year))).sort((a, b) => b.effectiveYear - a.effectiveYear)[0];
+    return `<form data-le-form="default" class="le-default-form"><h4>非特休預設額度</h4><p class="helper-text">套用至適用年度沒有個人額度的員工，包含新進人員；不按到職日比例折算。修改會更新仍使用預設的餘額，個人額度與特休權利帳不變。請自行核對適用規則，不預填法定額度。</p><div class="le-controls">
+        <label class="le-confirm"><input type="checkbox" name="enabled" ${rule?.enabled ? 'checked' : ''}>啟用預設額度</label>
+        ${leField('預設額度小時', 'grantHours', 'number', rule ? rule.grantUnits / 100 : '', 'min="0" step="0.01" required')}
+        ${leField('每日換算工時', 'dayHours', 'number', rule ? rule.dayUnits / 100 : data.settings.dayHours, 'min="1" max="24" step="0.01" required')}
+        <label class="le-confirm"><input type="checkbox" name="futureYears" ${rule?.futureYears ? 'checked' : ''}>自本年度起沿用未來年度（未勾只適用本年度）</label>
+        ${leField('預設設定原因', 'reason', 'text', '', 'maxlength="500" required')}
+        <label class="le-confirm"><input type="checkbox" name="confirm" required>確認影響適用年度仍使用預設的員工；停用後未設個人額度者不再顯示預設餘額</label><button type="submit" class="primary-btn">儲存預設額度</button></div></form>`;
 }
 function renderLeaveEntitlementWorkspace() {
     const data = leState.data, manage = leCanManage(), type = leSelectedTypeInfo(data), annual = leIsAnnualType(type);
@@ -49,7 +61,7 @@ function renderLeaveEntitlementWorkspace() {
         <label class="field"><span>假別</span><select data-le-type>${data.leaveTypes.map((t) => `<option value="${leEscape(t.id)}" ${leState.typeId === t.id ? 'selected' : ''}>${leEscape(t.name)}${t.enabled ? '' : '（停用）'}</option>`).join('')}</select></label>
         <button class="outline-btn" type="button" data-action="le-export">匯出 Excel 填寫表</button>
         ${manage ? '<label class="field"><span>匯入 Excel 預覽</span><input type="file" data-le-import accept=".xlsx"></label>' : ''}</div>
-        ${leTypeContext(type)}
+        ${leTypeContext(type)}${leDefaultForm(data, type)}
         ${manage ? `<form data-le-form="settings" class="le-settings-form">
             <h4>共用額度換算設定</h4><p class="helper-text">以下每日工時適用所有假別的新額度設定；既有員工年度已保存的換算工時保持不變。額度天數是換算欄位，不會更改假別的申請單位。</p>
             <div class="le-controls">${annual ? '<label class="field"><span>特休額度記帳期間</span><select name="period"><option value="calendar_year">曆年記帳（1 月至 12 月）</option></select></label>' : '<input name="period" type="hidden" value="calendar_year">'}
@@ -60,11 +72,12 @@ function renderLeaveEntitlementWorkspace() {
             ${renderAdminPaperEmployeePicker(data.employees, '設定額度的員工', [], { maxSelection: 100 })}
             <div class="le-controls"><label class="field"><span>設定方式</span><select name="mode"><option value="total">全年總額</option><option value="remaining">期中剩餘額度</option></select></label>
             ${leField('扣抵起日', 'accountingStart', 'date', `${leState.year}-01-01`, 'required')}
-            ${leField('額度天數（換算用）', 'grantDays', 'number', '', 'min="0" step="0.01" required')}
+            ${leField('額度小時（優先採用）', 'grantHours', 'number', '', 'min="0" step="0.01"')}
+            ${leField('額度天數（換算用）', 'grantDays', 'number', '', 'min="0" step="0.01"')}
             ${leField(annual ? '特休遞延小時（人工確認）' : '上期轉入小時（人工）', 'carryHours', 'number', '0', 'min="0" step="0.01" required')}
             ${leField('調整小時', 'adjustmentHours', 'number', '0', 'step="0.01" required')}
             ${leField('設定原因', 'reason', 'text', '', 'maxlength="500" required')}
-            <button class="primary-btn" type="submit">預覽額度更新</button></div><p class="helper-text">轉入額度須人工核對來源與適用條件；${annual ? '特休遞延須有勞雇協商依據，不會自動結轉或結算未休工資。' : '此欄不會替假別套用特休遞延規則。'}</p></form>` : ''}
+            <button class="primary-btn" type="submit">預覽額度更新</button></div><p class="helper-text">額度小時有填值時優先採用，未填才依額度天數換算。轉入額度須人工核對來源與適用條件；${annual ? '特休遞延須有勞雇協商依據，不會自動結轉或結算未休工資。' : '此欄不會替假別套用特休遞延規則。'}</p></form>` : ''}
         ${leState.preview ? `<section class="le-preview"><h4>待儲存額度 ${leState.preview.rows.length} 筆</h4>${leBalanceTable(leState.preview.rows, data.employees, data.leaveTypes, true)}
             <form data-le-form="save" class="le-controls"><label class="le-confirm"><input type="checkbox" name="confirm" required>確認上述額度、扣抵起日及既有時數</label><button type="submit" class="primary-btn">確認儲存全部額度</button><button type="button" class="outline-btn" data-action="le-cancel">取消預覽</button></form></section>` : ''}
         <section><h4>${leState.year} 年目前餘額</h4>${leBalanceTable(data.balances.filter((b) => b.leave_type_id === leState.typeId), data.employees, data.leaveTypes)}</section>
@@ -126,6 +139,20 @@ handleDashboardClick = async function clickLeaveEntitlements(event) {
     if (leState.busy && button?.closest('#leave-entitlement-workspace')) { event.preventDefault(); return; }
     if (action?.startsWith('le-')) {
         event.preventDefault();
+        if (action === 'le-edit-employee') {
+            if (!leCanManage() || !await leDiscard()) return;
+            const row = leState.data?.balances.find((r) => r.employee_id === button.dataset.employee && r.leave_type_id === leState.typeId);
+            if (!row || row.mode === 'annual_ledger') return;
+            leState.preview = null; leState.body = null; lePaint();
+            const form = document.querySelector('[data-le-form="batch"]'); if (!form) return;
+            form.querySelectorAll('[name="employeeIds"]').forEach((input) => { input.checked = input.value === row.employee_id; });
+            const values = { mode: row.mode === 'remaining' ? 'remaining' : 'total', accountingStart: row.accounting_start, grantHours: row.grantHours,
+                grantDays: '', carryHours: row.carryHours, adjustmentHours: row.adjustmentHours, reason: '' };
+            for (const [key, value] of Object.entries(values)) if (form.elements[key]) form.elements[key].value = value;
+            form.querySelectorAll('[data-paper-employee-field]').forEach(syncAdminPaperEmployeePicker);
+            leState.dirty = true; form.scrollIntoView?.({ block: 'start' }); form.elements.reason?.focus();
+            leMessage(row.source === 'default' ? '已帶入預設額度；預覽並儲存後才建立此人的個別額度。' : '已帶入此人目前額度，修改後請預覽並確認儲存。', 'info'); return;
+        }
         if (action === 'le-export') {
             try {
                 const response = await fetch(`/api/browser/leave-entitlements/export?year=${leState.year}&leaveTypeId=${encodeURIComponent(leState.typeId)}`, { headers: { Authorization: `Bearer ${state.token}` } });
@@ -184,7 +211,11 @@ handleDashboardSubmit = async function submitLeaveEntitlements(event) {
     event.preventDefault(); if (leState.busy) return;
     const fields = new FormData(form), kind = form.dataset.leForm, values = Object.fromEntries(fields);
     await leWork(async (current) => {
-        if (kind === 'batch') {
+        if (kind === 'default') {
+            await requestJson('/api/browser/leave-entitlements/default', { auth: true, method: 'POST', body: { ...values, leaveTypeId: leState.typeId,
+                effectiveYear: Number(leState.year), enabled: fields.has('enabled'), futureYears: fields.has('futureYears'), confirm: fields.has('confirm'), revision: leState.data.revision } });
+            if (!current()) return; leState.dirty = false; leState.preview = null; leState.body = null; await leLoad(); leMessage('非特休預設額度已儲存。', 'success'); return;
+        } else if (kind === 'batch') {
             const ids = fields.getAll('employeeIds'); if (!ids.length || ids.length > 100) throw new Error('請選擇 1 至 100 位員工。');
             const body = { revision: leState.data.revision, rows: ids.map((employeeId) => {
                 const previous = leState.data.balances.find((b) => b.employee_id === employeeId && b.leave_type_id === leState.typeId);

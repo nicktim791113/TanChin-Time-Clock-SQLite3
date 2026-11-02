@@ -25,3 +25,7 @@
 .admin-paper-field-grid .paper-span-8 { grid-column: span 8; min-width: 0; }
 @media (max-width: 760px) { .admin-paper-field-grid .paper-span-8 { grid-column: 1 / -1; } }
 @media (max-width: 600px) { .le-controls .field { flex-basis: calc(50% - 12px); } .le-controls button, .le-controls .le-confirm { flex-basis: 100%; } }
+
+.le-default-form { border: 1px solid #c7d9cf; border-radius: 8px; padding: 14px; margin: 14px 0; background: #f5faf7; }
+.le-edit-employee { font: inherit; color: #185a80; background: transparent; border: 0; padding: 0; cursor: pointer; text-align: left; text-decoration: underline; }
+.le-edit-employee:focus-visible { outline: 2px solid #185a80; outline-offset: 3px; }

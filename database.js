@@ -1670,10 +1670,17 @@ const updatePaperOvertimeRequest = ({ requestId, updates, auditLog }) => db.tran
     if (!auditLog) {
         throw new Error('修正紙本加班補登時必須同時寫入稽核紀錄。');
     }
+    const original = getOvertimeRequestById(requestId);
+    const breakMinutes = Object.hasOwn(updates, 'break_minutes') ? updates.break_minutes : original?.break_minutes ?? null;
+    if (original?.break_minutes != null && breakMinutes == null) throw Object.assign(new Error('已記錄的加班休息分鐘不可清除。'), { statusCode: 400 });
+    if (breakMinutes != null) {
+        const period = calculateOvertimePeriod(updates.start_at, updates.end_at, { breakMinutes });
+        if (Number(updates.duration_hours) !== period.duration_hours) throw Object.assign(new Error('加班淨時數與起訖扣除休息後的計算不一致。'), { statusCode: 400 });
+    }
     const result = run(
         `UPDATE overtime_requests
          SET employee_id = ?, applicant_id = ?, applicant_role = ?, start_at = ?, end_at = ?,
-             duration_hours = ?, reason = ?, supervisor_id = ?, supervisor_decision = ?,
+             duration_hours = ?, break_minutes = ?, reason = ?, supervisor_id = ?, supervisor_decision = ?,
              supervisor_comment = ?, supervisor_decided_at = ?, paper_no = ?,
              paper_approved_by = ?, paper_comment = ?, updated_at = ?
          WHERE id = ?
@@ -1685,6 +1692,7 @@ const updatePaperOvertimeRequest = ({ requestId, updates, auditLog }) => db.tran
         updates.start_at,
         updates.end_at,
         updates.duration_hours,
+        breakMinutes,
         updates.reason || '',
         updates.supervisor_id || '',
         updates.supervisor_decision || 'approved',

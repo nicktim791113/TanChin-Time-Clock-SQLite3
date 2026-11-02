@@ -1,0 +1,23 @@
+.lu-workspace { min-width: 0; }
+.lu-filters { display: flex; flex-wrap: wrap; align-items: end; gap: .65rem; margin: .9rem 0; }
+.lu-filters .field { flex: 1 1 150px; min-width: 0; }
+.lu-filters input, .lu-filters select { width: 100%; min-width: 0; }
+.lu-totals { display: flex; flex-wrap: wrap; gap: .6rem 1.2rem; padding: .75rem 0; font-size: .9rem; }
+.lu-table-scroll { max-width: 100%; overflow: auto; border: 1px solid var(--border-color, #d6e1e9); border-radius: 8px; }
+.lu-table { width: 100%; border-collapse: collapse; font-size: .85rem; line-height: 1.45; }
+.lu-table th, .lu-table td { padding: .4rem .65rem; border-bottom: 1px solid var(--border-color, #d6e1e9); text-align: left; vertical-align: top; min-width: 115px; max-width: 340px; overflow-wrap: anywhere; }
+.lu-table thead th { background: var(--surface-muted, #edf3f8); white-space: nowrap; }
+.lu-table small { display: block; font-size: .76rem; font-weight: normal; }
+.lu-table details { min-width: 180px; }
+.lu-table details p { margin: .4rem 0; }
+.lu-cell { border: 0; background: transparent; color: #145baf; font: inherit; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; white-space: nowrap; }
+.lu-zero { color: #667886; }
+.lu-unknown { color: #986000; }
+.lu-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .6rem; padding: .65rem 0; font-size: .85rem; }
+.lu-dialog { width: min(1100px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); padding: 1rem; border: 1px solid #b8ccdb; border-radius: 12px; box-sizing: border-box; overflow: auto; }
+.lu-dialog::backdrop { background: #14283888; }
+.lu-dialog > header { display: flex; justify-content: space-between; align-items: center; gap: .7rem; margin-bottom: .6rem; }
+.lu-dialog h3 { margin: 0; }
+@media (max-width: 600px) { .lu-filters .field { flex-basis: calc(50% - .65rem); } .lu-filters button { flex: 1; } .lu-dialog { padding: .6rem; } }
+
+.lu-filters button { min-height: 40px; white-space: nowrap; }

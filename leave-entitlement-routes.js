@@ -27,6 +27,10 @@ function attachLeaveEntitlementRoutes(server, { db, requireSession, requirePermi
         store().saveSettings(request.body || {}, (entry) => auditEntry(request, entry)); notify(request);
         response.json({ success: true, message: '額度制度已儲存；既有年度換算工時保持不變。' });
     }));
+    server.post('/api/browser/leave-entitlements/default', requireSession, write, handle((request, response) => {
+        store().saveDefault(request.body || {}, (entry) => auditEntry(request, entry)); notify(request);
+        response.json({ success: true, message: '預設額度已儲存；人工個別額度及特休權利帳保持不變。' });
+    }));
     server.post('/api/browser/leave-entitlements/allocate', requireSession, write, handle((request, response) => {
         store().allocateLegacy(request.body || {}, (entry) => auditEntry(request, entry)); notify(request);
         response.json({ success: true, message: '扣抵分配已儲存，原請假單資料未改寫。' });

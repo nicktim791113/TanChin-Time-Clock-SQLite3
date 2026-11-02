@@ -121,3 +121,30 @@ test('cancelled filter changes retain review comments and stale roster names are
     assert.equal(f.run("rcState('leave').data.employees.length"), 0);
     assert.equal(f.run("rcState('leave').filters.employeeId"), 'E10');
 });
+test('custom date inputs are drafts until apply, validate partial ranges, and list/date loads retain full filter contract', async () => {
+    const f=fixture(),message={textContent:''};f.context.document.querySelector=()=>message;
+    const enter=(field,value)=>{const target={dataset:{kind:'leave',rcRange:field},value,matches:selector=>selector==='[data-rc-range]'};for(const listener of f.listeners.input)listener({target});};
+    enter('startDate','2026-10-01');assert.equal(f.requests.length,0);
+    const click=action=>f.context.handleDashboardClick({preventDefault(){},target:{closest:()=>({dataset:{action,kind:'leave'}})}});
+    await click('rc-apply-range');assert.equal(f.requests.length,0);assert.match(message.textContent,/同時填寫/);
+    enter('endDate','2026-11-30');f.run("rcState('leave').view='list';rcState('leave').filters.status='approved'");await click('rc-apply-range');
+    let params=new URL(f.requests.at(-1),'http://fixture').searchParams;assert.equal(params.get('startDate'),'2026-10-01');assert.equal(params.get('endDate'),'2026-11-30');assert.equal(params.get('status'),'approved');assert.equal(params.has('date'),false);
+    f.run("rcState('leave').view='calendar'");await click('rc-refresh');params=new URL(f.requests.at(-1),'http://fixture').searchParams;assert.equal(params.get('date'),'2026-10-01');assert.equal(params.get('endDate'),'2026-11-30');
+    await click('rc-clear');params=new URL(f.requests.at(-1),'http://fixture').searchParams;assert.equal(params.has('startDate'),false);assert.equal(f.run("rcState('leave').rangeDraft"),null);
+});
+test('compact row expansion toggles locally without refetch or destroying review inputs and retains non-admin cards', async () => {
+    const f=fixture(),detail={hidden:true},button={dataset:{action:'rc-expand',kind:'leave',expandedId:'row-details'},setAttribute(key,value){this[key]=value;}};
+    f.context.document.getElementById=id=>id==='row-details'?detail:null;
+    const click=()=>f.context.handleDashboardClick({preventDefault(){},target:{closest:()=>button}});
+    await click();assert.equal(detail.hidden,false);assert.equal(button['aria-expanded'],'true');await click();assert.equal(detail.hidden,true);assert.equal(f.requests.length,0);
+    f.context.renderLeaveDaysSummary=()=>'';f.context.row={id:'id',employeeId:'E1',employeeName:'<script>',status:'pending_admin',statusText:'Pending',reason:'保留完整理由',calendarActions:{review:'admin'}};
+    const html=f.run("rcEntries('leave',{records:[row]})");assert.equal((html.match(/class="rc-request-row"/g)||[]).length,1);assert.match(html,/<thead>/);assert.match(html,/rc-expanded-row" hidden/);assert.match(html,/leave-admin-decision/);assert.match(html,/保留完整理由/);assert.doesNotMatch(html,/<script>/);
+    f.run("state.dashboard.role='employee'");assert.doesNotMatch(f.run("rcEntries('leave',{records:[row]})"),/rc-compact-table/);
+});
+test('calendar count event is emitted only for a successful current identity response', async () => {
+    const f=fixture(),events=[],pending=[];f.context.window={dispatchEvent:event=>events.push(event)};f.context.CustomEvent=class{constructor(type,options){this.type=type;this.detail=options.detail;}};
+    f.context.requestJson=()=>new Promise(resolve=>pending.push(resolve));
+    const first=f.run("rcLoad('leave')");f.context.state.token='other';pending[0]({calendar:{detail:{page:1,records:[]},unfilteredMonthCount:99}});await first;assert.equal(events.length,0);
+    const current=f.run("rcLoad('leave')");pending[1]({calendar:{month:'2026-10',totalCount:2,unfilteredMonthCount:9,rangeTotalCount:12,range:{startDate:'2026-10-01',endDate:'2026-11-30'},detail:{page:1,records:[]}}});await current;
+    assert.equal(events.length,1);assert.equal(events[0].type,'admin-request-calendar-loaded');assert.equal(events[0].detail.unfilteredMonthCount,9);assert.equal(events[0].detail.monthCount,2);
+});

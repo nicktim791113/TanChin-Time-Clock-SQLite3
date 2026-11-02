@@ -9420,6 +9420,7 @@ function resetAdminPaperCorrection(form) {
     if (selectVisible) selectVisible.disabled = false;
     setFormMessage(form.id, "");
     if (kind === "leave") syncLeaveDaysEditor(form, { reset: true });
+    if (kind === "overtime") { setPaperOvertimeRestState(form); syncPaperOvertimeNet(form); }
 }
 
 function beginAdminPaperCorrection(kind, requestId) {
@@ -9458,6 +9459,11 @@ function beginAdminPaperCorrection(kind, requestId) {
     setPaperFormValue(form, "endDate", end.date);
     setPaperFormValue(form, "endTime", end.time);
     setPaperFormValue(form, "durationHours", request.duration_hours ?? "");
+    if (kind === "overtime") {
+        setPaperFormValue(form, "breakMinutes", request.breakMinutes ?? request.break_minutes ?? "");
+        setPaperOvertimeRestState(form, request);
+        syncPaperOvertimeNet(form);
+    }
     setPaperFormValue(form, "dailyHours", (request.dailyHours || []).map((row) => `${row.date}=${row.hours}`).join("\n"));
     if (kind === "leave") syncLeaveDaysEditor(form, { request });
     setPaperFormValue(form, "reason", request.reason || "");
@@ -9834,6 +9840,7 @@ function renderAdminLeaveSection(datasets) {
                 </form>
             </article>
             <article class="sub-panel" data-no-collapsible="true">${typeof renderLeaveEntitlementWorkspace === 'function' ? renderLeaveEntitlementWorkspace() : ''}</article>
+            <article class="sub-panel" data-no-collapsible="true">${typeof renderLeaveUsageWorkspace === 'function' ? renderLeaveUsageWorkspace() : ''}</article>
         </div>
     `;
 }
@@ -10837,6 +10844,47 @@ function renderOvertimeAlertRows(alerts = []) {
     `;
 }
 
+function calculatePaperOvertimeNet(values) {
+    const start = Date.parse(`${values.startDate}T${values.startTime}:00+08:00`), end = Date.parse(`${values.endDate}T${values.endTime}:00+08:00`);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new Error("請填寫結束晚於開始的加班起訖時間。");
+    const raw = String(values.breakMinutes ?? ""), rest = Number(raw);
+    if (!/^\d+$/.test(raw) || !Number.isSafeInteger(rest) || rest * 60000 >= end - start) throw new Error("請填寫 0 以上且小於起訖總分鐘的整數休息時間。");
+    const hours = Math.floor((end - start - rest * 60000) / 36000) / 100;
+    if (!(hours > 0)) throw new Error("扣除休息後須有大於 0 的加班時數。");
+    return { breakMinutes: rest, durationHours: hours };
+}
+function setPaperOvertimeRestState(form, request = null) {
+    const legacy = Boolean(request && (request.breakMinutes ?? request.break_minutes) == null);
+    form.dataset.paperLegacyBreak = String(legacy);
+    const label = form.querySelector('[data-paper-legacy-rest-confirm]'), confirm = form.elements.namedItem('confirmLegacyBreak');
+    if (label) label.hidden = !legacy;
+    if (confirm) { confirm.disabled = !legacy; confirm.required = legacy; confirm.checked = false; }
+}
+function syncPaperOvertimeNet(form) {
+    const rest = form.elements.namedItem('breakMinutes'), total = form.elements.namedItem('durationHours');
+    if (!rest || !total) return null;
+    try {
+        const values = Object.fromEntries(['startDate', 'startTime', 'endDate', 'endTime', 'breakMinutes'].map((name) => [name, form.elements.namedItem(name)?.value || '']));
+        const result = calculatePaperOvertimeNet(values);
+        rest.setCustomValidity(''); total.value = String(result.durationHours); return result;
+    } catch (error) {
+        rest.setCustomValidity(error.message);
+        // Merely opening an old paper record must not replace its recorded net hours.
+        if (!(form.dataset.paperLegacyBreak === 'true' && rest.value === '')) total.value = '';
+        return null;
+    }
+}
+const previousPostRenderPaperOvertimeNet = postRenderSetup;
+postRenderSetup = function postRenderPaperOvertimeNet() {
+    previousPostRenderPaperOvertimeNet();
+    const form = document.getElementById('admin-paper-overtime-form');
+    if (form) syncPaperOvertimeNet(form);
+};
+for (const eventName of ['input', 'change']) document.addEventListener(eventName, (event) => {
+    const form = event.target.closest?.('#admin-paper-overtime-form');
+    if (form && ['startDate', 'startTime', 'endDate', 'endTime', 'breakMinutes'].includes(event.target.name)) syncPaperOvertimeNet(form);
+});
+
 function renderAdminPaperOvertimeForm(datasets = {}) {
     const employees = datasets.employees || [];
     const departments = datasets.departments || [];
@@ -10870,8 +10918,12 @@ function renderAdminPaperOvertimeForm(datasets = {}) {
                         <input name="endTime" type="time" value="19:30" required>
                     </label>
                     <label class="field paper-span-4">
-                        <span>加班時數</span>
-                        <input name="durationHours" type="number" min="0.5" step="0.5" placeholder="未填則用時間差估算">
+                        <span>休息時間（分鐘）</span>
+                        <input name="breakMinutes" type="number" min="0" step="1" value="0" required>
+                    </label>
+                    <label class="field paper-span-4">
+                        <span>加班時數（自動計算）</span>
+                        <input name="durationHours" type="number" readonly aria-readonly="true" placeholder="由起訖扣除休息計算">
                     </label>
                     <label class="field paper-span-4">
                         <span>紙本單號</span>
@@ -10897,12 +10949,27 @@ function renderAdminPaperOvertimeForm(datasets = {}) {
                     </div>
                     <p class="helper-text" data-paper-mode-help>儲存後只會建立加班核准紀錄，不會直接修改打卡或出勤時間。</p>
                 </div>
+                <label class="sp-confirm" data-paper-legacy-rest-confirm hidden><input name="confirmLegacyBreak" type="checkbox" disabled>舊單休息未記錄；已核對休息分鐘與重新計算的時數，確認套用修正。</label>
                 <div class="inline-message" data-form-message-for="admin-paper-overtime-form" aria-live="polite"></div>
             </form>
         </article>
     `;
 }
 
+function adminOvertimeMonthSummary(datasets = {}) {
+    const current = typeof rcState === 'function' && state.dashboard?.role === 'admin' ? rcState('overtime') : null;
+    const overtime = datasets.overtime || {};
+    const month = current?.month || overtime.summaryMonth || new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 7);
+    const count = current?.data?.month === month && Number.isFinite(current.data.unfilteredMonthCount)
+        ? current.data.unfilteredMonthCount : overtime.summaryMonth === month ? overtime.monthTotalCount : '—';
+    return { month, count: count ?? '—', label: `${month} 加班申請 ${count ?? '—'} 筆` };
+}
+window.addEventListener('admin-request-calendar-loaded', (event) => {
+    const detail = event.detail;
+    if (state.dashboard?.role !== 'admin' || detail?.kind !== 'overtime' || !Number.isFinite(detail.unfilteredMonthCount)) return;
+    document.querySelectorAll('[data-overtime-month-summary]').forEach((node) => { node.textContent = `${detail.month} 加班申請 ${detail.unfilteredMonthCount} 筆`; });
+    document.querySelectorAll('[data-section="overtime"][data-subsection="records"] .workspace-subnav-badge').forEach((node) => { node.textContent = detail.unfilteredMonthCount; node.title = `${detail.month} 加班申請`; });
+});
 function renderAdminOvertimeSection(datasets) {
     const overtime = datasets.overtime || {};
     const alerts = overtime.alerts || [];
@@ -10921,7 +10988,7 @@ function renderAdminOvertimeSection(datasets) {
                     <div class="badge-row">
                         ${canView ? renderBadge(`待主管審核 ${overtime.pendingSupervisorTotalCount || 0} 筆`, overtime.pendingSupervisorTotalCount ? "warning" : "success") : ""}
                         ${canView ? renderBadge(`查核警示 ${alerts.length} 筆`, alerts.length ? "warning" : "success") : ""}
-                        ${canView ? renderBadge(`加班申請 ${pageState.totalCount} 筆`) : ""}
+                        ${canView ? `<span class="badge" data-overtime-month-summary>${escapeHtml(adminOvertimeMonthSummary(datasets).label)}</span>` : ""}
                     </div>
                 </div>
                 <p class="helper-text">加班申請與請假分開保存；查核只做比對與警示，不會直接改動出勤打卡時間。</p>
@@ -10982,6 +11049,9 @@ handleDashboardSubmit = async function handleDashboardSubmitOvertimeOverride(eve
             if (correctionRequestId && employeeIds.length !== 1) {
                 throw new Error("修正補登時一次只能選擇一位加班員工。");
             }
+            const calculated = syncPaperOvertimeNet(form);
+            if (!calculated) throw new Error(form.elements.namedItem('breakMinutes').validationMessage || "請核對休息分鐘與加班起訖。");
+            if (form.dataset.paperLegacyBreak === 'true' && !form.elements.namedItem('confirmLegacyBreak').checked) throw new Error("請確認舊單休息分鐘與重算時數後再儲存。");
             const endpoint = correctionRequestId
                 ? "/api/browser/admin/overtime/paper-approved/correct"
                 : "/api/browser/admin/overtime/paper-approved";
@@ -10995,7 +11065,9 @@ handleDashboardSubmit = async function handleDashboardSubmitOvertimeOverride(eve
                     startTime: values.startTime,
                     endDate: values.endDate,
                     endTime: values.endTime,
-                    durationHours: values.durationHours,
+                    durationHours: calculated.durationHours,
+                    breakMinutes: calculated.breakMinutes,
+                    confirmLegacyBreak: form.elements.namedItem('confirmLegacyBreak').checked,
                     reason: values.reason?.trim() || "",
                     paperNo: values.paperNo?.trim() || "",
                     approvedBy: values.approvedBy?.trim() || "",
@@ -12508,7 +12580,8 @@ const workspaceSubnavConfigs = {
                             visible: () => hasCurrentAdminPermission("admin.leave.review"),
                             // ★ [5] 子導覽徽章同步顯示全部筆數，不再只顯示目前 50 筆頁面。
                             badge: (datasets) => String(datasets.leave?.requestsPage?.totalCount || 0)
-                        }
+                        },
+                        { id: "usage", label: "請假使用總覽", panelIndex: 7, visible: () => hasCurrentAdminPermission("admin.leave.review") }
                     ]
                 },
                 {
@@ -12544,7 +12617,7 @@ const workspaceSubnavConfigs = {
                             label: "加班申請紀錄",
                             panelIndex: 3,
                             visible: () => hasCurrentAdminPermission("admin.overtime.view"),
-                            badge: (datasets) => String(datasets.overtime?.requestsPage?.totalCount || 0)
+                            badge: (datasets) => String(adminOvertimeMonthSummary(datasets).count)
                         }
                     ]
                 }

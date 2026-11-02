@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const XLSX = require('xlsx');
 const { normalizeLeaveDateSelection, EXPLICIT_DATES, EXPLICIT_SEGMENTS } = require('./leave-date-selection');
 const KEY = 'leaveEntitlementSettings';
+const DEFAULT_KEY = 'leaveEntitlementDefaults';
 const HEADERS = ['員工編號', '姓名', '假別代碼', '假別', '年度', '每日工時', '設定方式', '扣抵起日', '額度天數', '結轉小時', '調整小時', '設定原因', '版本'];
 const hash = (value) => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 function fail(message, statusCode = 400) { throw Object.assign(new Error(message), { statusCode }); }
@@ -39,7 +40,10 @@ function createLeaveEntitlementStore(sql, addAuditLog) {
         const saved = value ? JSON.parse(value) : { dayHours: 8, period: 'calendar_year' };
         return { dayHours: saved.dayHours, period: 'calendar_year', revision: hash(value || saved) };
     };
-    const revision = () => hash({ settings: settings(), staff: staff(), types: types(), grants: grants(),
+    const defaultRules = () => JSON.parse(sql.prepare('SELECT value FROM settings WHERE key = ?').get(DEFAULT_KEY)?.value || '[]');
+    const annualType = (type) => type.id === 'annual' || ['特休', '特休假', '特別休假'].includes(String(type.name || '').trim()) || staff().some((employee) => annualProvider?.isManaged(employee.id, type.id, 2100));
+    const defaultRule = (typeId, selectedYear) => defaultRules().filter((rule) => rule.leaveTypeId === typeId && (rule.effectiveYear === selectedYear || (rule.futureYears && rule.effectiveYear <= selectedYear))).sort((a, b) => b.effectiveYear - a.effectiveYear)[0] || null;
+    const revision = () => hash({ defaults: defaultRules(), settings: settings(), staff: staff(), types: types(), grants: grants(),
         epochs: sql.prepare('SELECT * FROM leave_entitlement_employee_epochs ORDER BY employee_id').all() });
     const usageRevision = () => hash({ requests: sql.prepare('SELECT id, employee_id, leave_type_id, start_at, end_at, duration_hours, status, updated_at FROM leave_requests ORDER BY id').all(),
         charges: sql.prepare('SELECT * FROM leave_entitlement_charges ORDER BY request_id, date').all() });
@@ -50,7 +54,8 @@ function createLeaveEntitlementStore(sql, addAuditLog) {
         }
         const start = day(request.start_at), end = day(request.end_at - 1);
         const tracked = Boolean(types().find((t) => t.id === request.leave_type_id)?.deducts_balance) || annualProvider?.isManaged(request.employee_id, request.leave_type_id, Number(start.slice(0, 4))) ||
-            grants().some((g) => g.employee_id === request.employee_id && g.leave_type_id === request.leave_type_id);
+            grants().some((g) => g.employee_id === request.employee_id && g.leave_type_id === request.leave_type_id) ||
+            Boolean(defaultRule(request.leave_type_id, Number(start.slice(0, 4)))?.enabled);
         if (tracked && (explicitHours === '' || explicitHours == null || units(explicitHours, '實際請假時數') <= 0)) fail('額度假別請填寫實際請假時數，不可用起訖時間自動推算。');
         let rows = dailyHours;
         if (typeof rows === 'string' && !rows.trim()) rows = [];
@@ -115,12 +120,42 @@ function createLeaveEntitlementStore(sql, addAuditLog) {
         sql.prepare('INSERT OR REPLACE INTO leave_entitlement_employee_epochs VALUES (?, ?)').run(id, Date.now());
     });
     const balances = (employeeIds, requestedYear) => {
-        const selectedYear = year(requestedYear);
+        const selectedYear = year(requestedYear), people = staff().filter((employee) => employeeIds.includes(employee.id));
         const precise = selectedYear >= 2017 ? annualProvider?.balances(employeeIds, selectedYear) || [] : [];
-        return [...grants().filter((g) => employeeIds.includes(g.employee_id) && g.year === selectedYear && !precise.some((a) => a.employee_id === g.employee_id && a.leave_type_id === g.leave_type_id)).map(balance), ...precise];
+        const personal = grants().filter((g) => employeeIds.includes(g.employee_id) && g.year === selectedYear && !precise.some((a) => a.employee_id === g.employee_id && a.leave_type_id === g.leave_type_id));
+        const result = personal.map((grant) => ({ ...balance(grant), source: 'personal' }));
+        for (const type of types()) {
+            if (annualType(type)) continue;
+            const rule = defaultRule(type.id, selectedYear);
+            if (!rule?.enabled) continue;
+            for (const employee of people) {
+                if ((employee.hire_date && employee.hire_date > selectedYear + '-12-31') || personal.some((g) => g.employee_id === employee.id && g.leave_type_id === type.id) ||
+                    precise.some((g) => g.employee_id === employee.id && g.leave_type_id === type.id) || annualProvider?.isManaged(employee.id, type.id, selectedYear)) continue;
+                result.push({ ...balance({ employee_id: employee.id, leave_type_id: type.id, year: selectedYear, day_units: rule.dayUnits,
+                    grant_units: rule.grantUnits, carry_units: 0, adjustment_units: 0, mode: 'default', accounting_start: selectedYear + '-01-01', revision: rule.revision }),
+                    source: 'default', defaultEffectiveYear: rule.effectiveYear, defaultFutureYears: rule.futureYears });
+            }
+        }
+        return [...result, ...precise];
     };
-    const state = (requestedYear) => ({ year: year(requestedYear), settings: settings(), employees: staff(), leaveTypes: types(),
-        revision: revision(), usageRevision: usageRevision(), balances: balances(staff().map((e) => e.id), requestedYear) });
+    const state = (requestedYear) => ({ year: year(requestedYear), settings: settings(), employees: staff(), leaveTypes: types().map((type) => ({ ...type, defaultEligible: !annualType(type) })),
+        defaultRules: defaultRules(), revision: revision(), usageRevision: usageRevision(), balances: balances(staff().map((e) => e.id), requestedYear) });
+    const saveDefault = (body, audit) => sql.transaction(() => {
+        if (body.confirm !== true || body.revision !== revision()) fail('預設額度或名冊已變更，請重新整理並確認。', 409);
+        const type = types().find((item) => item.id === body.leaveTypeId);
+        if (!type || annualType(type)) fail('預設額度只適用非特休假別；年資權利帳維持原規則。');
+        const effectiveYear = year(body.effectiveYear);
+        if (typeof body.enabled !== 'boolean' || typeof body.futureYears !== 'boolean') fail('請明確選擇啟用狀態及是否沿用未來年度。');
+        const dayUnits = units(body.dayHours, '每日換算工時'), grantUnits = units(body.grantHours, '預設額度小時');
+        if (dayUnits < 100 || dayUnits > 2400) fail('每日換算工時須介於 1 至 24 小時。');
+        const before = defaultRules(), rule = { leaveTypeId: type.id, effectiveYear, period: 'calendar_year', enabled: body.enabled, futureYears: body.futureYears,
+            dayUnits, grantUnits, reason: reason(body.reason), revision: crypto.randomUUID() };
+        const after = [...before.filter((item) => item.leaveTypeId !== type.id || item.effectiveYear !== effectiveYear), rule].sort((a, b) => a.effectiveYear - b.effectiveYear || a.leaveTypeId.localeCompare(b.leaveTypeId));
+        sql.prepare('INSERT OR REPLACE INTO settings VALUES (?, ?)').run(DEFAULT_KEY, JSON.stringify(after));
+        addAuditLog(audit({ action: 'leave_entitlement_default', target_type: 'leave_entitlement', target_id: type.id + '/' + effectiveYear,
+            summary: '設定非特休預設額度：' + rule.reason, before_data: before, after_data: after }));
+        return { rule };
+    })();
     function normalizeRows(rows) {
         if (!Array.isArray(rows) || !rows.length || rows.length > 1000) fail('請提供 1 至 1000 筆額度設定。');
         const people = staff(), leaveTypes = types(), current = grants(), seen = new Set();
@@ -136,7 +171,7 @@ function createLeaveEntitlementStore(sql, addAuditLog) {
             if (old && row.dayHours != null && units(row.dayHours, '每日工時') !== old.day_units) fail('已設定年度的換算工時不可改寫，請調整小時額度或建立新年度。');
             const start = date(row.accountingStart || `${y}-01-01`), mode = row.mode || 'total';
             if (!['total', 'remaining'].includes(mode) || !start.startsWith(`${y}-`) || (mode === 'total' && start !== `${y}-01-01`)) fail('全年總額扣抵起日須為 1 月 1 日；剩餘額度起日須在所選年度。');
-            const grantUnits = Math.round(units(row.grantDays, '額度天數') * dayUnits / 100);
+            const grantUnits = row.grantHours !== '' && row.grantHours != null ? units(row.grantHours, '額度小時') : Math.round(units(row.grantDays, '額度天數') * dayUnits / 100);
             const normalized = { employee_id: employee.id, leave_type_id: type.id, year: y, day_units: dayUnits,
                 grant_units: grantUnits, carry_units: units(row.carryHours ?? 0, '結轉小時'), adjustment_units: units(row.adjustmentHours ?? 0, '調整小時', true),
                 mode, accounting_start: start, reason: reason(row.reason) };
@@ -250,6 +285,6 @@ function createLeaveEntitlementStore(sql, addAuditLog) {
         }
         const body = { revision: currentRevision, rows }; return { ...body, preview: preview(body) };
     }
-    return { settings, state, revision, usageRevision, balances, allocation, replaceCharges, charges, preview, save, saveSettings, allocateLegacy, workbook, readWorkbook, removeEmployees, setAnnualProvider: (provider) => { annualProvider = provider; } };
+    return { settings, state, saveDefault, revision, usageRevision, balances, allocation, replaceCharges, charges, preview, save, saveSettings, allocateLegacy, workbook, readWorkbook, removeEmployees, setAnnualProvider: (provider) => { annualProvider = provider; } };
 }
 module.exports = { createLeaveEntitlementStore };

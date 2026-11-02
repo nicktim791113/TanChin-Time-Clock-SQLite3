@@ -21,6 +21,21 @@ function monthRange(month = taipeiDate().slice(0, 7)) {
     return { month, start, end, dates: Array.from({ length: (end - start) / DAY_MS }, (_, i) => taipeiDate(start + i * DAY_MS)) };
 }
 
+function requestDateRange(input, month, role) {
+    const hasStart = input.startDate != null && input.startDate !== '', hasEnd = input.endDate != null && input.endDate !== '';
+    if (!hasStart && !hasEnd) return { start: month.start, end: month.end, startDate: month.dates[0], endDate: month.dates.at(-1), custom: false };
+    if (role !== 'admin') throw invalid('自訂日期區間僅提供管理者查詢。');
+    if (!hasStart || !hasEnd) throw invalid('自訂區間請同時填寫開始日期與結束日期；兩欄留空則查顯示月份。');
+    const parse = (value) => {
+        if (typeof value !== 'string' || !/^(20\d{2}|2100)-\d{2}-\d{2}$/.test(value)) throw invalid('請填寫有效日期（2000 至 2100 年）。');
+        const timestamp = Date.parse(value + 'T00:00:00+08:00');
+        if (!Number.isFinite(timestamp) || taipeiDate(timestamp) !== value) throw invalid('請填寫有效日期。');
+        return timestamp;
+    };
+    const start = parse(input.startDate), last = parse(input.endDate);
+    if (last < start) throw invalid('結束日期不可早於開始日期。');
+    return { start, end: last + DAY_MS, startDate: input.startDate, endDate: input.endDate, custom: true };
+}
 function buildCalendar(month, records, now = Date.now()) {
     const range = monthRange(month);
     const days = range.dates.map((date) => ({ date, totalCount: 0, approvedCount: 0, approvedPeople: 0, pendingCount: 0, otherCount: 0 }));
@@ -60,6 +75,7 @@ function attachRequestCalendarRoutes(server, context) {
                     try {
                         const input = request.query;
                         const range = monthRange(input.month);
+                        const selectedRange = requestDateRange(input, range, role);
                         const scope = input.scope || 'mine';
                         if (!['mine', 'review'].includes(scope)) throw invalid('無效的紀錄範圍。');
                         const historyWindow = role === 'employee' && scope === 'mine' ? db.getRequestHistory().window(kind) : null;
@@ -72,7 +88,7 @@ function attachRequestCalendarRoutes(server, context) {
                         if (input.date && !range.dates.includes(input.date)) throw invalid('日期必須在選取月份內。');
                         const page = input.page == null ? 1 : Number(input.page);
                         if (!Number.isSafeInteger(page) || page < 1) throw invalid('無效的頁碼。');
-                        const filters = { overlapStartAt: range.start, overlapEndAt: range.end - 1, limit: null };
+                        const filters = { overlapStartAt: selectedRange.start, overlapEndAt: selectedRange.end - 1, limit: null };
                         const actorId = request.browserSession.employeeId;
                         if (role === 'employee') {
                             if (scope === 'review') {
@@ -83,7 +99,7 @@ function attachRequestCalendarRoutes(server, context) {
                         }
                         const lookup = buildLookup(kind);
                         const query = kind === 'leave' ? db.queryLeaveRequests : db.queryOvertimeRequests;
-                        const scopedRows = query(filters).filter((row) => leaveOverlapsRange(row, range.start, range.end));
+                        const scopedRows = query(filters).filter((row) => leaveOverlapsRange(row, selectedRange.start, selectedRange.end));
                         const employeeFor = (row) => lookup.employeeMap.get(row.employee_id) || {};
                         const rows = scopedRows.filter((row) => (
                             (!input.employeeId || row.employee_id === input.employeeId) &&
@@ -104,13 +120,19 @@ function attachRequestCalendarRoutes(server, context) {
                         // unrestricted ID lookup. The whole request can span other months.
                         const selected = input.requestId == null ? null : rows.find((row) => row.id === input.requestId);
                         if (input.requestId != null && !selected) throw Object.assign(new Error('找不到此範圍內的申請。'), { status: 404 });
-                        const calendar = buildCalendar(range.month, rows);
+                        const visibleStart = Math.max(range.start, selectedRange.start), visibleEnd = Math.min(range.end, selectedRange.end);
+                        const monthRows = visibleEnd > visibleStart ? rows.filter((row) => leaveOverlapsRange(row, visibleStart, visibleEnd)) : [];
+                        const calendar = buildCalendar(range.month, monthRows);
+                        calendar.days = calendar.days.map((day) => { const at = Date.parse(day.date + 'T00:00:00+08:00'); return at < selectedRange.start || at >= selectedRange.end ? { ...day, totalCount: 0, approvedCount: 0, approvedPeople: 0, pendingCount: 0, otherCount: 0, outsideRange: true } : day; });
+                        calendar.range = { startDate: selectedRange.startDate, endDate: selectedRange.endDate, custom: selectedRange.custom };
+                        calendar.rangeTotalCount = rows.length;
+                        calendar.unfilteredMonthCount = role === 'admin' ? (selectedRange.custom ? query({ ...filters, overlapStartAt: range.start, overlapEndAt: range.end - 1, limit: null }).filter((row) => leaveOverlapsRange(row, range.start, range.end)).length : scopedRows.length) : calendar.totalCount;
                         calendar.historyWindow = historyWindow;
                         calendar.request = selected ? detailFor(selected) : null;
                         // The calendar gets every authorized event in one response. Avoid
                         // formatRecord here: monthly summaries must not expose reasons or
                         // review comments, nor trigger per-record accounting/review reads.
-                        calendar.events = rows.map((row) => ({
+                        calendar.events = monthRows.map((row) => ({
                             id: row.id, kind,
                             employeeId: row.employee_id, employeeName: employeeFor(row).name || row.employee_id,
                             employeeDepartment: employeeFor(row).department || '',
@@ -123,7 +145,7 @@ function attachRequestCalendarRoutes(server, context) {
                             ...(kind === 'overtime' ? { breakMinutes: row.break_minutes ?? null } : {}),
                             dateSelectionMode: row.date_selection_mode || 'legacy_range',
                             segmentHoursSource: ['explicit_dates', 'explicit_segments'].includes(row.date_selection_mode) ? 'recorded' : 'legacy_allocation',
-                            segments: getLeaveDateSegments(row).filter((segment) => segment.startAt < range.end && segment.endAt > range.start),
+                            segments: getLeaveDateSegments(row).filter((segment) => segment.startAt < visibleEnd && segment.endAt > visibleStart),
                             calendarActions: actionsFor(row)
                         }));
                         // Filter options are derived only from authorized records, never the whole roster.
@@ -134,9 +156,9 @@ function attachRequestCalendarRoutes(server, context) {
                         let detailRows = rows;
                         if (input.date) {
                             const start = Date.parse(`${input.date}T00:00:00+08:00`);
-                            detailRows = rows.filter((row) => leaveOverlapsRange(row, start, start + DAY_MS));
+                            detailRows = start < selectedRange.start || start >= selectedRange.end ? [] : rows.filter((row) => leaveOverlapsRange(row, start, start + DAY_MS));
                         }
-                        const pageSize = role === 'admin' && kind === 'overtime' && !input.date ? 15 : PAGE_SIZE;
+                        const pageSize = role === 'admin' ? 15 : PAGE_SIZE;
                         const totalPages = Math.max(1, Math.ceil(detailRows.length / pageSize));
                         const currentPage = Math.min(page, totalPages);
                         calendar.detail = {
@@ -153,4 +175,4 @@ function attachRequestCalendarRoutes(server, context) {
     }
 }
 
-module.exports = { monthRange, buildCalendar, attachRequestCalendarRoutes };
+module.exports = { monthRange, requestDateRange, buildCalendar, attachRequestCalendarRoutes };

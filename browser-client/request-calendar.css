@@ -91,3 +91,16 @@
     .rc-filters { row-gap: 22px; }
     .rc-summary { gap: 8px; font-size: 12px; }
 }
+.rc-range-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 14px 0; min-width: 0; }
+.rc-range-controls .field { flex: 1 1 160px; max-width: 240px; min-width: 0; }
+.rc-range-controls input { min-width: 0; width: 100%; box-sizing: border-box; }
+.rc-range-controls p { flex-basis: 100%; margin: 0; font-size: 13px; line-height: 1.6; }
+.rc-table-scroll { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-inline: contain; margin-top: 12px; }
+.rc-compact-table { width: 100%; min-width: 920px; border-collapse: collapse; table-layout: fixed; background: #fff; font-size: 13px; }
+.rc-compact-table th, .rc-compact-table td { padding: 8px; border-bottom: 1px solid #d4dfd8; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.rc-compact-table th { background: #edf3f0; font-weight: 700; }
+.rc-compact-table .outline-btn { padding: 6px 8px; font-size: 12px; min-height: 36px; white-space: normal; }
+.rc-expanded-row[hidden] { display: none; }
+.rc-expanded-row > td { padding: 0 12px 12px; background: #f7faf8; }
+.rc-expanded-row .rc-entry { margin-top: 10px; }
+@media (max-width: 540px) { .rc-range-controls .field { flex-basis: 130px; max-width: none; } .rc-range-controls > button { width: 100%; } }

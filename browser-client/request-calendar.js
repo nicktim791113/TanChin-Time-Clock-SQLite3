@@ -65,18 +65,39 @@ function rcActions(kind, row) {
     }
     return '';
 }
-function rcEntries(kind, detail) {
+function rcExpandedEntries(kind, detail) {
     if (!detail?.records.length) return '<p class="rc-empty">沒有符合條件的紀錄。</p>';
     return `<div class="rc-entries">${detail.records.map((row) => `<article class="rc-entry" data-no-collapsible="true" data-request-entry="${rcEscape(row.id)}">
         <div class="rc-entry-heading"><h4>${rcEscape(row.employeeId)} ${rcEscape(row.employeeName)}${kind === 'leave' ? ` · ${rcEscape(row.leaveTypeName)}` : ''}</h4><span class="rc-status rc-status-${rcEscape(row.status)}">${rcEscape(row.statusText)}</span></div>
         <dl class="rc-entry-meta"><div><dt>開始</dt><dd>${rcEscape(row.startText)}</dd></div><div><dt>結束</dt><dd>${rcEscape(row.endText)}</dd></div><div><dt>整筆時數</dt><dd>${rcEscape(row.duration_hours)} 小時</dd></div><div><dt>流程</dt><dd>${rcEscape(row.approvalModeText)}</dd></div>
-        ${kind === 'overtime' ? `<div><dt>申請人</dt><dd>${rcEscape(row.applicantId)} ${rcEscape(row.applicantName)}</dd></div>` : ''}<div><dt>部門</dt><dd>${rcEscape(row.employeeDepartment || '-')}</dd></div></dl>
-        <p class="rc-reason">${rcEscape(row.reason || '未填原因')}</p>
+        ${kind === 'overtime' ? `<div><dt>休息</dt><dd>${rcEscape((row.breakMinutes ?? row.break_minutes) == null ? '未記錄' : (row.breakMinutes ?? row.break_minutes) + ' 分鐘')}</dd></div><div><dt>申請人</dt><dd>${rcEscape(row.applicantId)} ${rcEscape(row.applicantName)}</dd></div>` : ''}<div><dt>部門</dt><dd>${rcEscape(row.employeeDepartment || '-')}</dd></div></dl>
+        <p class="rc-reason">${rcEscape(row.reason || '未填原因')}</p><p class="rc-record-context">單號：${rcEscape(row.id)} · 申請人：${rcEscape(row.applicantId || '未記錄')} ${rcEscape(row.applicantName || '')} · 申請時間：${rcEscape(row.createdText || '未記錄')}</p>${row.proxyReason || row.proxy_reason ? `<p class="rc-reason">代辦原因：${rcEscape(row.proxyReason || row.proxy_reason)}</p>` : ''}
         ${kind === 'leave' ? renderLeaveDaysSummary(row) : ''}
         ${typeof renderRequestReviewProgress === 'function' ? renderRequestReviewProgress(row) : ''}
-        ${row.approval_mode === 'admin_paper_approved' ? `<details class="rc-paper"><summary>紙本核准資料</summary><p>單號：${rcEscape(row.paperNo || '-')} · 核准者：${rcEscape(row.paperApprovedBy || '-')}</p><p>${rcEscape(row.paperComment || '')}</p></details>` : ''}
+        ${row.approval_mode === 'admin_paper_approved' ? `<details class="rc-paper"><summary>紙本核准資料</summary><p>單號：${rcEscape(row.paperNo || '-')} · 核准者：${rcEscape(row.paperApprovedBy || '-')}</p><p>${rcEscape(row.paperComment || '')}</p>${row.correctedFromRequestId || row.corrected_from_request_id ? `<p>原單：${rcEscape(row.correctedFromRequestId || row.corrected_from_request_id)}</p>` : ''}</details>` : ''}
         <div class="rc-entry-actions">${rcActions(kind, row)}</div>
     </article>`).join('')}</div>`;
+}
+function rcEntries(kind, detail) {
+    if (!rcAdmin()) return rcExpandedEntries(kind, detail);
+    if (!detail?.records.length) return '<p class="rc-empty">沒有符合條件的紀錄。</p>';
+    const headers = ['員工', kind === 'leave' ? '假別' : '類別', '開始', '結束', '扣除後時數', ...(kind === 'overtime' ? ['休息'] : []), '狀態', '完整資料與操作'];
+    return '<div class="rc-table-scroll" role="region" tabindex="0" aria-label="' + requestCalendarLabels[kind] + '紀錄，可左右捲動"><table class="rc-compact-table"><thead><tr>' + headers.map((label) => '<th scope="col">' + label + '</th>').join('') + '</tr></thead><tbody>' + detail.records.map((row, index) => {
+        const expandedId = 'rc-' + kind + '-expanded-' + index;
+        const rest = row.breakMinutes ?? row.break_minutes;
+        return '<tr class="rc-request-row"><td>' + rcEscape(row.employeeId) + '<br>' + rcEscape(row.employeeName) + '</td><td>' + rcEscape(kind === 'leave' ? row.leaveTypeName : '加班') + '</td><td>' + rcEscape(row.startText) + '</td><td>' + rcEscape(row.endText) + '</td><td>' + rcEscape(row.duration_hours) + '</td>' + (kind === 'overtime' ? '<td>' + rcEscape(rest == null ? '未記錄' : rest + ' 分鐘') + '</td>' : '') + '<td class="rc-status-' + rcEscape(row.status) + '">' + rcEscape(row.statusText) + '</td><td><button type="button" class="outline-btn" data-action="rc-expand" data-kind="' + kind + '" data-expanded-id="' + expandedId + '" aria-controls="' + expandedId + '" aria-expanded="false">展開詳情／操作</button></td></tr><tr id="' + expandedId + '" class="rc-expanded-row" hidden><td colspan="' + headers.length + '">' + rcExpandedEntries(kind, {records:[row]}) + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+}
+function rcRangeControls(kind, current) {
+    const values = current.rangeDraft || current.filters;
+    return '<div class="rc-range-controls" role="group" aria-label="自訂日期區間"><label class="field"><span>開始日期</span><input type="date" data-rc-range="startDate" data-kind="' + kind + '" value="' + rcEscape(values.startDate || '') + '"></label><label class="field"><span>結束日期</span><input type="date" data-rc-range="endDate" data-kind="' + kind + '" value="' + rcEscape(values.endDate || '') + '"></label>' + rcButton(kind,'apply-range','套用日期區間') + '<p>兩欄留空查顯示月份；自訂時請兩欄都填。列表查完整區間，日曆顯示該區間與目前月份的交集。</p></div>';
+}
+function rcValidateRange(values) {
+    if (!values.startDate && !values.endDate) return '';
+    if (!values.startDate || !values.endDate) return '請同時填寫開始日期與結束日期；兩欄留空則查顯示月份。';
+    const valid = (value) => /^(20\d{2}|2100)-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value + 'T00:00:00Z')) && new Date(value + 'T00:00:00Z').toISOString().slice(0,10) === value;
+    if (!valid(values.startDate) || !valid(values.endDate)) return '請填寫有效日期。';
+    return values.endDate < values.startDate ? '結束日期不可早於開始日期。' : '';
 }
 function rcReviewQueue(kind) {
     if (rcAdmin() || rcState(kind).scope !== 'review') return '';
@@ -92,12 +113,12 @@ function rcGrid(kind, current) {
     return `<div class="meal-calendar rc-calendar" role="group" aria-label="${current.month} ${requestCalendarLabels[kind]}日曆">
         ${['日', '一', '二', '三', '四', '五', '六'].map((day) => `<div class="meal-weekday">${day}</div>`).join('')}
         ${Array.from({ length: offset }, () => '<div aria-hidden="true"></div>').join('')}
-        ${data.days.map((day) => `<button type="button" data-action="rc-date" data-kind="${kind}" data-date="${day.date}" aria-label="${day.date} ${day.loading ? '讀取中' : `已核准 ${day.approvedPeople} 人 ${day.approvedCount} 筆，待審 ${day.pendingCount} 筆，其他 ${day.otherCount} 筆`}" aria-pressed="${current.date === day.date}" class="meal-date rc-date ${day.totalCount ? 'has-records' : 'is-off'} ${current.date === day.date ? 'is-selected' : ''}">
+        ${data.days.map((day) => `<button type="button" data-action="rc-date" data-kind="${kind}" data-date="${day.date}" ${day.outsideRange ? 'disabled' : ''} aria-label="${day.date} ${day.loading ? '讀取中' : `已核准 ${day.approvedPeople} 人 ${day.approvedCount} 筆，待審 ${day.pendingCount} 筆，其他 ${day.otherCount} 筆`}" aria-pressed="${current.date === day.date}" class="meal-date rc-date ${day.totalCount ? 'has-records' : 'is-off'} ${current.date === day.date ? 'is-selected' : ''}">
             <span class="meal-date-number">${Number(day.date.slice(-2))}${day.date === data.today ? '<small>今天</small>' : ''}</span>
             ${day.approvedCount ? `<span class="rc-approved">核准${day.approvedPeople}人<small>${day.approvedCount}筆</small></span>` : ''}
             ${day.pendingCount ? `<span class="rc-pending">待審${day.pendingCount}筆</span>` : ''}
             ${day.otherCount ? `<span class="rc-other">其他${day.otherCount}筆</span>` : ''}
-            ${!day.totalCount && !day.loading ? '<span class="rc-other">無紀錄</span>' : ''}
+            ${!day.totalCount && !day.loading ? `<span class="rc-other">${day.outsideRange ? '區間外' : '無紀錄'}</span>` : ''}
         </button>`).join('')}</div>`;
 }
 function rcRender(kind, advancedHtml = '') {
@@ -127,15 +148,16 @@ function rcRender(kind, advancedHtml = '') {
             ${kind === 'leave' ? rcSelect(kind, 'leaveTypeId', '假別', (data?.leaveTypes || []).map((t) => [t.id, t.name]), current.filters.leaveTypeId, '全部假別') : ''}
             ${rcButton(kind, 'clear', '清除篩選')}
         </div>
+        ${rcAdmin() ? rcRangeControls(kind, current) : ''}
         ${policy?.earliestMonth ? `<p class="helper-text">本人${label}紀錄可查看 ${rcEscape(policy.earliestMonth)} 起的月份；較早紀錄請洽有查詢權限的管理者。</p>` : ''}
         <div class="inline-message rc-message" aria-live="polite">${rcEscape(current.error || (current.pending ? '資料有異動，請重新整理確認最新紀錄。' : current.loading ? '讀取紀錄中…' : ''))}</div>
-        <div class="rc-summary">${data ? `${current.month} · ${data.totalCount} 筆申請<span class="rc-status-approved">已核准</span><span class="rc-status-pending_supervisor">待審核</span><span class="rc-other">其他：駁回／撤回／作廢</span>` : '&nbsp;'}</div>
+        <div class="rc-summary">${data ? `${current.month} · ${data.totalCount} 筆月內申請${rcAdmin() && data.range ? ` · 範圍 ${data.range.startDate} 至 ${data.range.endDate}（${data.rangeTotalCount} 筆）` : ''}<span class="rc-status-approved">已核准</span><span class="rc-status-pending_supervisor">待審核</span><span class="rc-other">其他：駁回／撤回／作廢</span>` : '&nbsp;'}</div>
         ${current.view === 'calendar' ? rcGrid(kind, current) : ''}
         ${!data ? `<div class="rc-detail rc-loading-detail" role="status">${current.error ? '未載入紀錄，請重新整理。' : '讀取明細中…'}</div>` : `
-            <section class="rc-detail" aria-label="${current.view === 'calendar' ? current.date + ' 明細' : '月內紀錄'}"><div class="rc-toolbar"><h3>${current.view === 'calendar' ? current.date : current.month + ' 月內紀錄'} <small>${detail.totalCount} 筆</small></h3>
+            <section class="rc-detail" aria-label="${current.view === 'calendar' ? current.date + ' 明細' : '區間紀錄'}"><div class="rc-toolbar"><h3>${current.view === 'calendar' ? current.date : (data.range ? data.range.startDate + ' 至 ' + data.range.endDate : current.month) + ' 區間紀錄'} <small>${detail.totalCount} 筆</small></h3>
                 ${current.view === 'calendar' && ((!rcAdmin() && current.scope === 'mine') || (rcAdmin() && hasCurrentAdminPermission(`admin.${kind}.paperCreate`))) ? rcButton(kind, 'create', rcAdmin() ? '紙本補登' : `申請${label}`) : ''}
             </div>${rcEntries(kind, detail)}
-            <div class="rc-pagination">${rcButton(kind, 'page', '←', `data-page="${detail.page - 1}" aria-label="上一頁" title="上一頁" ${detail.page <= 1 ? 'disabled' : ''}`)}<span>第 ${detail.page}／${detail.totalPages} 頁${rcAdmin() && kind === 'overtime' && current.view === 'list' && detail.pageSize ? ` · 每頁 ${detail.pageSize} 筆` : ''}</span>${rcButton(kind, 'page', '→', `data-page="${detail.page + 1}" aria-label="下一頁" title="下一頁" ${detail.page >= detail.totalPages ? 'disabled' : ''}`)}</div>
+            <div class="rc-pagination">${rcButton(kind, 'page', '←', `data-page="${detail.page - 1}" aria-label="上一頁" title="上一頁" ${detail.page <= 1 ? 'disabled' : ''}`)}<span>第 ${detail.page}／${detail.totalPages} 頁${rcAdmin() && detail.pageSize ? ` · 每頁 ${detail.pageSize} 筆` : ''}</span>${rcButton(kind, 'page', '→', `data-page="${detail.page + 1}" aria-label="下一頁" title="下一頁" ${detail.page >= detail.totalPages ? 'disabled' : ''}`)}</div>
             </section>`}
         ${rcReviewQueue(kind)}
     </section>`;
@@ -154,7 +176,9 @@ async function rcLoad(kind) {
     try {
         const result = await requestJson(`/api/browser/${rcAdmin() ? 'admin' : 'employee'}/${kind}/calendar?${params}`, { auth: true });
         if (identity !== requestCalendars.identity || token !== state.token || sequence !== current.sequence) return;
-        current.data = result.calendar; current.page = result.calendar.detail.page; current.pending = false;
+        current.data = result.calendar;
+        if (rcAdmin() && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') window.dispatchEvent(new CustomEvent('admin-request-calendar-loaded', { detail: { kind, month: current.month, monthCount: result.calendar.totalCount, unfilteredMonthCount: result.calendar.unfilteredMonthCount, rangeTotalCount: result.calendar.rangeTotalCount, ...result.calendar.range } }));
+        current.page = result.calendar.detail.page; current.pending = false;
         current.employees = result.calendar.employees || [];
         current.cache.clear(); result.calendar.detail.records.forEach((row) => current.cache.set(row.id, row));
     } catch (error) {
@@ -224,6 +248,18 @@ handleDashboardClick = async function handleRequestCalendarClick(event) {
         requestCalendars.reviewKind = target.dataset.kind; renderDashboard(state.dashboard); return;
     }
     const kind = target.dataset.kind, current = rcState(kind), action = target.dataset.action;
+    if (action === 'rc-expand') {
+        const row = document.getElementById(target.dataset.expandedId); if (!row) return;
+        row.hidden = !row.hidden; target.setAttribute('aria-expanded', String(!row.hidden)); target.textContent = row.hidden ? '展開詳情／操作' : '收合詳情'; return;
+    }
+    if (action === 'rc-apply-range') {
+        if (!rcAdmin()) return;
+        const values = current.rangeDraft || current.filters, error = rcValidateRange(values);
+        if (error) { current.error = error; const message = document.querySelector('#rc-' + kind + ' .rc-message'); if (message) message.textContent = error; return; }
+        if (!rcConfirmDiscard(kind)) return;
+        current.filters.startDate = values.startDate || ''; current.filters.endDate = values.endDate || '';
+        current.page = 1; current.data = null; await rcLoad(kind); return;
+    }
     if (!rcConfirmDiscard(kind)) return;
     if (action === 'rc-create') {
         if (rcAdmin()) {
@@ -246,7 +282,7 @@ handleDashboardClick = async function handleRequestCalendarClick(event) {
     }
     if (action === 'rc-today') { current.month = rcToday().slice(0, 7); current.date = rcToday(); }
     if (['rc-month', 'rc-today', 'rc-clear'].includes(action)) current.employeeSearchOpen = false;
-    if (action === 'rc-clear') { current.filters = {}; current.employeeQuery = ''; }
+    if (action === 'rc-clear') { current.filters = {}; current.rangeDraft = null; current.employeeQuery = ''; }
     current.page = action === 'rc-page' ? Number(target.dataset.page) : 1;
     current.data = null; await rcLoad(kind);
 };
@@ -357,3 +393,11 @@ handleLogout = function logoutWithCalendarCleanup(...args) {
     Object.assign(requestCalendars, { identity: '', dashboard: null, leave: null, overtime: null, review: {}, reviewKind: 'leave' });
     return rcPreviousLogout(...args);
 };
+
+document.addEventListener('input', (event) => {
+    const target = event.target;
+    if (!target.matches?.('[data-rc-range]') || !rcAdmin()) return;
+    const current = rcState(target.dataset.kind);
+    current.rangeDraft ||= { startDate: current.filters.startDate || '', endDate: current.filters.endDate || '' };
+    current.rangeDraft[target.dataset.rcRange] = target.value;
+});
