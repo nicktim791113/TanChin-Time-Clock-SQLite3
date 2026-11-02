@@ -68,6 +68,7 @@ const ADMIN_PERMISSION_DEFINITIONS = [
   { code: 'admin.reports.export', category: '考勤報表', label: '匯出考勤報表', section: 'reports', highRisk: true },
   { code: 'admin.leave.review', category: '請假管理', label: '請假終審', section: 'leave' },
   { code: 'admin.leave.paperCreate', category: '請假管理', label: '紙本請假補登', section: 'leave', highRisk: true },
+  { code: 'admin.leave.approvedCorrect', category: '請假管理', label: '修正已核准線上請假', section: 'leave', highRisk: true, delegatedOnly: true },
   { code: 'admin.leave.settings', category: '主管與請假設定', label: '假別與請假／加班共用審核路徑設定', section: 'supervisors' },
   { code: 'admin.leave.balances.view', category: '請假管理', label: '查看與匯出員工假別額度', section: 'leave' },
   { code: 'admin.leave.balances.manage', category: '請假管理', label: '設定、匯入與調整員工假別額度', section: 'leave', highRisk: true },
@@ -76,6 +77,7 @@ const ADMIN_PERMISSION_DEFINITIONS = [
   { code: ANNUAL_LEAVE_PERMISSIONS.close, category: '特休制度', label: '確認特休結算與協商遞延', section: 'leave', highRisk: true, delegatedOnly: true },
   { code: 'admin.overtime.view', category: '加班管理', label: '查看加班申請、警示與匯出', section: 'overtime' },
   { code: 'admin.overtime.paperCreate', category: '加班管理', label: '紙本加班補登', section: 'overtime', highRisk: true },
+  { code: 'admin.overtime.approvedCorrect', category: '加班管理', label: '修正已核准線上加班', section: 'overtime', highRisk: true, delegatedOnly: true },
   { code: 'admin.meals.view', category: '午餐團膳', label: '查看團膳名單、餐數與匯出', section: 'meals' },
   { code: 'admin.meals.manage', category: '午餐團膳', label: '參加資格與代登用餐', section: 'meals' },
   { code: 'admin.meals.settings', category: '午餐團膳', label: '供餐日與截止時間設定', section: 'meals' },
@@ -2048,6 +2050,7 @@ function formatLeaveRequestForDashboard(request, lookup = buildLeaveLookup()) {
   return {
     ...request,
     reviewPolicy: formatRequestReviewPolicy('leave', request, lookup),
+    correctionSummary: dbModule.getApprovedCorrections().summary('leave', request.id),
     employeeId: request.employee_id,
     employeeName: employee.name || '',
     employeeDepartment: employee.department || '',
@@ -2356,6 +2359,7 @@ function formatOvertimeRequestForDashboard(request, lookup = buildOvertimeLookup
   return {
     ...request,
     reviewPolicy: formatRequestReviewPolicy('overtime', request, lookup),
+    correctionSummary: dbModule.getApprovedCorrections().summary('overtime', request.id),
     breakMinutes: request.break_minutes == null ? null : Number(request.break_minutes),
     employeeId: request.employee_id,
     employeeName: employee.name || '',
@@ -8029,6 +8033,53 @@ function createServerApp() {
     notify: (request) => { notifyDesktop('dashboardMetrics', getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); },
     formatRecord: (kind, row) => kind === 'leave' ? formatLeaveRequestForDashboard(row) : formatOvertimeRequestForDashboard(row)
   });
+  for (const kind of ['leave', 'overtime']) {
+    const permission = requireAdminPermission(`admin.${kind}.approvedCorrect`);
+    const view = requireAdminPermission(kind === 'leave' ? 'admin.leave.review' : 'admin.overtime.view');
+    const correctionResult = (value, session) => ({ ...value, canCorrect: !session.impersonation?.active && hasAdminPermission(session, `admin.${kind}.approvedCorrect`), record: kind === 'leave' ? formatLeaveRequestForDashboard(value.record) : formatOvertimeRequestForDashboard(value.record) });
+    server.get(`/api/browser/admin/${kind}/approved-correction`, requireBrowserSession, view, (request, response) => {
+      try {
+        response.set('Cache-Control', 'no-store');
+        response.json({ success: true, correction: correctionResult(dbModule.getApprovedCorrections().state(kind, String(request.query.requestId || '')), request.browserSession) });
+      } catch (error) { response.status(error.statusCode || error.status || 500).json({ success: false, error: error.message }); }
+    });
+    server.post(`/api/browser/admin/${kind}/approved-correction`, requireBrowserSession, view, permission, (request, response) => {
+      try {
+        if (request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能修正已核准申請。', 403);
+        const body = request.body || {};
+        const common = ['requestId','revision','correctionReason','confirm','startDate','startTime','endDate','endTime','reason','durationHours'];
+        const allowed = new Set([...common, ...(kind === 'leave' ? ['leaveTypeId','dateSelectionMode','dailyHours','leaveSegments'] : ['breakMinutes','confirmLegacyBreak'])]);
+        if (Object.keys(body).some(key => !allowed.has(key))) throw createHttpError('包含不可修正的申請欄位。', 400);
+        // Validation and mutation share the transaction so overlap and CAS cannot race.
+        const value = dbModule.getSupervisors().transaction(() => {
+          const original = dbModule.getApprovedCorrections().state(kind, body.requestId).record;
+          let updates;
+          if (body.reason != null && (typeof body.reason !== 'string' || body.reason.length > 5000)) throw createHttpError('申請事由格式不正確。', 400);
+          if (kind === 'leave') {
+            const leaveTypeId = body.leaveTypeId ?? original.leave_type_id;
+            if (!dbModule.loadLeaveTypes().some(type => type.id === leaveTypeId && (type.enabled || type.id === original.leave_type_id))) throw createHttpError('請選擇有效假別。', 400);
+            const timing = ['startDate','startTime','endDate','endTime','dateSelectionMode','dailyHours','leaveSegments','durationHours'].some(key => Object.hasOwn(body,key));
+            const period = timing ? resolveSubmittedLeavePeriod(body, original) : { startAt: original.start_at, endAt: original.end_at, selection: {} };
+            updates = { leave_type_id: leaveTypeId, start_at: period.startAt, end_at: period.endAt, ...period.selection, reason: body.reason ?? original.reason };
+            if (dbModule.hasOverlappingLeaveRequest(original.employee_id, updates.start_at, updates.end_at, original.id, { ...original, ...updates })) throw createHttpError('修正時段與其他待審或核准請假重疊。', 409);
+          } else {
+            const timing = ['startDate','startTime','endDate','endTime'].some(key => Object.hasOwn(body,key));
+            const startAt = timing ? parseLeaveDateTime(body.startDate, body.startTime, '18:00') : original.start_at;
+            const endAt = timing ? parseLeaveDateTime(body.endDate, body.endTime, '20:00') : original.end_at;
+            const hasBreak = Object.hasOwn(body,'breakMinutes');
+            if (original.break_minutes == null && (timing || hasBreak) && (!hasBreak || body.confirmLegacyBreak !== true)) throw createHttpError('舊加班休息未記錄，請明填休息分鐘並確認重算時數。', 400);
+            const period = timing || hasBreak ? calculateOvertimePeriod(startAt,endAt,{ breakMinutes: hasBreak ? body.breakMinutes : original.break_minutes }) : { duration_hours:original.duration_hours, break_minutes:original.break_minutes };
+            updates = { start_at:startAt,end_at:endAt,...period,reason:body.reason ?? original.reason };
+            if (dbModule.hasOverlappingOvertimeRequest(original.employee_id,startAt,endAt,original.id)) throw createHttpError('修正時段與其他待審或核准加班重疊。',409);
+          }
+          return dbModule.getApprovedCorrections().correct(kind,body,updates,request.browserSession.employeeId,entry => buildBrowserAuditLogEntry(request,entry));
+        });
+        notifyDesktop(kind === 'leave' ? 'leaveRequests' : 'overtimeRequests', getBrowserSyncMeta(request));
+        notifyDesktop('auditLogs', getBrowserSyncMeta(request));
+        response.json({success:true,correction:correctionResult(value, request.browserSession)});
+      } catch (error) { response.status(error.statusCode || error.status || 500).json({success:false,error:error.message}); }
+    });
+  }
   attachRequestCalendarRoutes(server, {
     db: dbModule, requireSession: requireBrowserSession, requireRole: requireBrowserRole,
     requirePermission: requireAdminPermission,

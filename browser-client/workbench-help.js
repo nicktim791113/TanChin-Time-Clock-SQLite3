@@ -56,6 +56,7 @@ const workbenchHelpTopics = {
 };
 
 Object.assign(workbenchHelpTopics, {
+    'approvedCorrection.detail': ['已核准申請更正與歷程', '查看線上已核准原單及前後歷程；有獨立權限才能更正。', ['先核對員工、申請人、原核准紀錄及歷程。', '修改內容並另填本次更正原因（最多500字）；加班按完整起訖扣整張休息分鐘，舊NULL休息須明填並確認。', '按預覽更正前後內容不會寫入；確認前後差異後再儲存，資料已變更須重新讀取核對。'], ['儲存後直接維持已核准，不重新送審；原單號、申請人、核准紀錄保留，另記操作者、時間與前後內容。', '查看權可以唯讀歷程；儲存須另有對應請假／加班更正權。一般管理者既有模板不含新權，完整管理者模板仍包含全部管理功能；身份模擬不能寫入。', '不得變動已結算來源扣抵；紙本沿用原修正流程，待審等其他狀態不適用。']],
     'employee.leave': ['我的請假', '同一內頁選日期、填申請、查看本人紀錄及整張單的審核進度。', ['瀏覽日曆時點日期查看當日紀錄，或切月內清單；點紀錄可看整張單及全部時段。', '按新增申請時假別初始空白，須自行選一種假別；已有有效草稿沿用原選擇，不回填第一假別。勾選實際日期；可選不連續日期、套用共用時段，再逐段調整或同日新增另一段。', '預設 08:20–17:00；完整涵蓋 12:20–13:00 時預帶休息 40 分鐘，其他時段為 0。可逐段修改休息分鐘，修改後重算淨時數；手動值不被時間變更覆蓋，可恢復自動。部分重疊午休時請自行核對。', '請假事由必填。核對日數、段數與總時數，一次送出整張單；不同假別請分單。', '參加團膳者的請假時段與 12:20–13:00 重疊時，預設勾選紅字「當天不用餐」。送出請假即取消所選日午餐；退回或撤回不會自動恢復，請本人另行確認。已截止或結單請聯絡團膳管理者。', '看紀錄後可返回未送出的草稿。需要撤回時先核對整張單所有日期與時數，再依畫面確認。'], ['保留指定主管及任一／必審等原審核規則，主管通過後仍須管理部終審；待主管或待管理部時才可依原流程撤回。', '同一登入期間保留請假草稿，切月份、頁面或資料更新可接續；送出失敗保留輸入。重整／關頁不保存，登出或切換身份清除。', '只能查看本人及政策允許月份；額度、歷史日期語意、ERP輸出與已核准單修改權限不變。結束00:00表示該日24:00，跨夜須分日期列時段。']],
     'employee.overtime': ['我的加班', '同一內頁申請本人加班，查看日曆、清單與整張單的審核進度。', ['瀏覽日曆點日期查看當日紀錄，或切月內清單；查看舊代申請紀錄時核對申請對象。', '按新增申請，起訖預設 17:30–19:30；選開始日期與完整結束日期時間，跨午夜可用隔日快捷操作，再核對完整起訖。', '填實際休息分鐘（預設 0）與事由；休息必須是 0 以上整數且小於起訖總分鐘，扣除後時數自動計算且不能手填。', '確認摘要後送出，留在同頁查看審核進度。分開日期的獨立加班須逐筆建立。', '手機在全高編輯面板填寫，底部核對摘要；送出失敗保留內容，修正後再送。'], ['加班仍是一組連續起訖，不採請假多日期合一張單的模式；核准仍由指定主管依原規則處理，僅待主管時可撤回整張單。', '新申請只限本人；替他人辦理仍須到主管代辦並有明確授權。舊本人／我代申請的可見範圍及歷史月份限制保留。', '同一登入期間分別保留加班草稿，切月份、頁面或資料更新可接續；重整／關頁不保存，登出或切換身份清除。', '新申請保存休息分鐘與扣除後時數；審核權限及既有紀錄不變，報表與外部 API 仍使用已保存的淨時數。']],
     'employee.order': ['調整我的功能順序', '排列本人員工工作台的入口，儲存後同一帳號跨裝置沿用。', ['逐列按上移／下移，把常用功能移到前面。', '按恢復預設只更新草稿；確認後按儲存排序才保存。', '有未存異動時關閉，可選繼續編輯或捨棄並關閉。'], ['排序不改資料與功能權限，也不改其他員工或管理者／開發人員工作台的全域導覽。', '身份模擬不能保存個人偏好。新功能依可用權限補入入口。']],
@@ -122,6 +123,7 @@ Object.assign(workbenchHelpTopics, {
 });
 
 function workbenchHelpContext(includeModal = true) {
+    if (includeModal && document.querySelector('#approved-correction-dialog[open]')) return { role: 'admin', section: 'approvedCorrection', sub: 'detail', topic: workbenchHelpTopics['approvedCorrection.detail'], root: '#approved-correction-dialog' };
     if (includeModal && document.querySelector('#employee-order-dialog[open]')) return { role: 'employee', section: 'employeeOrder', sub: 'settings', topic: workbenchHelpTopics['employee.order'], root: '#employee-order-dialog' };
     if (includeModal && document.querySelector('#annual-leave-detail-dialog[open]')) return { role: state.dashboard?.role, section: 'annual', sub: 'detail', topic: workbenchHelpTopics['annual.detail'], root: '#annual-leave-detail-dialog' };
     if (includeModal && document.querySelector('#dashboard-metric-settings[open]')) return { role: 'admin', section: 'metrics', sub: 'settings', topic: workbenchHelpTopics['metrics.settings'], root: '#dashboard-metric-settings' };
@@ -154,6 +156,7 @@ function workbenchHelpContext(includeModal = true) {
     return { role, section, sub, topic, ...(section === 'salaryAdvances' && salaryVisible ? { root: '#salary-advance-workspace' } : {}) };
 }
 function workbenchControlLabel(node) {
+    if (node.dataset.acOpen) return '查看已核准申請更正與歷程';
     if (node.dataset.luAction === 'detail') return '查看假別使用原單';
     if (node.dataset.action === 'le-edit-employee') return '載入員工額度編輯';
     if (node.dataset.saAction === 'toggle-details') return '展開或收合人員明細';
@@ -184,6 +187,17 @@ function workbenchControlLabel(node) {
 }
 function workbenchControlDescription(node, context) {
     const name = node.name, label = workbenchControlLabel(node), action = node.dataset.action || '', form = node.form || node.closest('form');
+    if (node.dataset.acOpen) return '讀取已核准線上原單與更正歷程；有對應獨立更正權限才可編輯，開啟本身不寫入。';
+    if (context.section === 'approvedCorrection') {
+        const descriptions = { close: '關閉更正與歷程；有未存內容時先核對捨棄確認，不寫入。', precise: '改用明確請假時段，須重新核對全部日期與時數，尚未儲存。', edit: '返回欄位修改，保留草稿，尚未儲存。', save: '確認預覽後儲存；維持已核准及原核准紀錄，另存前後內容與原因，不重新送審。' };
+        if (descriptions[node.dataset.acAction]) return descriptions[node.dataset.acAction];
+        if (name === 'correctionReason') return '本次更正原因必填，最多500字，與原申請事由分開保存。';
+        if (name === 'reason') return '修改原申請事由；仍須另填本次更正原因並預覽確認。';
+        if (name === 'confirmLegacyBreak') return '舊加班休息未記錄；人工核對休息分鐘後明確確認，不把NULL默認為零。';
+        if (name === 'breakMinutes') return '整張加班單的非負整數休息分鐘，須小於完整起訖總分鐘，扣後時數自動計算。';
+        if (name === 'durationHours') return '核對整筆時數；加班與明確請假時段自動計算，舊請假範圍不推算每日分配。';
+        if (node.type === 'submit' || node.matches('button[type="submit"]')) return '只預覽更正前後內容，不寫入；核對後仍須按確認儲存。';
+    }
     if (node.dataset.luAction === 'detail') return '唯讀查看該假別原申請與計數依據，不核准或修改。';
     if (node.dataset.action === 'le-edit-employee') return '只載入該人的現有額度與來源，填原因後仍須預覽確認才儲存；不會因點選直接寫入。';
     if (context.section === 'leave' && context.sub === 'balances') {

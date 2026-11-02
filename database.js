@@ -12,6 +12,7 @@ const { createRequestHistoryStore } = require('./request-history');
 const { createReviewSupervisorStore } = require('./review-supervisors');
 const { createLeaveEntitlementStore } = require('./leave-entitlements');
 const { createAnnualLeaveStore } = require('./annual-leave-store');
+const { createApprovedCorrectionStore } = require('./approved-request-corrections');
 const { createReviewWorkflow } = require('./review-workflow');
 const { createDashboardMetricStore } = require('./dashboard-metrics');
 const { createSalaryAdvanceStore } = require('./salary-advances');
@@ -28,6 +29,7 @@ let requestHistory = null;
 let reviewSupervisors = null;
 let leaveEntitlements = null;
 let annualLeave = null;
+let approvedCorrections = null;
 let reviewWorkflow = null;
 let dashboardMetrics = null;
 let salaryAdvances = null;
@@ -530,6 +532,11 @@ function init(dbFilePath) {
   leaveEntitlements = createLeaveEntitlementStore(db, (entry) => addAuditLog(entry));
   annualLeave = createAnnualLeaveStore(db, (entry) => addAuditLog(entry));
   leaveEntitlements.setAnnualProvider(annualLeave);
+  approvedCorrections = createApprovedCorrectionStore(db, {
+    getRecord: (kind, id) => kind === 'leave' ? getLeaveRequestById(id) : getOvertimeRequestById(id),
+    normalizeLeave: (next, original) => assignLeaveSegmentIds({ ...next, ...normalizeLeaveDateSelection(next) }, original),
+    replaceSegments: replaceLeaveSegments, entitlements: () => leaveEntitlements, annual: () => annualLeave, audit: addAuditLog
+  });
   reviewWorkflow = createReviewWorkflow(db);
   dashboardMetrics = createDashboardMetricStore(db, (entry) => addAuditLog(entry));
   salaryAdvances = createSalaryAdvanceStore(db, (entry) => addAuditLog(entry));
@@ -548,6 +555,7 @@ function close() {
   reviewSupervisors = null;
   leaveEntitlements = null;
   annualLeave = null;
+  approvedCorrections = null;
   reviewWorkflow = null;
   dashboardMetrics = null;
   salaryAdvances = null;
@@ -2418,6 +2426,7 @@ module.exports = {
   getReviewSupervisors: () => reviewSupervisors,
   getLeaveEntitlements: () => leaveEntitlements,
   getAnnualLeave: () => annualLeave,
+  getApprovedCorrections: () => approvedCorrections,
   getReviewWorkflow: () => reviewWorkflow,
   getDashboardMetrics: () => dashboardMetrics,
   getSalaryAdvances: () => salaryAdvances,

@@ -322,3 +322,9 @@ test('overtime rest is explicit, integral, bounded and net hours cannot be manua
     const html=ui.run("erEditor('overtime')");assert.match(html,/data-er-field="durationHours"[^>]*readonly/);assert.match(html,/data-er-field="breakMinutes"/);
     assert.equal(ui.run("erOvertimeRestLabel({break_minutes:null})"),'休息未記錄');assert.equal(ui.run("erOvertimeRestLabel({breakMinutes:0})"),'休息 0 分鐘');
 });
+test('actual employee detail shows corrected indication once without granting edit rights or duplicating its own approval renderer',()=>{
+ const ui=loadUi();vm.runInContext(fs.readFileSync(path.join(__dirname,'../browser-client/approved-corrections.js'),'utf8'),ui.context);
+ ui.context.row={id:'corrected-personal',employeeId:'E001',employeeName:'本人',applicantId:'E001',applicantName:'本人',status:'approved',statusText:'已核准',approval_mode:'self_request',duration_hours:1.33,breakMinutes:null,reason:'申請事由',supervisorName:'原核准主管',reviewPolicy:{mode:'required',reviewers:[{id:'A001',name:'原核准主管',required:true,decision:'approved'}]},correctionSummary:{count:2,lastAt:Date.now(),lastActorId:'A001',lastReason:'更正 <script>測試</script>'},calendarActions:{}};
+ const html=ui.run("erFullRecord('overtime',row)");assert.equal((html.match(/class="ac-correction-indicator"/g)||[]).length,1);assert.match(html,/已更正 2 次/);assert.match(html,/更正 &lt;script&gt;測試&lt;\/script&gt;/);assert.doesNotMatch(html,/data-ac-open|data-ac-form|更正已核准申請/);assert.equal((html.match(/<h4>審核進度<\/h4>/g)||[]).length,1);assert.match(html,/原核准主管/);
+ ui.context.row.correctionSummary={count:0};assert.doesNotMatch(ui.run("erFullRecord('overtime',row)"),/ac-correction-indicator/);
+});

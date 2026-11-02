@@ -9021,6 +9021,7 @@ function renderEmployeeLeaveRequestRows(requests = [], { showEmployee = false, r
                                     ${!reviewMode && ["pending_supervisor", "pending_admin"].includes(request.status) ? `
                                         <button class="mini-btn" type="button" data-action="leave-withdraw" data-id="${escapeHtml(request.id)}">撤回</button>
                                     ` : ""}
+                                    ${typeof renderApprovedCorrectionActions === 'function' ? renderApprovedCorrectionActions('leave', request) : ''}
                                     ${!reviewMode && allowPaperManage && request.approval_mode === "admin_paper_approved" && request.status === "approved" ? `
                                         <button class="mini-btn" type="button" data-action="paper-leave-correct" data-id="${escapeHtml(request.id)}">修正</button>
                                         <button class="mini-btn danger-text" type="button" data-action="paper-leave-cancel" data-id="${escapeHtml(request.id)}">作廢</button>
@@ -10688,6 +10689,7 @@ function renderOvertimeRequestRows(requests = [], { showEmployee = false, showAp
                                         ${!reviewMode && allowWithdraw && request.status === "pending_supervisor" ? `
                                             <button class="mini-btn" type="button" data-action="overtime-withdraw" data-id="${escapeHtml(request.id)}">撤回</button>
                                         ` : ""}
+                                        ${typeof renderApprovedCorrectionActions === 'function' ? renderApprovedCorrectionActions('overtime', request) : ''}
                                         ${!reviewMode && allowPaperManage && request.approval_mode === "admin_paper_approved" && request.status === "approved" ? `
                                             <button class="mini-btn" type="button" data-action="paper-overtime-correct" data-id="${escapeHtml(request.id)}">修正</button>
                                             <button class="mini-btn danger-text" type="button" data-action="paper-overtime-cancel" data-id="${escapeHtml(request.id)}">作廢</button>

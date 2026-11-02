@@ -142,3 +142,9 @@ test('proxy overtime deducts explicit rest, clears invalid net hours, and resets
     run("supervisorState.kind='overtime';supervisorState.data={employees:[],leaveTypes:[]}");
     const html=run('spRequestForm()');assert.match(html,/name="breakMinutes" type="number" value="0"/);assert.match(html,/name="durationHours"[^>]*readonly/);assert.match(html,/disabled>代送出加班申請/);assert.match(html,/"selectedIds":\[\]/);
 });
+test('actual proxy record detail shows correction history indication without edit controls for the employee workspace',()=>{
+ const {run,context}=client();context.escapeHtml=value=>String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');vm.runInContext(fs.readFileSync(require.resolve('../browser-client/approved-corrections.js'),'utf8'),context);
+ context.row={id:'proxy-corrected',employeeId:'E001',employeeName:'員工',status:'approved',statusText:'已核准',duration_hours:2,reason:'申請事由',approvalModeText:'原審核流程',correctionSummary:{count:1,lastAt:Date.now(),lastActorId:'A001',lastReason:'更正事由 <img src=x>'}};
+ run("supervisorState.kind='overtime';supervisorState.data={calendar:{detail:{records:[row],totalPages:1}}}");
+ const html=run('spRequestDetail()');assert.equal((html.match(/class="ac-correction-indicator"/g)||[]).length,1);assert.match(html,/已更正 1 次/);assert.match(html,/原審核流程/);assert.match(html,/&lt;img/);assert.doesNotMatch(html,/data-ac-open|data-ac-form/);
+});

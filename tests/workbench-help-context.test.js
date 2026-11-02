@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 
-function loadHelp({ role = 'admin', section = 'salaryAdvances', salaryVisible = true, page, dialogStage = '' } = {}) {
+function loadHelp({ role = 'admin', section = 'salaryAdvances', salaryVisible = true, page, dialogStage = '', correctionDialog = false } = {}) {
     let toolbar, activeStage = dialogStage, paints = 0;
     const salaryDialog = { querySelector: () => ({ dataset: { saForm: activeStage } }) };
     const salaryRoot = { closest: () => salaryVisible ? null : {}, querySelector: (selector) => selector === '.workspace-subnav-content' ? workspace : selector === '.sa-dialog[open]' && activeStage ? salaryDialog : null };
@@ -17,7 +17,7 @@ function loadHelp({ role = 'admin', section = 'salaryAdvances', salaryVisible = 
         ...(page ? { saState: { page }, saPaint() { paints++; } } : {}),
         document: {
             getElementById: (id) => id === 'salary-advance-workspace' ? salaryRoot : null,
-            querySelector: (selector) => selector === '#salary-advance-workspace' ? salaryRoot : null,
+            querySelector: (selector) => selector === '#approved-correction-dialog[open]' && correctionDialog ? {} : selector === '#salary-advance-workspace' ? salaryRoot : null,
             addEventListener() {}, createElement: () => ({}), body: { dataset: {} }
         },
         ui: { dashboardContent: { querySelector: (selector) => null, querySelectorAll: () => [] } },
@@ -178,3 +178,23 @@ test('salary dialog help uses its exact operation stage and underlying page help
 });
 
 test('leave usage help explains unknown accounting and labels drilldowns without copying employee names',()=>{const ui=loadHelp({section:'leave',salaryVisible:false});ui.run("state.activeSubSections.admin={leave:'usage'}");assert.equal(ui.run('workbenchHelpContext().topic[0]'),'請假使用總覽');assert.match(ui.run('workbenchHelpContext().topic[3].join()'),/待確認.*不計入/);const description=ui.run("workbenchControlDescription({name:'',dataset:{luAction:'detail'},closest:()=>null,matches:()=>false,textContent:'Sensitive Employee Name',getAttribute:()=> 'Sensitive Employee Name'}, {section:'leave',sub:'usage'})");assert.match(description,/唯讀.*不核准或修改/);assert.ok(!description.includes('Sensitive'));assert.equal(ui.run("workbenchControlLabel({dataset:{action:'le-edit-employee'},textContent:'Sensitive Employee Name'})"),'載入員工額度編輯');assert.match(ui.run("workbenchControlDescription({name:'',dataset:{luAction:'export'},closest:()=>null,matches:()=>false,getAttribute:()=>null,textContent:'匯出 Excel'}, {section:'leave',sub:'usage'})"),/全部符合資料.*不只當頁/)});
+
+test('approved correction modal help distinguishes readonly history, preview and final approved save without copying identities', () => {
+    const ui = loadHelp({ section: 'leave', salaryVisible: false, correctionDialog: true });
+    assert.equal(ui.run('workbenchHelpContext().root'), '#approved-correction-dialog');
+    assert.equal(ui.run('workbenchHelpContext().topic[0]'), '已核准申請更正與歷程');
+    assert.match(ui.run('workbenchHelpContext().topic[3].join()'), /維持已核准.*不重新送審/);
+    assert.notEqual(ui.run('workbenchHelpContext(false).section'), 'approvedCorrection');
+    const describe = (dataset, name = '', type = '') => {
+        ui.run(`helpControl={dataset:${JSON.stringify(dataset)},name:${JSON.stringify(name)},type:${JSON.stringify(type)},closest:()=>null,matches:()=>false,getAttribute:()=>null,textContent:'PRIVATE EMPLOYEE',get value(){throw Error('must not inspect values')}}`);
+        return ui.run('workbenchControlDescription(helpControl,workbenchHelpContext())');
+    };
+    assert.match(describe({ acOpen: 'leave' }), /讀取.*獨立.*開啟本身不寫入/);
+    assert.equal(ui.run('workbenchControlLabel(helpControl)'), '查看已核准申請更正與歷程');
+    assert.match(describe({}, '', 'submit'), /只預覽.*不寫入/);
+    assert.match(describe({ acAction: 'save' }), /維持已核准.*不重新送審/);
+    assert.match(describe({}, 'correctionReason'), /必填.*500字.*分開/);
+    assert.match(describe({}, 'confirmLegacyBreak'), /不把NULL默認為零/);
+    assert.match(describe({ acAction: 'edit' }), /保留草稿.*尚未儲存/);
+    assert.match(describe({ acAction: 'close' }), /未存.*不寫入/);
+});

@@ -60,6 +60,7 @@ function rcActions(kind, row) {
     const decision = (value, label) => `<button type="button" class="mini-btn" data-action="${kind}-${actions.review}-decision" ${attrs} data-decision="${value}">${label}</button>`;
     if (actions.review) return `<div class="review-action-stack"><label class="field"><span>審核備註</span><input class="review-comment-input" type="text" data-${kind}-review-comment></label><div class="table-actions">${decision('approved', actions.review === 'admin' ? '終審核准' : '核准')}${decision('rejected', '駁回')}</div></div>`;
     if (actions.withdraw) return `<button type="button" class="mini-btn" data-action="${kind}-withdraw" ${attrs}>撤回</button>`;
+    if (rcAdmin() && typeof renderApprovedCorrectionActions === 'function' && acEligible(kind,row)) return renderApprovedCorrectionActions(kind,row);
     if (rcAdmin() && hasCurrentAdminPermission(`admin.${kind}.paperCreate`) && row.status === 'approved' && row.approval_mode === 'admin_paper_approved') {
         return `<div class="table-actions"><button type="button" class="mini-btn" data-action="paper-${kind}-correct" ${attrs}>修正</button><button type="button" class="mini-btn danger-text" data-action="paper-${kind}-cancel" ${attrs}>作廢</button></div>`;
     }

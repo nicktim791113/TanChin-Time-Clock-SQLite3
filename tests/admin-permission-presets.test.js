@@ -21,9 +21,18 @@ test('complete management is explicitly assigned while legacy presets and develo
     const catalog = system.dashboard.permissionCatalog;
     const allCodes = catalog.adminPermissions.map((item) => item.code);
     const explicitCodes = catalog.adminPermissions.filter((item) => item.delegatedOnly).map((item) => item.code);
-    assert.equal(explicitCodes.length, 10);
+    assert.equal(explicitCodes.length, 12);
     const legacy = catalog.adminPresets.find((preset) => preset.id === 'full_admin');
     const complete = catalog.adminPresets.find((preset) => preset.id === 'complete_admin');
+    const hr = catalog.adminPresets.find((preset) => preset.id === 'hr_admin');
+    for (const code of ['admin.leave.approvedCorrect', 'admin.overtime.approvedCorrect']) {
+        const permission = catalog.adminPermissions.find(item => item.code === code);
+        assert.equal(permission.delegatedOnly, true);
+        assert.equal(permission.highRisk, true);
+        assert.ok(complete.permissions.includes(code));
+        assert.ok(!legacy.permissions.includes(code));
+        assert.ok(!hr.permissions.includes(code));
+    }
     assert.equal(legacy.label, '一般管理者（既有模板）');
     assert.equal(complete.label, '完整管理者');
     assert.deepEqual(complete.permissions, allCodes);

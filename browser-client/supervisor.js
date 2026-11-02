@@ -177,6 +177,7 @@ function spRequestDetail() {
             <p>對象：${spEscape(row.employeeId)} ${spEscape(row.employeeName)}</p><p>${spEscape(row.startText)} 至 ${spEscape(row.endText)} · ${spEscape(row.duration_hours)} 小時${supervisorState.kind === 'overtime' ? ` · ${spEscape((row.breakMinutes ?? row.break_minutes) == null ? '休息未記錄' : `休息 ${row.breakMinutes ?? row.break_minutes} 分鐘`)}` : ''}</p><p>${spEscape(row.reason)}</p>
             ${supervisorState.kind === 'leave' ? renderLeaveDaysSummary(row, { categoryKeywords: true }) : ''}
             <p>${spEscape(row.approvalModeText)}${row.applicantId || row.applicant_id ? ` · 申請人：${spEscape(row.applicantId || row.applicant_id)} ${spEscape(row.applicantName || '姓名未記錄')}` : ' · 申請人：未記錄'}</p>
+            ${typeof renderApprovedCorrectionIndicator === 'function' ? renderApprovedCorrectionIndicator(row) : ''}
             ${row.proxyReason || row.proxy_reason ? `<p>代辦原因：${spEscape(row.proxyReason || row.proxy_reason)}</p>` : ''}
             ${supervisorState.form === `withdraw:${row.id}` && row.canProxyWithdraw ? `<form data-sp-form="leave/withdraw" class="sp-form">
                 <input type="hidden" name="employeeId" value="${spEscape(row.employeeId)}"><input type="hidden" name="requestId" value="${spEscape(row.id)}"><input type="hidden" name="updatedAt" value="${row.updated_at}">

@@ -1,0 +1,29 @@
+.ac-dialog { width: min(1100px,calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); overflow: auto; padding: 16px; border: 1px solid #b8ccdb; border-radius: 12px; box-sizing: border-box; }
+.ac-dialog::backdrop { background: #14283888; }
+.ac-dialog > header { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.ac-dialog h3,.ac-dialog h4,.ac-dialog h5 { margin: 10px 0; }
+.ac-message { min-height: 24px; color: #b42332; overflow-wrap: anywhere; }
+.ac-content,.ac-content form { min-width: 0; }
+.ac-content form { display: grid; gap: 12px; margin: 16px 0; }
+.ac-period { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }
+.ac-period .field { min-width: 0; }
+.ac-dialog input,.ac-dialog select,.ac-dialog textarea { max-width: 100%; min-width: 0; box-sizing: border-box; }
+.ac-compare { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+.ac-compare > section { min-width: 0; padding: 12px; background: #f3f6f8; border: 1px solid #d6e0e8; border-radius: 6px; }
+.ac-snapshot { display: grid; gap: 7px; margin: 10px 0; }
+.ac-snapshot > div { display: grid; grid-template-columns: 100px minmax(0,1fr); gap: 8px; }
+.ac-snapshot dt { color: #526171; }
+.ac-snapshot dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ac-history details { padding: 10px 0; border-top: 1px solid #d6e0e8; }
+.ac-history summary { cursor: pointer; }
+.ac-history p,.ac-preview p,.ac-dialog li { overflow-wrap: anywhere; }
+.ac-check { display: flex; align-items: start; gap: 8px; }
+.ac-check input { flex-shrink: 0; margin-top: 5px; }
+.ac-preview[hidden] { display: none; }
+@media(max-width:600px) { .ac-dialog { padding: 12px; } .ac-period { grid-template-columns: repeat(2,minmax(0,1fr)); } .ac-compare { grid-template-columns: minmax(0,1fr); } .ac-snapshot > div { grid-template-columns: 78px minmax(0,1fr); } .ac-dialog button { white-space: normal; } }
+.ac-header-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.ac-content fieldset { min-width: 0; border: 1px solid #d6e0e8; border-radius: 6px; padding: 12px; }
+.ac-correction-indicator { margin: 10px 0; padding: 8px 10px; border-left: 3px solid #506b9b; background: #f0f4fa; font-size: 12px; overflow-wrap: anywhere; }
+.ac-correction-indicator strong,.ac-correction-indicator span { display: block; }
+.ac-correction-indicator p { margin: 5px 0; white-space: pre-wrap; }
+.ac-accounting { border-top: 1px solid #d6e0e8; padding-top: 8px; }
