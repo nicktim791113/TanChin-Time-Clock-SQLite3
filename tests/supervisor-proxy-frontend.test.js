@@ -23,7 +23,7 @@ test('create form has empty target selection and required blank leave type, with
 });
 test('overtime hours follow dates and times with minute based two digit truncation', () => {
     const { run, context } = client();
-    context.form = { dataset: { spForm: 'overtime' }, elements: Object.fromEntries(Object.entries({ startDate:'2026-10-29', endDate:'2026-10-30', startTime:'23:30', endTime:'00:31', durationHours:'' }).map(([key,value]) => [key,{value}])) };
+    context.form = { dataset: { spForm: 'overtime' }, elements: Object.fromEntries(Object.entries({ startDate:'2026-10-29', endDate:'2026-10-30', startTime:'23:30', endTime:'00:31', breakMinutes:'0', durationHours:'' }).map(([key,value]) => [key,{value}])) };
     run('spSyncOvertime(form)'); assert.equal(context.form.elements.durationHours.value, '1.01');
     context.form.elements.endDate.value = '2026-10-29'; run('spSyncOvertime(form)'); assert.equal(context.form.elements.durationHours.value, '');
     context.form.elements.startDate.value = ''; run('spSyncOvertime(form)'); assert.equal(context.form.elements.durationHours.value, '');
@@ -84,7 +84,7 @@ test('supervisor keyword markup colors only static category words and is opt-in 
     assert.match(css, /ld-category-leave \{ color: #b42332;/); assert.match(css, /sp-category-word-overtime \{ color: #9a4300;/); assert.match(css, /ld-category-meals \{ color: #174ea6;/);
     assert.doesNotMatch(css, /\.sp-category-leave \.ld-heading h4|label:has|\.ld-request-summary > summary|leave-meal-options > legend/);
 });
-test('supervisor leave entry packs eight fields and overtime five, with compact opt-in steps and readonly hours', () => {
+test('supervisor leave entry packs eight fields and overtime six, with compact opt-in steps and readonly hours', () => {
     const { run, context } = client();
     vm.runInContext(fs.readFileSync(require.resolve('../browser-client/leave-days.js'), 'utf8'), context);
     run("supervisorState.data={employees:[],leaveTypes:[]}; supervisorState.kind='leave'");
@@ -101,7 +101,7 @@ test('supervisor leave entry packs eight fields and overtime five, with compact 
     run("supervisorState.kind='overtime'");
     const overtime = run('spRequestForm()');
     const overtimeEntry = overtime.slice(overtime.indexOf('class="sp-entry-grid'), overtime.indexOf('</div>', overtime.indexOf('class="sp-entry-grid')));
-    assert.equal((overtimeEntry.match(/class="field"/g)||[]).length,5);
+    assert.equal((overtimeEntry.match(/class="field"/g)||[]).length,6);
     assert.match(overtime,/sp-entry-overtime/);
     const shared = run('renderLeaveDaysEditor({batch:true})');
     assert.doesNotMatch(shared,/sp-leave-steps/); assert.match(shared,/先填上方的新增區間/);
@@ -134,4 +134,11 @@ test('supervisor steps replace the old batch paragraph through render and mode-r
         var savedSync=lsSyncBatch, savedPaint=lsPaintRows; lsSyncBatch=()=>{};lsPaintRows=()=>{};
         syncLeaveDaysEditor(form,{reset:true}); lsSyncBatch=savedSync;lsPaintRows=savedPaint;`);
     const rebuilt=run('rebuilt'); assert.match(rebuilt,/sp-leave-steps/);assert.match(rebuilt,/不同班表請分開申請/);assert.doesNotMatch(rebuilt,/所選員工共用下方所有時段/);
+});
+test('proxy overtime deducts explicit rest, clears invalid net hours, and resets with zero rest', () => {
+    const {run,context}=client();context.form={dataset:{spForm:'overtime'},elements:Object.fromEntries(Object.entries({startDate:'2026-11-02',startTime:'23:30',endDate:'2026-11-03',endTime:'00:31',breakMinutes:'1',durationHours:'99'}).map(([key,value])=>[key,{value}]))};
+    run('spSyncOvertime(form)');assert.equal(context.form.elements.durationHours.value,'1');
+    for(const rest of ['', '-1','1.5','61','62']){context.form.elements.breakMinutes.value=rest;run('spSyncOvertime(form)');assert.equal(context.form.elements.durationHours.value,'');}
+    run("supervisorState.kind='overtime';supervisorState.data={employees:[],leaveTypes:[]}");
+    const html=run('spRequestForm()');assert.match(html,/name="breakMinutes" type="number" value="0"/);assert.match(html,/name="durationHours"[^>]*readonly/);assert.match(html,/disabled>代送出加班申請/);assert.match(html,/"selectedIds":\[\]/);
 });

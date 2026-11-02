@@ -148,6 +148,7 @@ $projectFiles = @(
     "supervisor-management.js",
     "employee-browser-settings.js",
     "supervisor-routes.js",
+    "overtime-duration.js",
     "browser-punch-permissions.js",
     "tailwind.config.js"
 )

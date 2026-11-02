@@ -120,6 +120,7 @@ function attachRequestCalendarRoutes(server, context) {
                             leaveTypeName: kind === 'leave' ? lookup.typeMap.get(row.leave_type_id)?.name || row.leave_type_id : '加班',
                             status: row.status, statusText: STATUS_LABELS[row.status] || row.status || '-',
                             startAt: row.start_at, endAt: row.end_at, hours: row.duration_hours,
+                            ...(kind === 'overtime' ? { breakMinutes: row.break_minutes ?? null } : {}),
                             dateSelectionMode: row.date_selection_mode || 'legacy_range',
                             segmentHoursSource: ['explicit_dates', 'explicit_segments'].includes(row.date_selection_mode) ? 'recorded' : 'legacy_allocation',
                             segments: getLeaveDateSegments(row).filter((segment) => segment.startAt < range.end && segment.endAt > range.start),

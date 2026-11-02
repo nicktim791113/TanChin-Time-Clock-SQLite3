@@ -91,7 +91,7 @@
 .sp-leave-steps svg { flex-shrink: 0; color: #526171; }
 .sp-step-note { font-size: 13px; line-height: 1.6; margin: 8px 0 12px; }
 @container (min-width: 640px) { .sp-entry-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-@container (min-width: 800px) { .sp-entry-overtime { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+@container (min-width: 800px) { .sp-entry-overtime { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
 @container (min-width: 1180px) { .sp-entry-leave { grid-template-columns: repeat(8, minmax(0, 1fr)); } }
 @container (max-width: 359px) { .sp-entry-grid { grid-template-columns: minmax(0, 1fr); } }
 .sp-entry-grid .sp-inline-tools .field { max-width: none; }

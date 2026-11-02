@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const { monthRange, buildCalendar } = require('./request-calendar');
 const { proxyReason, requirePersonalSupervisor, isSupervisorSimulation } = require('./supervisor-management');
 const { normalizeLeaveDateSelection, leaveOverlapsRange, getLeaveDateSegments } = require('./leave-date-selection');
+const { calculateOvertimePeriod } = require('./overtime-duration');
 
 function fail(message, status = 400) { throw Object.assign(new Error(message), { status }); }
 function requestPeriod(body, kind) {
@@ -28,8 +29,8 @@ function requestPeriod(body, kind) {
             date_selection_mode: body.dateSelectionMode, daily_hours: body.dailyHours }) };
     }
     if (kind === 'leave' && body.dateSelectionMode != null && body.dateSelectionMode !== 'legacy_range') fail('請假日期選取模式不正確。');
-    const hours = kind === 'overtime' ? Math.floor((end - start) / 60000 * 100 / 60) / 100 :
-        body.durationHours == null || body.durationHours === '' ? (end - start) / 3600000 : Number(body.durationHours);
+    if (kind === 'overtime') return { start_at: start, end_at: end, ...calculateOvertimePeriod(start, end, body) };
+    const hours = body.durationHours == null || body.durationHours === '' ? (end - start) / 3600000 : Number(body.durationHours);
     if (!Number.isFinite(hours) || Math.round(hours * 100) <= 0) fail('請輸入有效時數。');
     return { start_at: start, end_at: end, duration_hours: Math.round(hours * 100) / 100 };
 }

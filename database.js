@@ -17,6 +17,7 @@ const { createDashboardMetricStore } = require('./dashboard-metrics');
 const { createSalaryAdvanceStore } = require('./salary-advances');
 const { createDeviceRecoveryStore } = require('./device-recovery-store');
 const { normalizeLeavePay } = require('./leave-type-pay');
+const { calculateOvertimePeriod } = require('./overtime-duration');
 const { normalizeLeaveDateSelection, getLeaveDateSegments, EXPLICIT_DATES, EXPLICIT_SEGMENTS, LEGACY_RANGE } = require('./leave-date-selection');
 let db = null;
 let meals = null;
@@ -225,6 +226,7 @@ function init(dbFilePath) {
       start_at INTEGER NOT NULL,
       end_at INTEGER NOT NULL,
       duration_hours REAL NOT NULL DEFAULT 0,
+      break_minutes INTEGER,
       reason TEXT,
       status TEXT NOT NULL,
       supervisor_id TEXT,
@@ -465,6 +467,9 @@ function init(dbFilePath) {
 
         const overtimeRequestTableInfo = db.prepare("PRAGMA table_info(overtime_requests)").all();
         const overtimeRequestColumns = overtimeRequestTableInfo.map(col => col.name);
+        if (!overtimeRequestColumns.includes('break_minutes')) {
+            run('ALTER TABLE overtime_requests ADD COLUMN break_minutes INTEGER');
+        }
         if (!overtimeRequestColumns.includes('approval_mode')) {
             console.log('[資料庫] 偵測到舊版 overtime_requests 結構，正在補上 approval_mode 欄位...');
             run('ALTER TABLE overtime_requests ADD COLUMN approval_mode TEXT');
@@ -1444,21 +1449,26 @@ const updatePaperLeaveRequest = ({ requestId, updates, auditLog }) => db.transac
 function mapOvertimeRequestRow(row) {
     return {
         ...row,
-        duration_hours: Number(row.duration_hours || 0)
+        duration_hours: Number(row.duration_hours || 0),
+        break_minutes: row.break_minutes == null ? null : Number(row.break_minutes)
     };
 }
 
 const createOvertimeRequest = (request) => {
+    if (request.break_minutes != null) {
+        const calculated = calculateOvertimePeriod(request.start_at, request.end_at, { breakMinutes: request.break_minutes });
+        if (Number(request.duration_hours) !== calculated.duration_hours) throw Object.assign(new Error('加班淨時數與起訖扣除休息後的計算不一致。'), { status: 400, statusCode: 400 });
+    }
     const insertRequest = db.prepare(`
         INSERT INTO overtime_requests (
             id, employee_id, applicant_id, applicant_role, proxy_reason, start_at, end_at,
-            duration_hours, reason, status, supervisor_id, supervisor_decision,
+            duration_hours, break_minutes, reason, status, supervisor_id, supervisor_decision,
             supervisor_comment, supervisor_decided_at, approval_mode, paper_no,
             paper_approved_by, paper_comment, corrected_from_request_id, created_at,
             updated_at
         ) VALUES (
             @id, @employee_id, @applicant_id, @applicant_role, @proxy_reason, @start_at, @end_at,
-            @duration_hours, @reason, @status, @supervisor_id, @supervisor_decision,
+            @duration_hours, @break_minutes, @reason, @status, @supervisor_id, @supervisor_decision,
             @supervisor_comment, @supervisor_decided_at, @approval_mode, @paper_no,
             @paper_approved_by, @paper_comment, @corrected_from_request_id, @created_at,
             @updated_at
@@ -1474,6 +1484,7 @@ const createOvertimeRequest = (request) => {
     db.transaction(() => {
         insertRequest.run({
             ...request,
+            break_minutes: request.break_minutes ?? null,
             proxy_reason: request.proxy_reason || null,
             supervisor_decision: request.supervisor_decision || null,
             supervisor_comment: request.supervisor_comment || null,

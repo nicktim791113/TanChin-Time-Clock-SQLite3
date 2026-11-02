@@ -130,8 +130,9 @@ function spRequestForm() {
         <div class="sp-entry-grid ${leave ? 'sp-entry-leave' : 'sp-entry-overtime'}">${spField('開始日期', 'startDate', 'date', date)}${spField(leave ? '每日開始時間' : '開始時間', 'startTime', 'time', leave ? '08:20' : '17:30')}
         ${spField('結束日期', 'endDate', 'date', date)}${spField(leave ? '每日結束時間' : '結束時間', 'endTime', 'time', leave ? '17:00' : '19:30')}
         ${leave ? `<label class="field"><span>假別</span><select name="leaveTypeId" required><option value="">請選擇假別</option>${supervisorState.data.leaveTypes.map((t) => `<option value="${spEscape(t.id)}">${spEscape(t.name)}</option>`).join('')}</select></label>` : ''}
-         ${spField('每人整筆時數', 'durationHours', 'number', leave ? '' : '2', 'readonly placeholder="由時段自動計算" min="0.01" step="0.01"')}
+         ${!leave ? spField('休息（分鐘）', 'breakMinutes', 'number', '0', 'min="0" step="1"') : ''}${spField(leave ? '每人整筆時數' : '扣除休息後時數', 'durationHours', 'number', leave ? '' : '2', 'readonly placeholder="由時段自動計算" min="0.01" step="0.01"')}
         ${leave ? renderLeaveDaysAddTools({ autoHours: true, categoryKeywords: true, supervisorLayout: true }) : ''}</div>
+        ${!leave ? '<p class="sp-step-note">休息預設 0 分鐘；填 0 以上整數且小於起訖總分鐘，時數會自動扣除休息。跨夜請核對完整結束日期。</p>' : ''}
         ${leave ? `${renderLeaveDaysEditor({ batch: true, autoHours: true, externalTools: true, categoryKeywords: true, supervisorSteps: true })}<div data-sp-leave-meals></div>` : ''}
         ${spField('申請事由', 'reason', 'text', '', 'maxlength="2000"')}${spReasonField('proxyReason')}
         <label class="sp-confirm"><input type="checkbox" name="confirmApproval" required>確認替所有勾選員工代申請相同內容；多主管設定依各人審核規則送審，原單主管代辦流程保留</label>
@@ -173,7 +174,7 @@ function spRequestDetail() {
         ${supervisorState.kind === 'leave' && typeof leBalanceTable === 'function' ? leBalanceTable(supervisorState.data.leaveBalances || []) : ''}
         <div class="sp-records">${detail.records.map((row) => `<article class="sp-record"><div class="sp-toolbar"><strong>${row.leaveTypeName ? spEscape(row.leaveTypeName) : spCategoryTitle('加班')} · ${spEscape(row.statusText)}</strong>
             ${row.canProxyWithdraw ? spButton('withdraw', '代撤回', `data-id="${spEscape(row.id)}"`, !spCanWrite()) : ''}</div>
-            <p>對象：${spEscape(row.employeeId)} ${spEscape(row.employeeName)}</p><p>${spEscape(row.startText)} 至 ${spEscape(row.endText)} · ${spEscape(row.duration_hours)} 小時</p><p>${spEscape(row.reason)}</p>
+            <p>對象：${spEscape(row.employeeId)} ${spEscape(row.employeeName)}</p><p>${spEscape(row.startText)} 至 ${spEscape(row.endText)} · ${spEscape(row.duration_hours)} 小時${supervisorState.kind === 'overtime' ? ` · ${spEscape((row.breakMinutes ?? row.break_minutes) == null ? '休息未記錄' : `休息 ${row.breakMinutes ?? row.break_minutes} 分鐘`)}` : ''}</p><p>${spEscape(row.reason)}</p>
             ${supervisorState.kind === 'leave' ? renderLeaveDaysSummary(row, { categoryKeywords: true }) : ''}
             <p>${spEscape(row.approvalModeText)}${row.applicantId || row.applicant_id ? ` · 申請人：${spEscape(row.applicantId || row.applicant_id)} ${spEscape(row.applicantName || '姓名未記錄')}` : ' · 申請人：未記錄'}</p>
             ${row.proxyReason || row.proxy_reason ? `<p>代辦原因：${spEscape(row.proxyReason || row.proxy_reason)}</p>` : ''}
@@ -430,7 +431,7 @@ handleDashboardSubmit = async function handleSupervisorSubmit(event) {
         else body.confirmApproval = fields.has('confirmApproval');
     }
     try {
-        if (operation === 'overtime') { spSyncOvertime(form); body.durationHours = form.elements.durationHours.value; if (!body.durationHours) throw new Error('請填寫有效的加班開始與結束時段。'); }
+        if (operation === 'overtime') { spSyncOvertime(form); body.durationHours = form.elements.durationHours.value; body.breakMinutes = form.elements.breakMinutes.value; if (!body.durationHours) throw new Error('請填寫有效加班起訖；休息分鐘須為 0 以上整數，且小於總分鐘。'); }
         if (operation === 'leave') {
             if (!body.leaveTypeId) throw new Error('請選擇假別。');
             if (!String(body.reason || '').trim()) throw new Error('請填寫請假事由。');
@@ -484,10 +485,13 @@ function spReasonField(name) {
 function spSyncOvertime(form) {
     if (form?.dataset?.spForm !== 'overtime') return;
     const f = form.elements;
-    if (!f?.startDate || !f.startTime || !f.endDate || !f.endTime || !f.durationHours) return;
+    if (!f?.startDate || !f.startTime || !f.endDate || !f.endTime || !f.durationHours || !f.breakMinutes) return;
     const start = new Date(`${f.startDate.value}T${f.startTime.value}:00+08:00`).getTime(), end = new Date(`${f.endDate.value}T${f.endTime.value}:00+08:00`).getTime();
     const minutes = (end - start) / 60000;
-    f.durationHours.value = Number.isFinite(minutes) && minutes > 0 ? String(Math.floor(minutes * 100 / 60) / 100) : '';
+    const rest = Number(f.breakMinutes.value);
+    const valid = /^\d+$/.test(f.breakMinutes.value) && Number.isSafeInteger(rest) && rest >= 0 && Number.isFinite(minutes) && rest < minutes;
+    f.durationHours.value = valid ? String(Math.floor((minutes - rest) * 100 / 60) / 100) : '';
+    f.breakMinutes.setCustomValidity?.(valid ? '' : '休息分鐘須為 0 以上的整數，且小於加班起訖總分鐘。');
 }
 function spOpenReasons() {
     if (document.querySelector('.sp-reasons-dialog')) return;

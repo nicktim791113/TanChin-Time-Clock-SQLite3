@@ -156,12 +156,12 @@ test('common break settings copy into new days and invalid or excessive rest can
     assert.equal(draft.rows[0].breakMinutes, '40'); assert.equal(draft.rows[0].hours, '9');
 });
 
-test('overtime keeps full continuous end date and manual hours, including more than one midnight', () => {
+test('overtime keeps full continuous end date and deducts rest automatically, including more than one midnight', () => {
     const ui = loadUi();
     ui.run("erState('overtime').draft=erNewDraft('overtime')");
     input(ui, 'overtime', 'startDate', '2026-12-31'); input(ui, 'overtime', 'startTime', '22:00'); input(ui, 'overtime', 'endDate', '2027-01-02'); input(ui, 'overtime', 'endTime', '02:00');
     assert.equal(ui.run("erState('overtime').draft.durationHours"), '28');
-    input(ui, 'overtime', 'durationHours', '18.5'); input(ui, 'overtime', 'endTime', '03:00');
+    input(ui, 'overtime', 'breakMinutes', '630'); input(ui, 'overtime', 'endTime', '03:00');
     const body = JSON.parse(ui.run("JSON.stringify(erBuildPayload('overtime',erState('overtime').draft))"));
     assert.equal(body.endDate, '2027-01-02'); assert.equal(body.durationHours, 18.5); assert.equal(body.employeeId, 'E001');
     input(ui, 'overtime', 'endDate', '2026-12-31');
@@ -209,7 +209,7 @@ test('request detail uses scoped month endpoint and history clamp without losing
 
 test('double submission is blocked, failure keeps every field, and success posts one original API request', async () => {
     const ui = loadUi();
-    ui.run("erState('overtime').draft={startDate:'2026-10-26',startTime:'22:00',endDate:'2026-10-27',endTime:'02:00',durationHours:'3.5',hoursManual:true,reason:'retain me',confirming:true,error:''}");
+    ui.run("erState('overtime').draft={startDate:'2026-10-26',startTime:'22:00',endDate:'2026-10-27',endTime:'02:00',durationHours:'3.5',breakMinutes:'30',reason:'retain me',confirming:true,error:''}");
     const first = ui.run("erSend('overtime')"); await ui.run("erSend('overtime')");
     assert.equal(ui.requests.length, 1); assert.equal(ui.requests[0].route, '/api/browser/employee/overtime/request');
     ui.pending[0].reject(new Error('network failed')); await first;
@@ -223,7 +223,7 @@ test('double submission is blocked, failure keeps every field, and success posts
 test('late submit response after account change cannot overwrite the new dashboard or clear its draft', async () => {
     const ui = loadUi();
     const oldDashboard = ui.state.dashboard;
-    ui.run("erState('overtime').draft={startDate:'2026-10-26',startTime:'18:00',endDate:'2026-10-26',endTime:'20:00',durationHours:'2',reason:'old secret',confirming:true}");
+    ui.run("erState('overtime').draft={startDate:'2026-10-26',startTime:'18:00',endDate:'2026-10-26',endTime:'20:00',durationHours:'2',breakMinutes:'0',reason:'old secret',confirming:true}");
     const submit = ui.run("erSend('overtime')");
     ui.run("state.token='new-session'; renderDashboard({...state.dashboard,user:{id:'E002'}}); erState('overtime').draft=erNewDraft('overtime'); erState('overtime').draft.reason='new secret'");
     ui.pending[0].resolve({ data: { dashboard: oldDashboard } }); await submit;
@@ -301,4 +301,24 @@ test('leaving withdrawal confirmation for a new or existing draft does not leave
         assert.equal(ui.run("erState('leave').confirmation"), null, action.action);
         ui.pending.at(-1).resolve({ calendar: calendar() }); await result;
     }
+});
+test('overtime rest is explicit, integral, bounded and net hours cannot be manually overridden', () => {
+    const ui=loadUi(); ui.run("erState('overtime').draft=erNewDraft('overtime')");
+    assert.equal(ui.run("erState('overtime').draft.breakMinutes"),'0');
+    input(ui,'overtime','breakMinutes','30');
+    assert.equal(ui.run("erState('overtime').draft.durationHours"),'1.5');
+    input(ui,'overtime','durationHours','99');
+    assert.equal(ui.run("erState('overtime').draft.durationHours"),'1.5');
+    ui.run("erState('overtime').draft.durationHours='99'");
+    let body=JSON.parse(ui.run("JSON.stringify(erBuildPayload('overtime',erState('overtime').draft))"));
+    assert.equal(body.durationHours,1.5);assert.equal(body.breakMinutes,30);
+    for(const rest of ['', '-1','1.5','120','121','not-a-number','9007199254740992']){
+        input(ui,'overtime','breakMinutes',rest);assert.equal(ui.run("erState('overtime').draft.durationHours"),'');
+        assert.throws(()=>ui.run("erBuildPayload('overtime',erState('overtime').draft)"),/休息分鐘/);
+    }
+    input(ui,'overtime','breakMinutes','119');
+    body=JSON.parse(ui.run("JSON.stringify(erBuildPayload('overtime',erState('overtime').draft))"));
+    assert.equal(body.durationHours,.01);
+    const html=ui.run("erEditor('overtime')");assert.match(html,/data-er-field="durationHours"[^>]*readonly/);assert.match(html,/data-er-field="breakMinutes"/);
+    assert.equal(ui.run("erOvertimeRestLabel({break_minutes:null})"),'休息未記錄');assert.equal(ui.run("erOvertimeRestLabel({breakMinutes:0})"),'休息 0 分鐘');
 });

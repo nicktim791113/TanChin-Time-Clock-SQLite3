@@ -6,6 +6,7 @@ const { app, dialog } = require('electron');
 const dbModule = require('./database');
 const databaseBackup = require('./database-backup');
 const { normalizeLeaveDateSelection, getLeaveDateSegments } = require('./leave-date-selection');
+const { calculateOvertimePeriod } = require('./overtime-duration');
 const { attachDatabaseBackupRoutes } = require('./database-backup-routes');
 const { createBrowserAccounts, RESET_PERMISSION, REVEAL_PERMISSION } = require('./browser-accounts');
 const { attachMealRoutes } = require('./meal-routes');
@@ -1675,6 +1676,7 @@ function buildApprovedOvertimeAttendanceRecords({ employeeMap, employeeId = '', 
         overtimeEndText: formatAttendanceDateTime(segment.segmentEndAt),
         overtimeDurationHours: durationHours,
         overtimeRequestDurationHours: roundAttendanceHours(request.duration_hours),
+        overtimeRequestBreakMinutes: request.break_minutes ?? null,
         overtimeReason: request.reason || '',
         overtimeStatusText: getOvertimeStatusText(request.status),
         overtimeApprovalModeText: getOvertimeApprovalModeText(request.approval_mode),
@@ -2353,6 +2355,7 @@ function formatOvertimeRequestForDashboard(request, lookup = buildOvertimeLookup
   return {
     ...request,
     reviewPolicy: formatRequestReviewPolicy('overtime', request, lookup),
+    breakMinutes: request.break_minutes == null ? null : Number(request.break_minutes),
     employeeId: request.employee_id,
     employeeName: employee.name || '',
     employeeDepartment: employee.department || '',
@@ -5712,7 +5715,7 @@ function attachBrowserRoutes(server) {
       const endAt = parseLeaveDateTime(request.body?.endDate, request.body?.endTime, '20:00');
       if (endAt <= startAt) throw createHttpError('加班結束時間必須晚於開始時間。', 400);
 
-      const durationHours = calculateLeaveDurationHours(startAt, endAt, request.body?.durationHours);
+      const { duration_hours: durationHours, break_minutes: breakMinutes } = calculateOvertimePeriod(startAt, endAt, request.body || {}, { rejectLegacyHoursMismatch: true });
       if (durationHours <= 0) throw createHttpError('請輸入有效的加班時數。', 400);
       const now = Date.now();
       const overtimeRequest = {
@@ -5723,6 +5726,7 @@ function attachBrowserRoutes(server) {
         start_at: startAt,
         end_at: endAt,
         duration_hours: durationHours,
+        break_minutes: breakMinutes,
         reason: String(request.body?.reason || '').trim(),
         status: 'pending_supervisor',
         supervisor_id: supervisorId,

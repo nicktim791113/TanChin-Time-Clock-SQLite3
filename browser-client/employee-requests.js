@@ -36,9 +36,17 @@ function erWallHours(startDate, startTime, endDate, endTime, midnight = false) {
     // A rounded-up hundredth can exceed a minute-based interval and fail the server's exact bound.
     return end > start ? String(Math.floor((end - start) / 36000) / 100) : '';
 }
+function erOvertimeNetHours(draft, strict = false) {
+    const invalid = (message) => { if (strict) throw new Error(message); return ''; };
+    if (!erWallHours(draft.startDate, draft.startTime, draft.endDate, draft.endTime)) return invalid('請填完整起訖日期與時間，結束必須晚於開始。跨夜時請設定完整結束日期。');
+    const minutes = (Date.parse(draft.endDate + 'T' + draft.endTime + ':00+08:00') - Date.parse(draft.startDate + 'T' + draft.startTime + ':00+08:00')) / 60000;
+    const rest = Number(draft.breakMinutes);
+    if (!/^\d+$/.test(String(draft.breakMinutes)) || !Number.isSafeInteger(rest) || rest < 0 || rest >= minutes) return invalid('休息分鐘須為 0 以上的整數，且小於加班起訖總分鐘。');
+    return String(Math.floor((minutes - rest) * 100 / 60) / 100);
+}
 function erNewDraft(kind) {
     if (kind === 'leave') return { leaveTypeId: '', reason: '', rows: [], commonStart: '08:20', commonEnd: '17:00', commonBreakMinutes: '40', commonBreakManual: false, commonHours: '8', commonManual: false, confirming: false, error: '' };
-    return { startDate: erState(kind).date, startTime: '17:30', endDate: erState(kind).date, endTime: '19:30', durationHours: '2', hoursManual: false, reason: '', confirming: false, error: '' };
+    return { startDate: erState(kind).date, startTime: '17:30', endDate: erState(kind).date, endTime: '19:30', durationHours: '2', breakMinutes: '0', reason: '', confirming: false, error: '' };
 }
 function erNewRow(draft, date) { return { date, startTime: draft.commonStart, endTime: draft.commonEnd, breakMinutes: draft.commonBreakMinutes, breakManual: draft.commonBreakManual, hours: draft.commonHours, manual: draft.commonManual }; }
 function erAutoLeaveRow(row) {
@@ -57,11 +65,8 @@ function erBuildPayload(kind, draft) {
         if (!body.reason) throw new Error('請填寫請假事由。');
         return { ...body, mealOptOuts: collectLeaveMealChoices(draft, { ...body, employeeIds: [state.dashboard.user.id] }) };
     }
-    const wall = Number(erWallHours(draft.startDate, draft.startTime, draft.endDate, draft.endTime));
-    if (!wall) throw new Error('請填完整起訖日期與時間，結束必須晚於開始。跨夜時請設定完整結束日期。');
-    const hours = Number(draft.durationHours);
-    if (!/^\d+(\.\d{1,2})?$/.test(String(draft.durationHours)) || !Number.isFinite(hours) || hours <= 0 || hours > wall) throw new Error('實際加班時數須大於 0、最多兩位小數，且不可超過起訖時間；請扣除休息時間。');
-    return { employeeId: state.dashboard.user.id, startDate: draft.startDate, startTime: draft.startTime, endDate: draft.endDate, endTime: draft.endTime, durationHours: hours, reason: draft.reason.trim() };
+    draft.durationHours = erOvertimeNetHours(draft, true);
+    return { employeeId: state.dashboard.user.id, startDate: draft.startDate, startTime: draft.startTime, endDate: draft.endDate, endTime: draft.endTime, breakMinutes: Number(draft.breakMinutes), durationHours: Number(draft.durationHours), reason: draft.reason.trim() };
 }
 function erButton(kind, action, label, attributes = '', primary = false) {
     return `<button type="button" class="er-button${primary ? ' er-primary' : ''}" data-action="er-${action}" data-kind="${kind}" ${attributes}>${label}</button>`;
@@ -100,7 +105,7 @@ function erRecordList(kind, detail) {
     const current = erState(kind);
     if (!detail) return `<div class="er-empty">${current.error ? '紀錄未載入，請重新整理。' : '讀取紀錄中…'}</div>`;
     if (!detail.records.length) return '<div class="er-empty">沒有符合條件的申請。可切換月份或清除篩選。</div>';
-    return `<div class="er-record-list">${detail.records.map((row) => `<button type="button" class="er-record-row" data-action="er-record" data-kind="${kind}" data-id="${erEscape(row.id)}"><span class="er-record-main"><strong>${erEscape(kind === 'leave' ? row.leaveTypeName : row.employeeId === state.dashboard.user.id ? '本人加班' : `${row.employeeName} · 我代申請`)}</strong><span>${erEscape(row.startText)}<br>至 ${erEscape(row.endText)}</span>${kind === 'leave' ? `<small class="er-period-label">${erRecordPeriodLabel(row)}</small>` : ''}</span><span class="er-record-tail"><strong>${erEscape(row.duration_hours)} 小時</strong>${erBadge(row)}</span></button>`).join('')}</div>${erPagination(kind, detail)}`;
+    return `<div class="er-record-list">${detail.records.map((row) => `<button type="button" class="er-record-row" data-action="er-record" data-kind="${kind}" data-id="${erEscape(row.id)}"><span class="er-record-main"><strong>${erEscape(kind === 'leave' ? row.leaveTypeName : row.employeeId === state.dashboard.user.id ? '本人加班' : `${row.employeeName} · 我代申請`)}</strong><span>${erEscape(row.startText)}<br>至 ${erEscape(row.endText)}</span>${kind === 'leave' ? `<small class="er-period-label">${erRecordPeriodLabel(row)}</small>` : ''}</span><span class="er-record-tail"><strong>${erEscape(row.duration_hours)} 小時</strong>${kind === 'overtime' ? `<small>${erEscape(erOvertimeRestLabel(row))}</small>` : ''}${erBadge(row)}</span></button>`).join('')}</div>${erPagination(kind, detail)}`;
 }
 function erRecordPeriodLabel(row) {
     const mode = row.dateSelectionMode || row.date_selection_mode;
@@ -108,10 +113,14 @@ function erRecordPeriodLabel(row) {
     if (mode === 'explicit_dates') return `實際 ${(row.dailyHours || []).length} 日，僅勾選日期請假`;
     return '舊單沿用原起訖範圍';
 }
+function erOvertimeRestLabel(row) {
+    const rest = row.breakMinutes ?? row.break_minutes;
+    return rest == null ? '休息未記錄' : '休息 ' + rest + ' 分鐘';
+}
 function erFullRecord(kind, row) {
     const current = erState(kind);
     if (!row) return `<p class="er-empty">${current.error ? '無法載入這張申請，請返回紀錄後重試。' : '讀取整張申請中…'}</p>`;
-    const fields = [['單號', row.id], ['員工', `${row.employeeId} ${row.employeeName}`], ['申請人', `${row.applicantId} ${row.applicantName}`], ['完整開始', row.startText], ['完整結束', row.endText], ['整筆時數', `${row.duration_hours} 小時`], ['申請時間', row.createdText], ['流程', row.approvalModeText]];
+    const fields = [['單號', row.id], ['員工', `${row.employeeId} ${row.employeeName}`], ['申請人', `${row.applicantId} ${row.applicantName}`], ['完整開始', row.startText], ['完整結束', row.endText], ['整筆時數', `${row.duration_hours} 小時`], ...(kind === 'overtime' ? [['休息', erOvertimeRestLabel(row)]] : []), ['申請時間', row.createdText], ['流程', row.approvalModeText]];
     const policy = row.reviewPolicy, reviewers = policy?.reviewers || [];
     return `<div class="er-record-detail"><div class="er-pane-heading"><h3>${erEscape(row.leaveTypeName || '加班')}申請詳情</h3>${erBadge(row)}</div><p class="er-note">這是整張申請；多個日期與時段一起審核、一起撤回。</p>
         <dl class="er-facts">${fields.map(([label, value]) => `<div><dt>${label}</dt><dd>${erEscape(value || '—')}</dd></div>`).join('')}</dl>
@@ -142,7 +151,7 @@ function erActionConfirmation(kind) {
 function erSummary(kind, draft) { return `<strong data-er-summary>${erDraftSummary(kind, draft)}</strong><span>${kind === 'leave' ? '同一假別，所有時段合為 1 張申請' : '單一連續時段，可跨午夜與多日'}</span>`; }
 function erConfirmation(kind, draft) {
     const type = state.dashboard?.leave?.leaveTypes?.find((row) => row.id === draft.leaveTypeId);
-    return `<div class="er-confirmation"><h4>送出前核對整張申請</h4>${kind === 'leave' ? `<p><strong>${erEscape(type?.name || draft.leaveTypeId)}</strong></p><ol class="er-confirm-periods">${draft.rows.map((row) => `<li><strong>${erEscape(row.date)}</strong><span>${erEscape(row.startTime)}–${row.endTime === '00:00' ? '24:00' : erEscape(row.endTime)} · ${erEscape(row.hours)} 小時</span>${row.breakMinutes !== undefined ? `<span>休息 ${erEscape(row.breakMinutes)} 分鐘，已從請假時數扣除</span>` : ''}</li>`).join('')}</ol>` : `<p>${erEscape(draft.startDate)} ${erEscape(draft.startTime)}<br>至 ${erEscape(draft.endDate)} ${erEscape(draft.endTime)}</p>`}
+    return `<div class="er-confirmation"><h4>送出前核對整張申請</h4>${kind === 'leave' ? `<p><strong>${erEscape(type?.name || draft.leaveTypeId)}</strong></p><ol class="er-confirm-periods">${draft.rows.map((row) => `<li><strong>${erEscape(row.date)}</strong><span>${erEscape(row.startTime)}–${row.endTime === '00:00' ? '24:00' : erEscape(row.endTime)} · ${erEscape(row.hours)} 小時</span>${row.breakMinutes !== undefined ? `<span>休息 ${erEscape(row.breakMinutes)} 分鐘，已從請假時數扣除</span>` : ''}</li>`).join('')}</ol>` : `<p>${erEscape(draft.startDate)} ${erEscape(draft.startTime)}<br>至 ${erEscape(draft.endDate)} ${erEscape(draft.endTime)}<br>休息 ${erEscape(draft.breakMinutes)} 分鐘 · 扣除後 ${erEscape(draft.durationHours)} 小時</p>`}
         <h4>事由</h4><p class="er-reason">${erEscape(draft.reason || '未填寫')}</p>${kind === 'leave' ? `<div data-er-leave-meals>${renderLeaveMealOptions(draft)}</div>` : ''}<p class="er-note">${kind === 'leave' ? '送出後依指定主管審核規則，再交管理部終審。' : '送出後交指定主管審核，本人的申請不會自動核准。'}實際審核主管與進度可在送出後的整單詳情查看。</p></div>`;
 }
 function erEditor(kind) {
@@ -157,7 +166,7 @@ function erEditor(kind) {
                 <details class="er-common"><summary>共用時段 · 套用全部已選日期</summary><div class="er-input-grid">${erInput(kind, 'commonStart', '開始時間', draft.commonStart, 'time')}${erInput(kind, 'commonEnd', '結束時間', draft.commonEnd, 'time')}${erInput(kind, 'commonBreakMinutes', '休息時間（分鐘）', draft.commonBreakMinutes, 'number', 'min="0" max="1439" step="1" required')}${erInput(kind, 'commonHours', '扣除休息後（小時）', draft.commonHours, 'number', 'min="0.01" max="24" step="0.01"')}</div><div class="er-inline-actions">${erButton(kind, 'auto-break', '恢復自動休息與時數')}${erButton(kind, 'apply-time', '套用到所有時段')}</div><p class="er-note">新選日期也會使用此設定；套用會覆蓋下方各段時間、休息與時數。</p></details>
                 ${draft.rows.length ? `<div class="er-periods">${draft.rows.map((row, index) => `<section class="er-period"><div class="er-period-heading"><strong>第 ${index + 1} 段</strong>${erButton(kind, 'remove-row', '移除', `data-row="${index}" aria-label="移除第 ${index + 1} 段"`)}</div>${erInput(kind, 'date', '日期', row.date, 'date', 'required', index)}<div class="er-input-grid">${erInput(kind, 'startTime', '開始', row.startTime, 'time', 'required', index)}${erInput(kind, 'endTime', '結束', row.endTime, 'time', 'required', index)}${erInput(kind, 'breakMinutes', '休息時間（分鐘）', row.breakMinutes ?? '0', 'number', 'min="0" max="1439" step="1" required', index)}${erInput(kind, 'hours', '扣除休息後（小時）', row.hours, 'number', 'min="0.01" max="24" step="0.01" required', index)}</div><div class="er-inline-actions">${erButton(kind, 'auto-break', '恢復自動休息與時數', `data-row="${index}"`)}${erButton(kind, 'duplicate-row', '＋ 同日另一時段', `data-row="${index}"`)}</div><small>結束 00:00 表示該日 24:00；跨夜請拆成兩天。</small></section>`).join('')}</div>` : '<p class="er-empty">先在日曆選取日期，可選多個不連續日期；或按下方新增日期。</p>'}
                 ${erButton(kind, 'add-row', '＋ 新增日期／時段')}<p class="er-note">已選 ${dates.size} 日。完整涵蓋 12:20–13:00 時預帶休息 40 分鐘，其他時段預帶 0 分鐘，可自行調整。修改休息會重新計算淨時數；手動休息或淨時數不會被時間變更覆蓋，可按「恢復自動休息與時數」重新帶入。最多 740 段，日期範圍最多 370 日。</p>`
-                : `<p class="er-note">本人：${erEscape(state.dashboard?.user?.id)} ${erEscape(state.dashboard?.user?.name)}</p><h4>1　連續加班區間</h4><div class="er-input-grid">${erInput(kind, 'startDate', '開始日期', draft.startDate, 'date', 'required')}${erInput(kind, 'startTime', '開始時間', draft.startTime, 'time', 'required')}${erInput(kind, 'endDate', '結束日期', draft.endDate, 'date', 'required')}${erInput(kind, 'endTime', '結束時間', draft.endTime, 'time', 'required')}</div><div class="er-inline-actions">${erButton(kind, 'same-day', '結束在當日')}${erButton(kind, 'next-day', '結束在隔日')}</div>${erInput(kind, 'durationHours', '扣除休息後時數（小時）', draft.durationHours, 'number', 'min="0.01" step="0.01" required')}<p class="er-note">可直接修改完整結束日期。時數依起訖帶入，手動調整後保留；不連續日期請分筆申請。</p>`}
+                : `<p class="er-note">本人：${erEscape(state.dashboard?.user?.id)} ${erEscape(state.dashboard?.user?.name)}</p><h4>1　連續加班區間</h4><div class="er-input-grid er-overtime-period">${erInput(kind, 'startDate', '開始日期', draft.startDate, 'date', 'required')}${erInput(kind, 'startTime', '開始時間', draft.startTime, 'time', 'required')}${erInput(kind, 'endDate', '結束日期', draft.endDate, 'date', 'required')}${erInput(kind, 'endTime', '結束時間', draft.endTime, 'time', 'required')}${erInput(kind, 'breakMinutes', '休息（分鐘）', draft.breakMinutes, 'number', 'min="0" step="1" required')}${erInput(kind, 'durationHours', '扣除休息後時數（小時）', draft.durationHours, 'number', 'readonly aria-readonly="true" min="0.01" step="0.01"')}</div><div class="er-inline-actions">${erButton(kind, 'same-day', '結束在當日')}${erButton(kind, 'next-day', '結束在隔日')}</div><p class="er-note">可直接修改完整結束日期。填入實際休息分鐘，時數由起訖扣除休息自動計算；不連續日期請分筆申請。</p>`}
             ${kind === 'leave' ? `<div data-er-leave-meals>${renderLeaveMealOptions(draft)}</div>` : ''}
             <label class="er-field er-reason-field"><span>${kind === 'leave' ? '3' : '2'}　${label}事由${kind === 'leave' ? '（必填）' : ''}</span><textarea data-er-field="reason" data-er-focus="reason" data-kind="${kind}" rows="3" ${kind === 'leave' ? 'required' : ''} placeholder="請簡述${label}原因">${erEscape(draft.reason)}</textarea></label>
             <p class="er-note">${kind === 'leave' ? '同一假別的所有時段一起送出，依既有指定主管與管理部終審規則處理。' : '指定主管依既有規則審核；核准不會直接修改打卡或出勤時間。'}</p></div>`}
@@ -265,7 +274,7 @@ async function erLoadBalances() {
     finally { if (erIdentity() === identity && employeeRequests.identity === identity && sequence === employeeRequests.balanceSequence) { employeeRequests.balanceLoading = false; erPaint('leave'); } }
 }
 function erAutoHours(kind, draft) {
-    if (kind === 'overtime' && !draft.hoursManual) draft.durationHours = erWallHours(draft.startDate, draft.startTime, draft.endDate, draft.endTime);
+    if (kind === 'overtime') draft.durationHours = erOvertimeNetHours(draft);
     if (kind === 'leave') {
         if (!draft.commonBreakManual) draft.commonBreakMinutes = String(leaveSegmentDefaultBreakMinutes(draft.commonStart, draft.commonEnd));
         if (!draft.commonManual) draft.commonHours = leaveSegmentNetHours(draft.commonStart, draft.commonEnd, draft.commonBreakMinutes);
@@ -283,10 +292,10 @@ function erUpdateDraftInput(target) {
         const hours = target.closest('.er-period')?.querySelector('[data-er-row-field="hours"]'); if (hours && key !== 'hours') hours.value = row.hours;
         const rest = target.closest('.er-period')?.querySelector('[data-er-row-field="breakMinutes"]'); if (rest && key !== 'breakMinutes') rest.value = row.breakMinutes;
     } else {
-        const key = target.dataset.erField, allowed = kind === 'leave' ? ['leaveTypeId', 'commonStart', 'commonEnd', 'commonBreakMinutes', 'commonHours', 'reason'] : ['startDate', 'startTime', 'endDate', 'endTime', 'durationHours', 'reason'];
+        const key = target.dataset.erField, allowed = kind === 'leave' ? ['leaveTypeId', 'commonStart', 'commonEnd', 'commonBreakMinutes', 'commonHours', 'reason'] : ['startDate', 'startTime', 'endDate', 'endTime', 'breakMinutes', 'reason'];
         if (!allowed.includes(key)) return;
         draft[key] = target.value;
-        if (key === 'durationHours') draft.hoursManual = true;
+
         if (key === 'commonHours') draft.commonManual = true;
         if (key === 'commonBreakMinutes') { draft.commonBreakManual = true; draft.commonManual = false; }
         erAutoHours(kind, draft);
