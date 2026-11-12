@@ -245,11 +245,11 @@ const dmPreviousSync = handleRealtimeSyncMessage;
 handleRealtimeSyncMessage = async function syncMetricDashboard(payload) {
     if (payload?.type === 'dashboardMetrics' && state.dashboard?.role === 'admin') {
         if (dmState.busy || dmState.dirty) return;
-        return reloadDashboard();
+        return reloadDashboard('', 'info', { background: true });
     }
     if (payload?.type === 'meals' && state.dashboard?.role === 'admin' && typeof mealActive === 'function' && mealActive() &&
         (mealState.busy || mealState.dirty || mealState.memberEdit || document.activeElement?.closest('[data-meal-form]'))) return dmPreviousSync(payload);
-    if (['meals', 'salaryAdvances'].includes(payload?.type) && state.dashboard?.role === 'admin') return reloadDashboard();
+    if (['meals', 'salaryAdvances'].includes(payload?.type) && state.dashboard?.role === 'admin') return reloadDashboard('', 'info', { background: true });
     return dmPreviousSync(payload);
 };
 const dmPreviousLogout = handleLogout;

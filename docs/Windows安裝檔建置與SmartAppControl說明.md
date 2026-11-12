@@ -2,6 +2,21 @@
 
 日期：2026-10-31；適用版本：v1.46.1。本文記錄本機唯讀診斷與專案建置方案，不代表正式服務已更新。
 
+## 2026-11-13 追查：建置成功與執行允許是兩件事
+
+- v1.51.0 的 Setup、NSIS 靜態解除安裝程式與封裝來源校驗成功。2026-11-12 21:02:50 被擋的是 `dist/win-unpacked/TanChin-Time-Clock-SQLite3.exe`，不是產生解除安裝程式的暫存 helper。2026-11-13 使用同一主程式及全新的隔離 userData 再驗，仍在程序啟動前被阻擋，沒有連上或修改正式資料。
+- Code Integrity 3033／3077 指向 `VerifiedAndReputableDesktop`，GUID、版本及政策雜湊和下方先前診斷相同；Requested Signing Level 2、Validated Signing Level 1、狀態 `0xc0e90002`。本機 Smart App Control 為 On。沒有證據可把這次差異歸因於漏簽、政策剛開啟或程式被判為病毒。
+- 重新檢查 v1.49.0、v1.50.0、v1.51.0 的 Setup 都是 `NotSigned`；舊版曾成功不表示舊版有簽章。v1.50.0 與 v1.51.0 的封裝設定一致。檔案沒有 `Zone.Identifier` 資料串流，因此移除下載封鎖標記不適用這次問題。
+- 另一正式主機的唯讀 health 當日回覆 v1.51.0、桌面連線中。這證明該版本在該主機正在運作，不證明開發機或其他電腦都會允許相同檔案，也不代表本次執行了部署。
+- Microsoft 說明 Smart App Control 會參考應用程式信譽及受信任簽章；事件沒有揭露足以比較前後版本的雲端判定細節。簽章是可驗證的發布者身分及檔案完整性證明；自己開發的軟體也可能因未被識別而被攔截。參考 [Smart App Control 概述](https://learn.microsoft.com/en-us/windows/apps/develop/smart-app-control/overview) 與 [程式碼簽章要求](https://learn.microsoft.com/en-us/windows/apps/develop/smart-app-control/code-signing-for-smart-app-control)。
+- 本機 CurrentUser/My、LocalMachine/My 未找到程式碼簽章憑證，也未設定建置簽章環境變數。尚無可用的受信任發布者身分可直接完成簽署；不能宣稱這項執行限制已修復。未修改防護政策、加入防毒排除、安裝自簽信任根或以改名／換載入方式掩蓋封鎖。
+
+### 後續採正式簽章時的交付條件
+
+目前 electron-builder 可使用現有受信任程式碼簽章憑證。取得合法可用的憑證或簽章服務後，應在正式發行設定啟用 `forceCodeSigning`，簽署主程式、相關可執行模組、安裝及解除安裝程式，並核對 Authenticode 狀態、發布者、時間戳記、最終產物雜湊及原政策下的啟動。憑證密碼、私鑰與簽章服務權杖不寫入 Git 或操作紀錄。僅建置成功、僅有自簽章，或單台電腦可執行，都不等於已完成受信任發行。
+
+後續版本仍需獨立記錄：測試結果、Setup 建置、來源校驗、隔離啟動，以及真正主機的安裝／重啟結果。不可用其中一項替代其他項目。
+
 ## 已確認的阻擋原因
 
 2026-10-31 10:28:55（臺北時間），Windows CodeIntegrity Operational 同時記錄 3033、3077 與簽章資訊事件 3089：

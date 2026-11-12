@@ -246,7 +246,7 @@ handleRealtimeSyncMessage = async function syncLeaveEntitlements(payload) {
             if (leState.dirty || leState.preview || leState.busy) { leMessage('額度、請假或名冊有異動，草稿已保留；請重新整理後預覽。', 'info'); return; }
             await leLoad(); if (payload.type === 'leaveEntitlements') return;
         } else leState.data = null;
-        if (payload.type === 'leaveEntitlements') return reloadDashboard();
+        if (payload.type === 'leaveEntitlements') return reloadDashboard('', 'info', { background: true });
     }
     return lePrevSync(payload);
 };

@@ -492,7 +492,7 @@ handleRealtimeSyncMessage = async function handleSupervisorSync(payload) {
         if (spRoot() && supervisorState.dirty) { spMessage('主管設定或名冊有異動，請先確認並重新整理；未儲存內容已保留。', 'info'); return; }
         supervisorState.data = null; supervisorState.assignments = null; supervisorState.routes = null; supervisorState.sequence += 1;
         if (spRoot() && !supervisorState.busy) { supervisorState.dirty = false; supervisorState.form = ''; await spLoad(); return; }
-        if (payload.type === 'supervisorAssignments') return reloadDashboard();
+        if (payload.type === 'supervisorAssignments') return reloadDashboard('', 'info', { background: true });
     }
     if (spRoot() && ['leaveRequests', 'overtimeRequests', 'meals'].includes(payload?.type)) {
         if (payload.sessionToken === state.token || supervisorState.busy) return;

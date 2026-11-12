@@ -779,7 +779,94 @@ async function loadPublicDisplaySettings() {
     }
 }
 
+const dashboardSyncEdits = new Set();
+const dashboardSyncSubmissions = new Set();
+let dashboardSyncPending = false;
+let dashboardSyncRunning = false;
+let dashboardSyncQueued = false;
+
+function dashboardSyncScope(dashboard = state.dashboard) {
+    const impersonation = dashboard?.impersonation;
+    return JSON.stringify([dashboard?.role, dashboard?.user?.id, Boolean(impersonation?.active), impersonation?.realEmployeeId,
+        [...(dashboard?.permissions?.admin || [])].sort()]);
+}
+
+function dashboardSyncHasEdits(root = ui.dashboardContent) {
+    for (const node of dashboardSyncEdits) {
+        if (!node.isConnected) dashboardSyncEdits.delete(node);
+    }
+    const active = document.activeElement;
+    return [...dashboardSyncEdits, ...dashboardSyncSubmissions].some(node => root.contains(node)) || (root.contains(active) &&
+        Boolean(active?.matches('input,select,textarea,[contenteditable="true"]'))) ||
+        Boolean(document.querySelector('dialog[open]'));
+}
+
+function showDashboardSyncNotice(show) {
+    let notice = document.getElementById('dashboard-sync-notice');
+    if (show && !notice) {
+        notice = document.createElement('p');
+        notice.id = 'dashboard-sync-notice';
+        notice.className = 'inline-message info';
+        notice.setAttribute('role', 'status');
+        notice.textContent = '有新資料。已保留目前輸入，完成儲存或取消編輯後會同步。需要立即更新時，可先確認捨棄未儲存內容再重新整理。';
+        ui.dashboardContent.before(notice);
+    } else if (!show) notice?.remove();
+}
+
+function updateDashboardPunchSummary(dashboard) {
+    const current = state.dashboard;
+    const keys = new Set(['todayPunchCount', 'todayAbnormalPunchCount']);
+    const items = dashboard.dashboardMetrics?.catalog?.filter(item => keys.has(item.key)) || [];
+    if (current.dashboardMetrics && items.length) {
+        current.dashboardMetrics.catalog = current.dashboardMetrics.catalog.map(item => items.find(next => next.key === item.key) || item);
+    }
+    for (const key of keys) {
+        if (current.summary && dashboard.summary) current.summary[key] = dashboard.summary[key];
+    }
+    if (current.insights && dashboard.insights) current.insights.todayAttendance = dashboard.insights.todayAttendance;
+    const attendance = getScopedAttendanceSummary(current);
+    for (const item of items) {
+        const value = ui.dashboardContent.querySelector(`.dm-strip [data-key="${item.key}"] strong`);
+        const count = item.key === 'todayPunchCount' ? attendance.normalEmployees.length : attendance.abnormalRecords.length + attendance.failureLogs.length;
+        if (value?.firstChild?.nodeType === Node.TEXT_NODE) value.firstChild.nodeValue = item.available ? String(count) : '—';
+    }
+}
+
+function scheduleDashboardSync() {
+    if (!dashboardSyncPending || dashboardSyncRunning || dashboardSyncQueued || state.dashboard?.role !== 'admin' || dashboardSyncHasEdits()) return;
+    dashboardSyncQueued = true;
+    setTimeout(() => {
+        dashboardSyncQueued = false;
+        if (dashboardSyncPending && state.dashboard?.role === 'admin' && !dashboardSyncHasEdits()) requestDashboardPunchSync();
+    }, 0);
+}
+
+async function requestDashboardPunchSync() {
+    if (dashboardSyncRunning) { dashboardSyncQueued = true; return; }
+    dashboardSyncRunning = true;
+    try {
+        do {
+            dashboardSyncQueued = false;
+            await reloadDashboard('', 'info', { background: true });
+        } while (dashboardSyncQueued && state.dashboard?.role === 'admin');
+    } catch (error) {
+        console.error('打卡資料同步失敗:', error);
+    } finally {
+        dashboardSyncRunning = false;
+    }
+}
+
 async function reloadDashboard(message = "", type = "success", options = {}) {
+    const initialDashboard = state.dashboard;
+    const initialToken = state.token;
+    const stillCurrent = () => state.token === initialToken && (!options.background || state.dashboard === initialDashboard);
+    const deferBackgroundRender = (dashboard) => {
+        if (!options.background || dashboard.role !== 'admin' || dashboardSyncScope(dashboard) !== dashboardSyncScope(initialDashboard) || !dashboardSyncHasEdits()) return false;
+        dashboardSyncPending = true;
+        updateDashboardPunchSummary(dashboard);
+        showDashboardSyncNotice(true);
+        return true;
+    };
     // ★ [7] 即時同步或一般重新載入時保留管理者目前的請假／加班篩選與頁碼。
     const previousRequestPages = state.dashboard?.role === "admin"
         ? {
@@ -788,12 +875,20 @@ async function reloadDashboard(message = "", type = "success", options = {}) {
         }
         : { leave: null, overtime: null };
     const dashboard = await fetchDashboard();
+    if (!stillCurrent() || deferBackgroundRender(dashboard)) return;
+    if (options.background && dashboardSyncScope(dashboard) !== dashboardSyncScope(initialDashboard)) {
+        state.adminReport = null;
+        renderDashboard(dashboard);
+        if (message) setMessage(ui.dashboardMessage, message, type);
+        return;
+    }
     if (dashboard.role === "admin") {
         const requestRefreshes = [
             ["leave", previousRequestPages.leave, "/api/browser/admin/leave/requests/query"],
             ["overtime", previousRequestPages.overtime, "/api/browser/admin/overtime/requests/query"]
         ];
         for (const [kind, previousPage, endpoint] of requestRefreshes) {
+            if (!stillCurrent()) return;
             if (!previousPage) continue;
             const resetSnapshot = Array.isArray(options.resetRequestKinds) && options.resetRequestKinds.includes(kind);
             try {
@@ -817,6 +912,9 @@ async function reloadDashboard(message = "", type = "success", options = {}) {
             }
         }
     }
+    if (!stillCurrent()) return;
+    const initialReport = state.adminReport;
+    let refreshedReport = null;
     if (dashboard.role === "admin" && ensureAdminReportState().queried) {
         const reportState = ensureAdminReportState();
         try {
@@ -829,8 +927,9 @@ async function reloadDashboard(message = "", type = "success", options = {}) {
                 },
                 auth: true
             });
-            state.adminReport = {
+            refreshedReport = {
                 ...reportResult.data,
+                category: reportState.category,
                 queried: true
             };
         } catch (error) {
@@ -861,6 +960,8 @@ async function reloadDashboard(message = "", type = "success", options = {}) {
             console.error("Failed to refresh developer audit logs:", error);
         }
     }
+    if (!stillCurrent() || deferBackgroundRender(dashboard)) return;
+    if (refreshedReport && state.adminReport === initialReport) state.adminReport = refreshedReport;
     renderDashboard(dashboard);
     if (message) setMessage(ui.dashboardMessage, message, type);
 }
@@ -950,7 +1051,7 @@ async function handleRealtimeSyncMessage(payload) {
     if (!shouldReload) return;
 
     try {
-        await reloadDashboard(`已同步${getRealtimeSyncLabel(type)}最新內容。`, "info");
+        await reloadDashboard(`已同步${getRealtimeSyncLabel(type)}最新內容。`, "info", { background: true });
     } catch (error) {
         console.error("即時同步失敗:", error);
     }
@@ -964,7 +1065,13 @@ function initializeRealtimeSync() {
     eventSource.onmessage = (event) => {
         try {
             const payload = JSON.parse(event.data || "{}");
-            handleRealtimeSyncMessage(payload);
+            if (state.syncEventSource !== eventSource) return;
+            if (state.dashboard?.role === 'admin' && payload.type === 'punchRecords') {
+                if (payload.origin === 'browser' && payload.sessionToken && payload.sessionToken === state.token) return;
+                requestDashboardPunchSync();
+                return;
+            }
+            Promise.resolve(handleRealtimeSyncMessage(payload)).catch(error => console.error('即時同步失敗:', error));
         } catch (error) {
             console.error("解析即時同步事件失敗:", error);
         }
@@ -1887,11 +1994,73 @@ function renderShiftRows(shifts) {
     `).join("");
 }
 
+function adminReportCategories() {
+    return [
+        ["", "查詢筆數", "recordCount"], ["valid", "正常筆數", "validCount"],
+        ["leave", "請假筆數", "leaveCount"],
+        ["abnormal", "異常筆數", "abnormalCount"], ["raw_abnormal", "原始異常", "rawAbnormalCount"],
+        ["missing_punch", "缺上／下班卡日數", "missingPunchDayCount"], ["pending_punch", "待下班卡日數", "pendingPunchDayCount"],
+        ["duplicate", "重複筆數", "duplicateCount"], ["in", "上班打卡", "inCount"], ["out", "下班打卡", "outCount"]
+    ];
+}
+
+function adminReportFilteredRows(reportState) {
+    return reportState.category ? reportState.records.filter(record => record.reportCategories?.includes(reportState.category)) : reportState.records;
+}
+
+function adminReportMonthRange(offset, now = Date.now()) {
+    const taipei = new Date(now + 8 * 3600000);
+    const year = taipei.getUTCFullYear(), month = taipei.getUTCMonth() + offset;
+    return {
+        startDate: new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10),
+        endDate: new Date(Date.UTC(year, month + 1, 0)).toISOString().slice(0, 10)
+    };
+}
+
+function syncAdminReportEmployee(form, employees, fromCode = true) {
+    const code = form.elements.employeeCode, select = form.elements.employeeId;
+    if (!code || !select) return select?.value || "";
+    if (!fromCode) code.value = select.value;
+    const value = code.value.trim();
+    const employee = value ? employees.find(item => item.id === value) : null;
+    const error = value && !employee ? "找不到此工號，請輸入完整且正確的員工工號。" : "";
+    select.value = error ? "__invalid_report_employee__" : employee?.id || "";
+    const invalidOption = select.querySelector?.('[value="__invalid_report_employee__"]');
+    if (invalidOption) invalidOption.hidden = !error;
+    code.setCustomValidity(error);
+    const feedback = form.querySelector("[data-report-employee-feedback]");
+    if (feedback) feedback.textContent = error || (employee ? employee.name : "");
+    if (error) code.setAttribute("aria-invalid", "true");
+    else code.removeAttribute("aria-invalid");
+    return employee?.id || "";
+}
+
+function handleAdminReportEmployeeInput(event) {
+    const target = event.target;
+    if (target.name !== (event.type === "input" ? "employeeCode" : "employeeId")) return;
+    const form = target.closest("#attendance-report-form");
+    if (form) syncAdminReportEmployee(form, getDatasets().employees || [], target.name === "employeeCode");
+}
+
+function renderAdminReportStats(reportState) {
+    return `<div class="stats-grid report-filter-stats">${adminReportCategories().map(([category, label, key]) =>
+        `<button type="button" class="stat-card" data-action="filter-admin-report" data-category="${category}" aria-pressed="${(reportState.category || "") === category}" aria-controls="admin-report-detail"><span class="stat-label">${label}${category === "" ? "（全部）" : ""}</span><strong class="stat-value">${escapeHtml(reportState.summary?.[key] ?? 0)}</strong></button>`
+    ).join("")}<div class="stat-card"><span class="stat-label">涵蓋員工數</span><strong class="stat-value">${escapeHtml(reportState.summary?.employeeCount ?? 0)}</strong></div></div>`;
+}
+
+function renderAdminReportFilterNote(reportState) {
+    if (!reportState.queried) return "";
+    const label = adminReportCategories().find(([category]) => category === reportState.category)?.[1] || "全部";
+    return `目前顯示與匯出：${escapeHtml(reportState.category ? label : "全部")} · 明細 ${adminReportFilteredRows(reportState).length} 筆`;
+}
+
 function renderAdminReportRows(reportState) {
     if (!reportState.queried) {
         return renderEmptyState("請先選擇日期區間並查詢考勤報表。");
     }
-    if (!reportState.records.length) {
+    const records = adminReportFilteredRows(reportState);
+    if (!records.length) {
+        if (reportState.category) return renderEmptyState("此摘要篩選沒有符合的考勤明細。按已選項目或「查詢筆數（全部）」清除。");
         return renderEmptyState("此條件下沒有查到任何出勤紀錄。");
     }
 
@@ -1914,13 +2083,15 @@ function renderAdminReportRows(reportState) {
                     </tr>
                 </thead>
                 <tbody>
-                    ${reportState.records.map((record) => {
+                    ${records.map((record) => {
                         const leaveWindow = record.recordKind === "leave" && record.leaveStartText
                             ? `${record.leaveStartText || "-"} ~ ${record.leaveEndText || "-"}`
                             : "-";
                         const leaveHours = record.recordKind === "leave" && record.leaveDurationHours !== undefined && record.leaveDurationHours !== null
                             ? `${record.leaveDurationHours} 小時`
                             : "-";
+                        const flagLabels = { missing_in: "缺上班卡", missing_out: "缺下班卡", awaiting_out: "待下班卡" };
+                        const flags = (record.attendanceFlags || []).map(flag => flagLabels[flag]).filter(Boolean);
                         return `
                             <tr>
                                 <td>${escapeHtml(record.employeeId || "-")}</td>
@@ -1930,7 +2101,7 @@ function renderAdminReportRows(reportState) {
                                 <td>${escapeHtml(record.timeText || "-")}</td>
                                 <td>${escapeHtml(record.shift || "-")}</td>
                                 <td>${escapeHtml(record.typeText || "-")}</td>
-                                <td>${escapeHtml(record.attendanceStatusText || "-")}</td>
+                                <td>${escapeHtml(record.attendanceStatusText || "-")}${flags.length ? `<small class="report-attendance-flags">${escapeHtml(flags.join("、"))}</small>` : ""}</td>
                                 <td>${escapeHtml(leaveWindow)}</td>
                                 <td>${escapeHtml(leaveHours)}</td>
                                 <td>${escapeHtml(record.sourceText || "-")}</td>
@@ -1949,7 +2120,7 @@ function renderAdminReportSection(datasets) {
         ? `${reportState.filters.employeeId} ${reportState.filters.employeeName || ""}`.trim()
         : "全部員工";
     const employeeOptions = renderOptions(datasets.employees, {
-        labelFn: (employee) => `${employee.id} ${employee.name} / ${employee.department || "未設定部門"}`,
+        labelFn: (employee) => `${employee.name}（${employee.id}） / ${employee.department || "未設定部門"}`,
         selectedValue: reportState.filters.employeeId
     });
 
@@ -1972,18 +2143,20 @@ function renderAdminReportSection(datasets) {
             <article class="sub-panel report-query-panel">
                 <h3>查詢條件與匯出</h3>
                 <form id="attendance-report-form" class="stack-form">
-                    <div class="field-grid three">
+                    <div class="field-grid report-query-fields">
+                        <label class="field"><span>員工工號</span><input name="employeeCode" value="${escapeHtml(reportState.filters.employeeId || "")}" placeholder="輸入完整工號" autocomplete="off" aria-describedby="report-employee-feedback"><small id="report-employee-feedback" data-report-employee-feedback aria-live="polite"></small></label>
                         <label class="field">
                             <span>員工範圍</span>
                             <select name="employeeId">
                                 <option value="">全部員工</option>
+                                <option value="__invalid_report_employee__" disabled hidden>工號不存在</option>
                                 ${employeeOptions}
                             </select>
                         </label>
-                        <label class="field">
-                            <span>開始日期</span>
-                            <input name="startDate" type="date" value="${escapeHtml(reportState.filters.startDate || "")}" required>
-                        </label>
+                        <div class="field">
+                            <div class="report-date-heading"><label for="admin-report-start-date">開始日期</label><div class="report-month-buttons" role="group" aria-label="快速選擇月份">${[[0, "本月"], [-1, "上月"], [-2, "上上月"]].map(([offset, label]) => `<button type="button" class="mini-btn" data-action="admin-report-month" data-offset="${offset}">${label}</button>`).join("")}</div></div>
+                            <input id="admin-report-start-date" name="startDate" type="date" value="${escapeHtml(reportState.filters.startDate || "")}" required>
+                        </div>
                         <label class="field">
                             <span>結束日期</span>
                             <input name="endDate" type="date" value="${escapeHtml(reportState.filters.endDate || "")}" required>
@@ -2000,7 +2173,8 @@ function renderAdminReportSection(datasets) {
                             <button class="outline-btn" type="button" data-action="export-admin-report" data-template="payroll_leave_overtime">匯出薪資請假／加班明細 CSV</button>
                         </div>
                     </div>
-                    <p class="helper-text">修改條件後請重新查詢；下方摘要、明細與匯出均以最後一次成功查詢為準。</p>
+                    <p class="helper-text">修改條件後請重新查詢；員工與日期以最後一次成功查詢為準。點摘要可篩選明細，兩種 CSV 皆套用目前的摘要篩選。</p>
+                    <p class="helper-text" data-report-filter-note aria-live="polite">${renderAdminReportFilterNote(reportState)}</p>
                     <details class="report-export-help"><summary>兩種匯出格式有什麼不同？</summary><p class="helper-text">精簡版固定 9 欄，保留舊薪資／ERP 匯入相容性；詳細版使用相同員工與日期條件，另列已核准請假與已核准加班單的起訖、核准時數、單號與原因。待審、駁回、撤回或取消的加班單不會進入薪資明細；跨日單會依各日涵蓋時段比例分攤原單核准時數。</p></details>
                 </form>
             </article>
@@ -2013,23 +2187,13 @@ function renderAdminReportSection(datasets) {
                     </div>
                 </div>
                 ${reportState.queried
-                    ? renderStatsGrid(reportState.summary || {}, {
-                        recordCount: "查詢筆數",
-                        validCount: "正常筆數",
-                        leaveCount: "請假筆數",
-                        overtimeCount: "加班筆數",
-                        abnormalCount: "異常筆數",
-                        duplicateCount: "重複筆數",
-                        employeeCount: "涵蓋員工數",
-                        inCount: "上班打卡",
-                        outCount: "下班打卡"
-                    })
+                    ? renderAdminReportStats(reportState)
                     : `<p class="helper-text">尚未查詢。請先設定日期區間與員工條件，再按「查詢報表」。</p>`}
             </article>
 
             <article class="table-card report-detail-panel">
                 <h3>考勤明細</h3>
-                ${renderAdminReportRows(reportState)}
+                <div id="admin-report-detail">${renderAdminReportRows(reportState)}</div>
             </article>
         </div>
     `;
@@ -3036,6 +3200,10 @@ function stopClock() {
 }
 
 function renderDashboard(dashboard) {
+    const keepPendingSync = dashboardSyncPending && dashboard === state.dashboard && dashboard.role === 'admin';
+    dashboardSyncEdits.clear();
+    dashboardSyncPending = keepPendingSync;
+    if (!keepPendingSync) showDashboardSyncNotice(false);
     syncDatabaseBackupUiSession(dashboard.role);
     state.dashboard = dashboard;
     syncHeroHeader(dashboard);
@@ -3060,6 +3228,7 @@ function renderDashboard(dashboard) {
     else stopClock();
 
     postRenderSetup();
+    if (keepPendingSync) scheduleDashboardSync();
 }
 
 function setActiveRole(role) {
@@ -3625,6 +3794,9 @@ async function handleLogout(isSilent = false) {
     closeDashboardInsightModal();
     state.token = "";
     state.dashboard = null;
+    dashboardSyncEdits.clear();
+    dashboardSyncPending = false;
+    showDashboardSyncNotice(false);
     state.adminReport = null;
     state.employeeWorkspacePanel = "";
     state.adminPeopleFilters = createDefaultAdminPeopleFilterState();
@@ -3699,6 +3871,28 @@ async function handleDashboardClick(event) {
             setMessage(ui.dashboardMessage, "考勤報表條件已重設。", "info");
             return;
         }
+        if (action === "admin-report-month") {
+            const offset = Number(actionTarget.dataset.offset);
+            const form = actionTarget.closest("#attendance-report-form");
+            if (!form || ![0, -1, -2].includes(offset)) return;
+            const range = adminReportMonthRange(offset);
+            for (const [key, value] of Object.entries(range)) form.elements[key].value = value;
+            form.elements.endDate.dispatchEvent(new Event("input", { bubbles: true }));
+            return;
+        }
+        if (action === "filter-admin-report") {
+            const report = ensureAdminReportState();
+            const category = actionTarget.dataset.category;
+            if (!report.queried || !adminReportCategories().some(([value]) => value === category)) return;
+            report.category = report.category === category ? "" : category;
+            const detail = document.getElementById("admin-report-detail");
+            if (detail) { detail.innerHTML = renderAdminReportRows(report); scheduleDataTableColumnFit(detail); }
+            const workspace = actionTarget.closest(".workspace-stack") || actionTarget.closest('[data-workspace-section="reports"]');
+            workspace?.querySelectorAll('[data-action="filter-admin-report"]').forEach(button => button.setAttribute("aria-pressed", String(button.dataset.category === report.category)));
+            const note = document.querySelector("[data-report-filter-note]");
+            if (note) note.textContent = renderAdminReportFilterNote(report);
+            return;
+        }
         if (action === "jump-leave-routes") {
             state.activeSections.admin = "supervisors";
             renderDashboard(state.dashboard);
@@ -3716,7 +3910,7 @@ async function handleDashboardClick(event) {
             if (!reportState.queried) {
                 throw new Error("請先查詢考勤報表，再進行匯出。");
             }
-            if (!reportState.records.length && templateId !== "payroll_leave_overtime") {
+            if ((!reportState.records.length && templateId !== "payroll_leave_overtime") || (reportState.category && !adminReportFilteredRows(reportState).length)) {
                 throw new Error("目前查詢結果沒有可匯出的資料。");
             }
             const result = await requestJson("/api/browser/admin/reports/export", {
@@ -3725,6 +3919,7 @@ async function handleDashboardClick(event) {
                     employeeId: reportState.filters.employeeId || "",
                     startDate: reportState.filters.startDate,
                     endDate: reportState.filters.endDate,
+                    category: reportState.category || "",
                     templateId
                 },
                 auth: true
@@ -4063,10 +4258,12 @@ async function handleDashboardSubmit(event) {
         }
         if (formId === "attendance-report-form") {
             const values = Object.fromEntries(new FormData(form).entries());
+            const employeeId = form.elements?.employeeCode ? syncAdminReportEmployee(form, datasets.employees || []) : values.employeeId?.trim() || "";
+            if (values.employeeCode?.trim() && !employeeId) throw new Error("找不到此工號，請輸入完整且正確的員工工號。");
             const result = await requestJson("/api/browser/admin/reports/query", {
                 method: "POST",
                 body: {
-                    employeeId: values.employeeId?.trim() || "",
+                    employeeId,
                     startDate: values.startDate,
                     endDate: values.endDate
                 },
@@ -5323,6 +5520,7 @@ function startEmployeeCardCapture(options = {}) {
 async function pullLatestEmployeeCardCaptureFromAudit({ manual = false } = {}) {
     const { input } = getEmployeeCardCaptureNodes();
     if (!input || employeeCardCaptureAuditPollInFlight) return false;
+    const token = state.token;
     const since = Number(input.dataset.startedAt || employeeCardCaptureAuditPollStartedAt || 0) || Date.now() - 15000;
     employeeCardCaptureAuditPollInFlight = true;
 
@@ -5332,6 +5530,7 @@ async function pullLatestEmployeeCardCaptureFromAudit({ manual = false } = {}) {
             auth: true,
             body: { since }
         });
+        if (state.token !== token || !input.isConnected || input.dataset.active !== 'true') return false;
         const cardNumber = String(result.data?.cardNumber || "").trim();
         if (result.data?.found && cardNumber) {
             input.readOnly = false;
@@ -6993,7 +7192,7 @@ handleRealtimeSyncMessage = async function handleRealtimeSyncMessageAuditOverrid
     if (!shouldReload) return;
 
     try {
-        await reloadDashboard(`已同步${getRealtimeSyncLabel(type)}最新內容。`, "info");
+        await reloadDashboard(`已同步${getRealtimeSyncLabel(type)}最新內容。`, "info", { background: true });
     } catch (error) {
         console.error("Failed to sync realtime dashboard update:", error);
     }
@@ -8312,7 +8511,7 @@ handleRealtimeSyncMessage = async function handleRealtimeSyncMessageSecurityOver
     const employeeSyncTypes = new Set(["punchRecords", "displaySettings", "securitySettings", "employeeDevices"]);
 
     if ((role === "admin" && adminSyncTypes.has(type)) || (role === "employee" && employeeSyncTypes.has(type))) {
-        await reloadDashboard(`已同步${getRealtimeSyncLabel(type)}最新內容。`, "info");
+        await reloadDashboard(`已同步${getRealtimeSyncLabel(type)}最新內容。`, "info", { background: true });
         return;
     }
 
@@ -10623,7 +10822,7 @@ handleRealtimeSyncMessage = async function handleRealtimeSyncMessageLeaveOverrid
     const type = payload?.type;
     const role = state.dashboard?.role;
     if (["leaveRequests", "leaveSettings"].includes(type) && ["employee", "admin"].includes(role)) {
-        await reloadDashboard(`已同步${getRealtimeSyncLabel(type)}最新內容。`, "info");
+        await reloadDashboard(`已同步${getRealtimeSyncLabel(type)}最新內容。`, "info", { background: true });
         return;
     }
     return originalHandleRealtimeSyncMessageWithLeave(payload);
@@ -10901,7 +11100,7 @@ postRenderSetup = function postRenderPaperOvertimeNet() {
 const previousRenderPaperOvertimeDraft = renderDashboard;
 let paperOvertimeDraftIdentity = '';
 renderDashboard = function renderDashboardWithPaperOvertimeDraft(dashboard) {
-    const identity = JSON.stringify([state.token, dashboard.role, dashboard.user?.id]);
+    const identity = JSON.stringify([state.token, dashboardSyncScope(dashboard)]);
     const current = document.getElementById('admin-paper-overtime-form');
     const timing = identity === paperOvertimeDraftIdentity && current?.dataset.overtimeTimingEdited
         && !current.dataset.correctionRequestId && !current.dataset.overtimeDraftSubmitted
@@ -11257,7 +11456,7 @@ handleRealtimeSyncMessage = async function handleRealtimeSyncMessageOvertimeOver
     const type = payload?.type;
     const role = state.dashboard?.role;
     if (type === "overtimeRequests" && ["employee", "admin"].includes(role)) {
-        await reloadDashboard(`已同步${getRealtimeSyncLabel(type)}最新內容。`, "info");
+        await reloadDashboard(`已同步${getRealtimeSyncLabel(type)}最新內容。`, "info", { background: true });
         return;
     }
     return originalHandleRealtimeSyncMessageWithOvertime(payload);
@@ -11903,12 +12102,12 @@ const originalHandleRealtimeSyncMessageWithAccountAccess = handleRealtimeSyncMes
 handleRealtimeSyncMessage = async function handleRealtimeSyncMessageAccountAccessOverride(payload) {
     const type = payload?.type;
     const role = state.dashboard?.role;
-    if (type === "accountAccess" && ["developer", "system_admin"].includes(role)) {
-        await reloadDashboard("帳號權限設定已更新。", "info");
+    if (type === "accountAccess" && ["admin", "developer", "system_admin"].includes(role)) {
+        await reloadDashboard("帳號權限設定已更新。", "info", { background: true });
         return;
     }
     if (type === "workspaceNavOrder" && ["admin", "developer"].includes(role)) {
-        await reloadDashboard("主功能頁籤排序已更新。", "info");
+        await reloadDashboard("主功能頁籤排序已更新。", "info", { background: true });
         return;
     }
     return originalHandleRealtimeSyncMessageWithAccountAccess(payload);
@@ -13233,6 +13432,18 @@ function initialize() {
     });
     ui.logoutBtn.addEventListener("click", () => handleLogout());
     ui.dashboardContent.addEventListener("click", handleDashboardClick);
+    ui.dashboardContent.addEventListener("input", handleAdminReportEmployeeInput);
+    ui.dashboardContent.addEventListener("change", handleAdminReportEmployeeInput);
+    const rememberDashboardEdit = (event) => {
+        if (state.dashboard?.role !== 'admin') return;
+        const field = event.target;
+        if (field.matches('input:not([type="hidden"]),select,textarea,[contenteditable="true"]')) dashboardSyncEdits.add(field.form || field.closest('form') || field);
+    };
+    ui.dashboardContent.addEventListener('input', rememberDashboardEdit, true);
+    ui.dashboardContent.addEventListener('change', rememberDashboardEdit, true);
+    ui.dashboardContent.addEventListener('reset', (event) => { dashboardSyncEdits.delete(event.target); scheduleDashboardSync(); }, true);
+    ui.dashboardContent.addEventListener('focusout', () => setTimeout(scheduleDashboardSync, 0));
+    new MutationObserver(scheduleDashboardSync).observe(ui.dashboardContent, { childList: true, subtree: true });
     ui.dashboardContent.addEventListener("change", handleDashboardChange);
     ui.dashboardContent.addEventListener("change", (event) => {
         if (event.target.id === "database-backup-destination" && !databaseBackupUi.busy) {
@@ -13247,7 +13458,16 @@ function initialize() {
     ui.dashboardContent.addEventListener("keydown", handleEmployeeCardCaptureKeydown);
     ui.dashboardContent.addEventListener("focusin", handleEmployeeCardCaptureFocus);
     // Use capture so dynamically-rendered forms always reach the shared submit handler.
-    ui.dashboardContent.addEventListener("submit", handleDashboardSubmit, true);
+    ui.dashboardContent.addEventListener("submit", async (event) => {
+        const tracked = state.dashboard?.role === 'admin' ? event.target : null;
+        if (tracked) dashboardSyncSubmissions.add(tracked);
+        try {
+            await handleDashboardSubmit(event);
+        } finally {
+            if (tracked) dashboardSyncSubmissions.delete(tracked);
+            scheduleDashboardSync();
+        }
+    }, true);
     ui.dashboardContent.addEventListener("input", (event) => {
         if (event.target.closest("#database-backup-settings-form")) rememberDatabaseBackupDraft(event.target.closest("form"));
         if (event.target.id === "employee-card-capture-input") {

@@ -42,6 +42,7 @@ function installAdminPageFrame() {
 }
 document.addEventListener('input', rememberAdminFormEdit);
 document.addEventListener('change', rememberAdminFormEdit);
+document.addEventListener('reset', (event) => adminEditedForms.delete(event.target), true);
 function rememberAdminFormEdit(event) {
     if (state.dashboard?.role !== 'admin') return;
     const form = event.target.closest?.('.admin-page-frame form');
@@ -66,7 +67,8 @@ document.addEventListener('click', async (event) => {
     const button = event.target.closest('.admin-page-refresh[data-action="refresh-dashboard"]');
     if (!button || state.dashboard?.role !== 'admin') return;
     const root = button.closest('.admin-page-frame');
-    if ([...root.querySelectorAll('form')].some((form) => adminEditedForms.has(form))) {
+    if ([...root.querySelectorAll('form')].some((form) => adminEditedForms.has(form)) ||
+        (typeof dashboardSyncHasEdits === 'function' && dashboardSyncHasEdits(root))) {
         event.preventDefault(); event.stopImmediatePropagation();
         if (await confirmAdminPageRefresh() && button.isConnected && state.dashboard?.role === 'admin') {
             await handleDashboardClick({ target: button, preventDefault() {} });

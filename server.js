@@ -15,6 +15,7 @@ const { attachSupervisorRoutes } = require('./supervisor-routes');
 const { isSupervisorSimulation } = require('./supervisor-management');
 const { punchHistoryWindow } = require('./employee-browser-settings');
 const { attachEmployeeAttendanceRoutes } = require('./employee-attendance');
+const { classifyAttendanceReport, DETAIL_CATEGORIES, DAY_MS: REPORT_DAY_MS } = require('./attendance-report');
 const { attachConditionalOvertimeRoutes, SETTINGS_PERMISSION: CONDITIONAL_OVERTIME_PERMISSION } = require('./overtime-conditional-routes');
 const { attachRequestHistoryRoutes } = require('./request-history');
 const { attachLeaveEntitlementRoutes } = require('./leave-entitlement-routes');
@@ -1866,6 +1867,11 @@ function buildAdminAttendanceReport(input = {}, options = {}) {
   const employeeId = String(input.employeeId || '').trim();
   const startDate = String(input.startDate || '').trim();
   const endDate = String(input.endDate || '').trim();
+  const category = input.category === undefined || input.category === '' || input.category === 'all' ? '' : input.category;
+  if (category !== '' && !DETAIL_CATEGORIES.has(category)) throw createHttpError('考勤明細篩選不正確。', 400);
+  if (options.exporting && category === 'overtime' && !options.includeOvertime) {
+    throw createHttpError('請選擇包含核准加班的匯出模板。', 400);
+  }
 
   if (!startDate || !endDate) {
     const error = new Error('請選擇開始與結束日期。');
@@ -1896,31 +1902,71 @@ function buildAdminAttendanceReport(input = {}, options = {}) {
     throw error;
   }
 
-  const records = buildAttendanceRecordsWithApprovedLeave({
+  const rawPunches = getAllPunchRecords().filter(record =>
+    (!employeeId || record.id === employeeId) && record.timestamp >= parsedRange.startAt - REPORT_DAY_MS &&
+    record.timestamp <= parsedRange.endAt + REPORT_DAY_MS
+  );
+  const baseRecords = buildAttendanceRecordsWithApprovedLeave({
     employees,
     employeeMap,
     employeeId,
+    punchRecords: rawPunches,
     rangeStartMs: rangeStart.getTime(),
     rangeEndMs: rangeEnd.getTime(),
     includeOvertime: options.includeOvertime === true
   });
+  const shifts = new Map(dbModule.loadShifts().map(shift => [shift.name, shift]));
+  const approvedOvertime = dbModule.queryOvertimeRequests({
+    employeeId, status: 'approved', overlapStartAt: parsedRange.startAt - REPORT_DAY_MS,
+    overlapEndAt: parsedRange.endAt + REPORT_DAY_MS, limit: null
+  });
+  const overtimeByEmployee = new Map();
+  for (const overtime of approvedOvertime) {
+    if (!overtimeByEmployee.has(overtime.employee_id)) overtimeByEmployee.set(overtime.employee_id, []);
+    overtimeByEmployee.get(overtime.employee_id).push(overtime);
+  }
+  const expectedEnd = (record, dayStart) => {
+    const shift = shifts.get(record.shift);
+    const toMinutes = value => /^([01]\d|2[0-3]):[0-5]\d$/.test(value || '') ? parseShiftTimeMinutes(value) : null;
+    const start = toMinutes(shift?.start), end = toMinutes(shift?.end);
+    const current = (record.timestamp - dayStart) / 60000;
+    let endsAt = null;
+    if (start !== null && end !== null && start !== end) {
+      const overnight = end < start;
+      // The recorded daytime shift keeps its cutoff even for a late entry.
+      // An overnight entry after its morning cutoff uses the next instance.
+      endsAt = dayStart + end * 60000 + (overnight && current >= end ? REPORT_DAY_MS : 0);
+    }
+    for (const overtime of overtimeByEmployee.get(record.employeeId) || []) {
+      if (overtime.end_at <= record.timestamp ||
+          overtime.start_at < dayStart || overtime.start_at >= dayStart + REPORT_DAY_MS) continue;
+      endsAt = Math.max(endsAt ?? overtime.end_at, overtime.end_at);
+    }
+    return endsAt;
+  };
+  const punchContext = rawPunches.map(record => ({
+    employeeId: record.id, timestamp: record.timestamp, type: record.type, shift: record.shift,
+    attendanceStatusText: getPunchAttendanceStatusText(record)
+  }));
+  const records = classifyAttendanceReport(baseRecords, punchContext, options.now ?? Date.now(), expectedEnd);
+  const count = category => records.filter(record => record.reportCategories.includes(category)).length;
+  const filtered = category ? records.filter(record => record.reportCategories.includes(category)) : records;
 
   return {
     filters: {
       employeeId,
       employeeName: selectedEmployee?.name || '',
       startDate,
-      endDate
+      endDate,
+      category
     },
     summary: {
       recordCount: records.length,
-      validCount: records.filter((record) => record.attendanceStatusText === '正常').length,
-      abnormalCount: records.filter((record) =>
-        record.attendanceStatusText !== '正常' &&
-        record.attendanceStatusText !== '重複打卡' &&
-        record.attendanceStatusText !== LEAVE_ATTENDANCE_STATUS_TEXT &&
-        record.attendanceStatusText !== OVERTIME_ATTENDANCE_STATUS_TEXT
-      ).length,
+      validCount: count('valid'),
+      abnormalCount: count('abnormal'),
+      rawAbnormalCount: count('raw_abnormal'),
+      missingPunchDayCount: count('missing_punch'),
+      pendingPunchDayCount: count('pending_punch'),
       leaveCount: records.filter((record) => record.recordKind === 'leave' || record.attendanceStatusText === LEAVE_ATTENDANCE_STATUS_TEXT).length,
       overtimeCount: records.filter((record) => record.recordKind === 'overtime' || record.attendanceStatusText === OVERTIME_ATTENDANCE_STATUS_TEXT).length,
       duplicateCount: records.filter((record) => record.attendanceStatusText === '重複打卡').length,
@@ -1928,7 +1974,8 @@ function buildAdminAttendanceReport(input = {}, options = {}) {
       inCount: records.filter((record) => record.type === 'in').length,
       outCount: records.filter((record) => record.type === 'out').length
     },
-    records
+    filteredRecordCount: filtered.length,
+    records: filtered
   };
 }
 
@@ -6391,7 +6438,7 @@ function attachBrowserRoutes(server) {
       // ★ [12] 新版詳細模板才納入已核准加班；既有 payroll 與 payroll_leave 模板維持原列集合與欄位相容性。
       const templateId = normalizeAttendanceExportTemplateId(request.body?.templateId || 'payroll');
       const includeOvertime = templateId === 'payroll_leave_overtime';
-      const report = buildAdminAttendanceReport(request.body || {}, { includeOvertime });
+      const report = buildAdminAttendanceReport(request.body || {}, { includeOvertime, exporting: true });
       const startDate = new Date(`${report.filters.startDate}T00:00:00`);
       const endDate = new Date(`${report.filters.endDate}T23:59:59.999`);
       const exportPrefix = templateId === 'payroll_leave_overtime'
@@ -6412,6 +6459,7 @@ function attachBrowserRoutes(server) {
           start_date: report.filters.startDate,
           end_date: report.filters.endDate,
           template_id: templateId,
+          category: report.filters.category || 'all',
           record_count: report.records.length,
           overtime_request_count: overtimeRequestCount,
           approved_overtime_hours: overtimeHours

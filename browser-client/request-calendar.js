@@ -370,7 +370,7 @@ handleRealtimeSyncMessage = async function handleCalendarSync(payload) {
             current.sequence += 1; current.data = null; current.employees = []; current.cache.clear(); current.loading = false;
             if (current === rcState(kind)) rcPaint(kind);
         }
-        await reloadDashboard('已同步員工紀錄可見範圍。', 'info'); return;
+        await reloadDashboard('已同步員工紀錄可見範圍。', 'info', { background: true }); return;
     }
     if (['leaveRequests', 'overtimeRequests', 'employees', 'leaveSettings'].includes(payload?.type)) {
         for (const kind of ['leave', 'overtime']) {
@@ -382,7 +382,7 @@ handleRealtimeSyncMessage = async function handleCalendarSync(payload) {
                 if (message) message.textContent = '資料有異動，請先送出備註或重新整理確認。';
                 return;
             }
-            await reloadDashboard(); return;
+            await reloadDashboard('', 'info', { background: true }); return;
         }
     }
     return rcPreviousSync(payload);

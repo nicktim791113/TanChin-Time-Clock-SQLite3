@@ -321,7 +321,7 @@ handleRealtimeSyncMessage = async function handleMealsSync(payload) {
     }
     if (payload?.type === 'meals') {
         if (state.dashboard?.role === 'employee' || (mealIsAdmin() && mealCan('view'))) {
-            try { await reloadDashboard(); } catch (error) { mealMessage(error.message); }
+            try { await reloadDashboard('', 'info', { background: true }); } catch (error) { mealMessage(error.message); }
         }
         return;
     }
