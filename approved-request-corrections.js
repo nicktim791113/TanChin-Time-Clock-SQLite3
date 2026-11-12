@@ -69,7 +69,10 @@ function createApprovedCorrectionStore(sql, dependencies) {
                 const calculated = calculateOvertimePeriod(next.start_at,next.end_at,{breakMinutes:next.break_minutes});
                 if (calculated.duration_hours !== next.duration_hours) fail('加班淨時數與起訖扣除休息後的計算不一致。');
             } else if (next.start_at !== current.record.start_at || next.end_at !== current.record.end_at || next.duration_hours !== current.record.duration_hours) fail('舊加班修正時間須明確記錄休息分鐘。');
-            sql.prepare('UPDATE overtime_requests SET start_at=?,end_at=?,duration_hours=?,break_minutes=?,reason=?,updated_at=? WHERE id=?').run(next.start_at,next.end_at,next.duration_hours,next.break_minutes,next.reason,next.updated_at,next.id);
+            const original = current.record;
+            const timingChanged = next.start_at !== original.start_at || next.end_at !== original.end_at || next.break_minutes !== original.break_minutes;
+            const breakSource = timingChanged ? null : original.break_source;
+            sql.prepare('UPDATE overtime_requests SET start_at=?,end_at=?,duration_hours=?,break_minutes=?,break_source=?,reason=?,updated_at=? WHERE id=?').run(next.start_at,next.end_at,next.duration_hours,next.break_minutes,breakSource,next.reason,next.updated_at,next.id);
         }
         next = getRecord(kind, next.id);
         if (kind === 'leave') next = { ...next, accountingDailyHours: entitlements().charges(next.id) };

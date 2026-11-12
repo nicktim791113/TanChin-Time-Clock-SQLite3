@@ -5,7 +5,7 @@ const roleConfig = {
         accountPlaceholder: "輸入員工編號",
         secretLabel: "卡號",
         secretPlaceholder: "請輸入卡號",
-        help: "員工使用工號與卡號登入，登入後可看到個人資訊、目前班別與最近打卡紀錄（範圍由管理者指定，預設近 7 日）。"
+        help: "員工使用工號與卡號登入，登入後可看到個人資訊、目前班別、每日出勤與原始打卡紀錄（範圍由管理者指定，預設近 7 日）。"
     },
     admin: {
         title: "管理者登入",
@@ -5474,7 +5474,7 @@ function renderAdminShiftSection(datasets) {
                         ${renderBadge(`班別 ${datasets.shifts.length} 組`, "success")}
                     </div>
                 </div>
-                <p class="helper-text">這裡只保留班別名稱與起訖時間，方便你專心處理班別表，不會和員工表單混在一起。</p>
+                <p class="helper-text">管理班別名稱與時間；員工每日出勤的工作日及假日，請至「出勤工作日」設定。</p>
             </article>
 
             <article class="sub-panel">
@@ -5485,6 +5485,7 @@ function renderAdminShiftSection(datasets) {
                     </div>
                 </form>
             </article>
+            ${typeof renderAttendanceCalendarSettings === 'function' ? renderAttendanceCalendarSettings() : '<article class="sub-panel"></article>'}
         </div>
     `;
 }
@@ -9970,9 +9971,9 @@ function renderEmployeeWorkspaceItems(dashboard) {
         },
         {
             id: "records",
-            label: "最近打卡紀錄",
-            meta: `${records.length} 筆 · ${dashboard.punchHistoryWindow?.label || '最近 7 日'}`,
-            html: `
+            label: "我的出勤",
+            meta: `每日遲到／早退 · ${dashboard.punchHistoryWindow?.label || '最近 7 日'}`,
+            html: typeof renderEmployeeAttendanceWorkspace === 'function' ? renderEmployeeAttendanceWorkspace(dashboard) : `
                 <article class="record-card employee-workbench-panel" data-no-collapsible="true">
                     <h3>最近打卡紀錄</h3>
                     <p class="hero-copy">可見範圍：${escapeHtml(dashboard.punchHistoryWindow?.label || '最近 7 日')}（台北時間）；查看本人的打卡時間、班別與來源。</p>
@@ -10856,17 +10857,27 @@ function calculatePaperOvertimeNet(values) {
     return { breakMinutes: rest, durationHours: hours };
 }
 function setPaperOvertimeRestState(form, request = null) {
+    delete form.dataset.overtimeBreakManual;
+    delete form.dataset.overtimeTimingEdited;
     const legacy = Boolean(request && (request.breakMinutes ?? request.break_minutes) == null);
     form.dataset.paperLegacyBreak = String(legacy);
     const label = form.querySelector('[data-paper-legacy-rest-confirm]'), confirm = form.elements.namedItem('confirmLegacyBreak');
     if (label) label.hidden = !legacy;
     if (confirm) { confirm.disabled = !legacy; confirm.required = legacy; confirm.checked = false; }
 }
-function syncPaperOvertimeNet(form) {
+function syncPaperOvertimeNet(form, target) {
     const rest = form.elements.namedItem('breakMinutes'), total = form.elements.namedItem('durationHours');
     if (!rest || !total) return null;
+    const correction = Boolean(form.dataset.correctionRequestId);
+    const reset = form.querySelector('[data-paper-overtime-auto-break]');
+    if (reset) reset.hidden = correction;
+    if (target === rest) form.dataset.overtimeBreakManual = 'true';
     try {
         const values = Object.fromEntries(['startDate', 'startTime', 'endDate', 'endTime', 'breakMinutes'].map((name) => [name, form.elements.namedItem(name)?.value || '']));
+        if (!correction && form.dataset.overtimeBreakManual !== 'true') {
+            values.breakMinutes = String(overtimeDefaultBreakMinutes(values.startDate, values.startTime, values.endDate, values.endTime));
+            rest.value = values.breakMinutes;
+        }
         const result = calculatePaperOvertimeNet(values);
         rest.setCustomValidity(''); total.value = String(result.durationHours); return result;
     } catch (error) {
@@ -10882,9 +10893,36 @@ postRenderSetup = function postRenderPaperOvertimeNet() {
     const form = document.getElementById('admin-paper-overtime-form');
     if (form) syncPaperOvertimeNet(form);
 };
+const previousRenderPaperOvertimeDraft = renderDashboard;
+let paperOvertimeDraftIdentity = '';
+renderDashboard = function renderDashboardWithPaperOvertimeDraft(dashboard) {
+    const identity = JSON.stringify([state.token, dashboard.role, dashboard.user?.id]);
+    const current = document.getElementById('admin-paper-overtime-form');
+    const timing = identity === paperOvertimeDraftIdentity && current?.dataset.overtimeTimingEdited
+        && !current.dataset.correctionRequestId && !current.dataset.overtimeDraftSubmitted
+        ? captureOvertimeTiming(current) : null;
+    paperOvertimeDraftIdentity = identity;
+    const result = previousRenderPaperOvertimeDraft(dashboard);
+    const form = document.getElementById('admin-paper-overtime-form');
+    if (form && timing) {
+        restoreOvertimeTiming(form, timing);
+        form.dataset.overtimeTimingEdited = 'true';
+        syncPaperOvertimeNet(form);
+    }
+    return result;
+};
 for (const eventName of ['input', 'change']) document.addEventListener(eventName, (event) => {
     const form = event.target.closest?.('#admin-paper-overtime-form');
-    if (form && ['startDate', 'startTime', 'endDate', 'endTime', 'breakMinutes'].includes(event.target.name)) syncPaperOvertimeNet(form);
+    if (form && ['startDate', 'startTime', 'endDate', 'endTime', 'breakMinutes'].includes(event.target.name)) {
+        form.dataset.overtimeTimingEdited = 'true';
+        syncPaperOvertimeNet(form, event.target);
+    }
+});
+document.addEventListener('click', (event) => {
+    const form = event.target.closest?.('[data-paper-overtime-auto-break]')?.closest('#admin-paper-overtime-form');
+    if (!form || form.dataset.correctionRequestId) return;
+    delete form.dataset.overtimeBreakManual;
+    syncPaperOvertimeNet(form);
 });
 
 function renderAdminPaperOvertimeForm(datasets = {}) {
@@ -10947,10 +10985,12 @@ function renderAdminPaperOvertimeForm(datasets = {}) {
                 <div class="form-toolbar dense-toolbar">
                     <div class="inline-actions">
                         <button class="primary-btn" type="submit" data-paper-submit>建立紙本核准加班</button>
+                        <button class="outline-btn" type="button" data-paper-overtime-auto-break>恢復自動休息</button>
                         <button class="outline-btn hidden" type="button" data-action="cancel-paper-correction">取消修正</button>
                     </div>
                     <p class="helper-text" data-paper-mode-help>儲存後只會建立加班核准紀錄，不會直接修改打卡或出勤時間。</p>
                 </div>
+                <p class="helper-text">新增補登每完整涵蓋一天的 12:20–13:00，預帶休息 40 分鐘，可修改。</p>
                 <label class="sp-confirm" data-paper-legacy-rest-confirm hidden><input name="confirmLegacyBreak" type="checkbox" disabled>舊單休息未記錄；已核對休息分鐘與重新計算的時數，確認套用修正。</label>
                 <div class="inline-message" data-form-message-for="admin-paper-overtime-form" aria-live="polite"></div>
             </form>
@@ -11057,6 +11097,7 @@ handleDashboardSubmit = async function handleDashboardSubmitOvertimeOverride(eve
             const endpoint = correctionRequestId
                 ? "/api/browser/admin/overtime/paper-approved/correct"
                 : "/api/browser/admin/overtime/paper-approved";
+            const breakSource = !correctionRequestId && overtimeBreakProvenance(form.dataset.overtimeBreakManual === 'true', calculated.breakMinutes);
             const result = await requestJson(endpoint, {
                 method: "POST",
                 auth: true,
@@ -11069,6 +11110,7 @@ handleDashboardSubmit = async function handleDashboardSubmitOvertimeOverride(eve
                     endTime: values.endTime,
                     durationHours: calculated.durationHours,
                     breakMinutes: calculated.breakMinutes,
+                    ...(breakSource && { breakSource }),
                     confirmLegacyBreak: form.elements.namedItem('confirmLegacyBreak').checked,
                     reason: values.reason?.trim() || "",
                     paperNo: values.paperNo?.trim() || "",
@@ -11078,6 +11120,7 @@ handleDashboardSubmit = async function handleDashboardSubmitOvertimeOverride(eve
             });
             // 加班補登後保留目前篩選，並重建快照回到第一頁，讓新紀錄與總筆數立即可見。
             const successMessage = result.message || (correctionRequestId ? "紙本加班補登已修正。" : "紙本核准加班已補登。");
+            form.dataset.overtimeDraftSubmitted = 'true';
             await reloadDashboard(successMessage, "success", { resetRequestKinds: ["overtime"] });
             setFormMessage(formId, successMessage, "success");
             return;
@@ -12522,7 +12565,8 @@ const workspaceSubnavConfigs = {
                 {
                     label: "班表基礎",
                     items: [
-                        { id: "editor", label: "班別時間設定", panelIndex: 1 }
+                        { id: "editor", label: "班別時間設定", panelIndex: 1 },
+                        { id: "calendar", label: "出勤工作日", panelIndex: 2 }
                     ]
                 }
             ]

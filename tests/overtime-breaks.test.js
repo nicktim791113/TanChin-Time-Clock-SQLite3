@@ -184,6 +184,7 @@ test('paper overtime UI computes read-only net hours while legacy null rest reta
     const source = fs.readFileSync(path.join(__dirname, '../browser-client/app.js'), 'utf8');
     const start = source.indexOf('function calculatePaperOvertimeNet('), end = source.indexOf('const previousPostRenderPaperOvertimeNet', start);
     const context = vm.createContext({ Date, Number, Object, Error });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../browser-client/overtime-defaults.js'), 'utf8'), context);
     vm.runInContext(source.slice(start, end), context);
     context.values = { startDate: '2035-02-02', endDate: '2035-02-03', startTime: '23:30', endTime: '01:31', breakMinutes: '31' };
     assert.equal(vm.runInContext('calculatePaperOvertimeNet(values).durationHours', context), 1.5);
@@ -191,7 +192,7 @@ test('paper overtime UI computes read-only net hours while legacy null rest reta
     fields.durationHours = { value: '1.33' }; fields.breakMinutes = { value: '', setCustomValidity(message) { this.validationMessage = message; } };
     fields.confirmLegacyBreak = { checked: false };
     const label = { hidden: true };
-    context.form = { dataset: {}, elements: { namedItem: (name) => fields[name] }, querySelector: () => label };
+    context.form = { dataset: { correctionRequestId: 'old' }, elements: { namedItem: (name) => fields[name] }, querySelector: (selector) => selector === '[data-paper-legacy-rest-confirm]' ? label : null };
     vm.runInContext('setPaperOvertimeRestState(form,{breakMinutes:null})', context);
     assert.equal(label.hidden, false); assert.equal(fields.confirmLegacyBreak.required, true);
     assert.equal(vm.runInContext('syncPaperOvertimeNet(form)', context), null);
@@ -199,9 +200,76 @@ test('paper overtime UI computes read-only net hours while legacy null rest reta
     fields.breakMinutes.value = '31';
     assert.equal(vm.runInContext('syncPaperOvertimeNet(form).durationHours', context), 1.5);
     assert.equal(fields.durationHours.value, '1.5');
+    delete context.form.dataset.correctionRequestId;
+    vm.runInContext('setPaperOvertimeRestState(form)', context);
+    Object.assign(fields.startDate,{value:'2026-11-07'});
+    Object.assign(fields.endDate,{value:'2026-11-08'});
+    fields.startTime.value = '08:20'; fields.endTime.value = '17:00';
+    assert.equal(vm.runInContext('syncPaperOvertimeNet(form).breakMinutes', context), 80);
+    fields.breakMinutes.value = '0';
+    vm.runInContext('syncPaperOvertimeNet(form,form.elements.namedItem("breakMinutes"))', context);
+    fields.endDate.value = '2026-11-07';
+    assert.equal(vm.runInContext('syncPaperOvertimeNet(form).durationHours', context), 8.66);
+    vm.runInContext('delete form.dataset.overtimeBreakManual', context);
+    assert.equal(vm.runInContext('syncPaperOvertimeNet(form).durationHours', context), 8);
+    context.form.dataset.correctionRequestId = 'existing';
+    vm.runInContext('setPaperOvertimeRestState(form,{breakMinutes:30})', context);
+    fields.breakMinutes.value = '30'; fields.endTime.value = '18:00';
+    assert.equal(vm.runInContext('syncPaperOvertimeNet(form).breakMinutes', context), 30);
+    for (const [startDate,startTime,endDate,endTime] of [
+        ['2026-11-07','08:20','2026-11-07','12:59'],
+        ['2026-11-07','12:21','2026-11-07','17:00'],
+        ['2026-11-07','17:30','2026-11-07','19:30'],
+        ['2026-11-07','17:30','2026-11-07',''],
+        ['2026-02-30','08:20','2026-03-02','17:00'],
+        ['2026-11-07','17:00','2026-11-07','08:20']
+    ]) {
+        context.period = [startDate,startTime,endDate,endTime];
+        assert.equal(vm.runInContext('overtimeDefaultBreakMinutes(...period)', context), 0);
+    }
     const renderStart = source.indexOf('function renderAdminPaperOvertimeForm('), renderEnd = source.indexOf('\nfunction ', renderStart + 1);
     const formMarkup = source.slice(renderStart, renderEnd);
     assert.match(formMarkup, /name="breakMinutes"[^>]*value="0" required/);
     assert.match(formMarkup, /name="durationHours"[^>]*readonly aria-readonly="true"/);
     assert.match(formMarkup, /data-paper-legacy-rest-confirm hidden/);
+});
+
+test('paper submit records the rest source on creation only', async () => {
+    const source = fs.readFileSync(path.join(__dirname, '../browser-client/app.js'), 'utf8');
+    const requests = [];
+    const fields = {
+        startDate: { value: '2026-11-08' }, endDate: { value: '2026-11-08' },
+        startTime: { value: '08:20' }, endTime: { value: '17:00' },
+        breakMinutes: { value: '0', setCustomValidity() {} }, durationHours: { value: '' },
+        confirmLegacyBreak: { checked: false }
+    };
+    const form = { dataset: {}, elements: { namedItem: name => fields[name] },
+        querySelector: () => null, getAttribute: () => 'admin-paper-overtime-form' };
+    const context = vm.createContext({
+        event: { target: { closest: () => form }, preventDefault() {} },
+        form, HTMLFormElement: class {},
+        FormData: class extends Map {
+            constructor() { super(Object.entries(fields).map(([name, field]) => [name, field.value])); }
+        },
+        ui: {}, setFormMessage() {}, setMessage() {}, reloadDashboard() {}, handleDashboardSubmit() {},
+        collectAdminPaperEmployeeIds: () => ['E001'],
+        requestJson(url, options) { requests.push({ url, body: options.body }); return {}; }
+    });
+    vm.runInContext(fs.readFileSync(require.resolve('../browser-client/overtime-defaults.js'), 'utf8'), context);
+    for (const [first, next] of [
+        ['function calculatePaperOvertimeNet(', 'const previousPostRenderPaperOvertimeNet'],
+        ['const originalHandleDashboardSubmitWithOvertime', 'const originalHandleDashboardClickWithOvertime']
+    ]) vm.runInContext(source.slice(source.indexOf(first), source.indexOf(next)), context);
+    await vm.runInContext('handleDashboardSubmit(event)', context);
+    assert.equal(requests[0].body.breakMinutes, 40);
+    assert.equal(requests[0].body.breakSource, 'automatic_lunch');
+    fields.breakMinutes.value = '40';
+    vm.runInContext("syncPaperOvertimeNet(form,form.elements.namedItem('breakMinutes'))", context);
+    await vm.runInContext('handleDashboardSubmit(event)', context);
+    assert.equal(requests[1].body.breakSource, 'manual');
+    form.dataset.correctionRequestId = 'previous';
+    await vm.runInContext('handleDashboardSubmit(event)', context);
+    assert.match(requests[2].url, /paper-approved\/correct$/);
+    assert.equal(requests[2].body.breakMinutes, 40);
+    assert.equal(Object.hasOwn(requests[2].body, 'breakSource'), false);
 });

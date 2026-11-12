@@ -13,12 +13,13 @@ const { createReviewSupervisorStore } = require('./review-supervisors');
 const { createLeaveEntitlementStore } = require('./leave-entitlements');
 const { createAnnualLeaveStore } = require('./annual-leave-store');
 const { createApprovedCorrectionStore } = require('./approved-request-corrections');
+const { createAttendanceCalendarStore } = require('./employee-attendance');
 const { createReviewWorkflow } = require('./review-workflow');
 const { createDashboardMetricStore } = require('./dashboard-metrics');
 const { createSalaryAdvanceStore } = require('./salary-advances');
 const { createDeviceRecoveryStore } = require('./device-recovery-store');
 const { normalizeLeavePay } = require('./leave-type-pay');
-const { calculateOvertimePeriod } = require('./overtime-duration');
+const { calculateOvertimePeriod, resolveOvertimeBreakSource } = require('./overtime-duration');
 const { normalizeLeaveDateSelection, getLeaveDateSegments, EXPLICIT_DATES, EXPLICIT_SEGMENTS, LEGACY_RANGE } = require('./leave-date-selection');
 let db = null;
 let meals = null;
@@ -30,6 +31,7 @@ let reviewSupervisors = null;
 let leaveEntitlements = null;
 let annualLeave = null;
 let approvedCorrections = null;
+let attendanceCalendar = null;
 let reviewWorkflow = null;
 let dashboardMetrics = null;
 let salaryAdvances = null;
@@ -229,6 +231,7 @@ function init(dbFilePath) {
       end_at INTEGER NOT NULL,
       duration_hours REAL NOT NULL DEFAULT 0,
       break_minutes INTEGER,
+      break_source TEXT CHECK(break_source IN ('manual','automatic_lunch')),
       reason TEXT,
       status TEXT NOT NULL,
       supervisor_id TEXT,
@@ -472,6 +475,9 @@ function init(dbFilePath) {
         if (!overtimeRequestColumns.includes('break_minutes')) {
             run('ALTER TABLE overtime_requests ADD COLUMN break_minutes INTEGER');
         }
+        if (!overtimeRequestColumns.includes('break_source')) {
+            run("ALTER TABLE overtime_requests ADD COLUMN break_source TEXT CHECK(break_source IN ('manual','automatic_lunch'))");
+        }
         if (!overtimeRequestColumns.includes('approval_mode')) {
             console.log('[資料庫] 偵測到舊版 overtime_requests 結構，正在補上 approval_mode 欄位...');
             run('ALTER TABLE overtime_requests ADD COLUMN approval_mode TEXT');
@@ -532,6 +538,7 @@ function init(dbFilePath) {
   leaveEntitlements = createLeaveEntitlementStore(db, (entry) => addAuditLog(entry));
   annualLeave = createAnnualLeaveStore(db, (entry) => addAuditLog(entry));
   leaveEntitlements.setAnnualProvider(annualLeave);
+  attendanceCalendar = createAttendanceCalendarStore(db, addAuditLog);
   approvedCorrections = createApprovedCorrectionStore(db, {
     getRecord: (kind, id) => kind === 'leave' ? getLeaveRequestById(id) : getOvertimeRequestById(id),
     normalizeLeave: (next, original) => assignLeaveSegmentIds({ ...next, ...normalizeLeaveDateSelection(next) }, original),
@@ -556,6 +563,7 @@ function close() {
   leaveEntitlements = null;
   annualLeave = null;
   approvedCorrections = null;
+  attendanceCalendar = null;
   reviewWorkflow = null;
   dashboardMetrics = null;
   salaryAdvances = null;
@@ -1463,6 +1471,7 @@ function mapOvertimeRequestRow(row) {
 }
 
 const createOvertimeRequest = (request) => {
+    const breakSource = resolveOvertimeBreakSource(request.start_at, request.end_at, request.break_minutes, request.break_source);
     if (request.break_minutes != null) {
         const calculated = calculateOvertimePeriod(request.start_at, request.end_at, { breakMinutes: request.break_minutes });
         if (Number(request.duration_hours) !== calculated.duration_hours) throw Object.assign(new Error('加班淨時數與起訖扣除休息後的計算不一致。'), { status: 400, statusCode: 400 });
@@ -1470,13 +1479,13 @@ const createOvertimeRequest = (request) => {
     const insertRequest = db.prepare(`
         INSERT INTO overtime_requests (
             id, employee_id, applicant_id, applicant_role, proxy_reason, start_at, end_at,
-            duration_hours, break_minutes, reason, status, supervisor_id, supervisor_decision,
+            duration_hours, break_minutes, break_source, reason, status, supervisor_id, supervisor_decision,
             supervisor_comment, supervisor_decided_at, approval_mode, paper_no,
             paper_approved_by, paper_comment, corrected_from_request_id, created_at,
             updated_at
         ) VALUES (
             @id, @employee_id, @applicant_id, @applicant_role, @proxy_reason, @start_at, @end_at,
-            @duration_hours, @break_minutes, @reason, @status, @supervisor_id, @supervisor_decision,
+            @duration_hours, @break_minutes, @break_source, @reason, @status, @supervisor_id, @supervisor_decision,
             @supervisor_comment, @supervisor_decided_at, @approval_mode, @paper_no,
             @paper_approved_by, @paper_comment, @corrected_from_request_id, @created_at,
             @updated_at
@@ -1493,6 +1502,7 @@ const createOvertimeRequest = (request) => {
         insertRequest.run({
             ...request,
             break_minutes: request.break_minutes ?? null,
+            break_source: breakSource,
             proxy_reason: request.proxy_reason || null,
             supervisor_decision: request.supervisor_decision || null,
             supervisor_comment: request.supervisor_comment || null,
@@ -1680,6 +1690,8 @@ const updatePaperOvertimeRequest = ({ requestId, updates, auditLog }) => db.tran
     }
     const original = getOvertimeRequestById(requestId);
     const breakMinutes = Object.hasOwn(updates, 'break_minutes') ? updates.break_minutes : original?.break_minutes ?? null;
+    const timingChanged = updates.start_at !== original?.start_at || updates.end_at !== original?.end_at || breakMinutes !== original?.break_minutes;
+    const breakSource = timingChanged ? null : original?.break_source ?? null;
     if (original?.break_minutes != null && breakMinutes == null) throw Object.assign(new Error('已記錄的加班休息分鐘不可清除。'), { statusCode: 400 });
     if (breakMinutes != null) {
         const period = calculateOvertimePeriod(updates.start_at, updates.end_at, { breakMinutes });
@@ -1688,7 +1700,7 @@ const updatePaperOvertimeRequest = ({ requestId, updates, auditLog }) => db.tran
     const result = run(
         `UPDATE overtime_requests
          SET employee_id = ?, applicant_id = ?, applicant_role = ?, start_at = ?, end_at = ?,
-             duration_hours = ?, break_minutes = ?, reason = ?, supervisor_id = ?, supervisor_decision = ?,
+             duration_hours = ?, break_minutes = ?, break_source = ?, reason = ?, supervisor_id = ?, supervisor_decision = ?,
              supervisor_comment = ?, supervisor_decided_at = ?, paper_no = ?,
              paper_approved_by = ?, paper_comment = ?, updated_at = ?
          WHERE id = ?
@@ -1701,6 +1713,7 @@ const updatePaperOvertimeRequest = ({ requestId, updates, auditLog }) => db.tran
         updates.end_at,
         updates.duration_hours,
         breakMinutes,
+        breakSource,
         updates.reason || '',
         updates.supervisor_id || '',
         updates.supervisor_decision || 'approved',
@@ -1726,8 +1739,9 @@ const updatePaperOvertimeRequest = ({ requestId, updates, auditLog }) => db.tran
         updates.supervisor_decided_at || null,
         requestId
     );
-    addAuditLog(auditLog);
-    return getOvertimeRequestById(requestId);
+    const saved = getOvertimeRequestById(requestId);
+    addAuditLog({ ...auditLog, after_data: { ...auditLog.after_data, break_source: saved.break_source } });
+    return saved;
 })();
 
 const addPunchRecord = (record) => run(
@@ -2427,6 +2441,11 @@ module.exports = {
   getLeaveEntitlements: () => leaveEntitlements,
   getAnnualLeave: () => annualLeave,
   getApprovedCorrections: () => approvedCorrections,
+  getAttendanceCalendar: () => attendanceCalendar,
+  queryEmployeeAttendancePunches: (employeeId, startAt, endAt) => all(
+    'SELECT timestamp,type,status,source,risk_flags FROM punch_records WHERE id=? AND timestamp>=? AND timestamp<=? ORDER BY timestamp',
+    employeeId, startAt, endAt
+  ).map(row => ({ ...row, risk_flags: safeParseJsonValue(row.risk_flags) || [] })),
   getReviewWorkflow: () => reviewWorkflow,
   getDashboardMetrics: () => dashboardMetrics,
   getSalaryAdvances: () => salaryAdvances,

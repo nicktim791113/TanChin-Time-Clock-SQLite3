@@ -6,7 +6,7 @@ const { app, dialog } = require('electron');
 const dbModule = require('./database');
 const databaseBackup = require('./database-backup');
 const { normalizeLeaveDateSelection, getLeaveDateSegments } = require('./leave-date-selection');
-const { calculateOvertimePeriod } = require('./overtime-duration');
+const { calculateOvertimePeriod, resolveOvertimeBreakSource } = require('./overtime-duration');
 const { attachDatabaseBackupRoutes } = require('./database-backup-routes');
 const { createBrowserAccounts, RESET_PERMISSION, REVEAL_PERMISSION } = require('./browser-accounts');
 const { attachMealRoutes } = require('./meal-routes');
@@ -14,6 +14,7 @@ const { attachRequestCalendarRoutes, monthRange: leaveAuditMonthRange } = requir
 const { attachSupervisorRoutes } = require('./supervisor-routes');
 const { isSupervisorSimulation } = require('./supervisor-management');
 const { punchHistoryWindow } = require('./employee-browser-settings');
+const { attachEmployeeAttendanceRoutes } = require('./employee-attendance');
 const { attachRequestHistoryRoutes } = require('./request-history');
 const { attachLeaveEntitlementRoutes } = require('./leave-entitlement-routes');
 const { attachLeaveUsageRoutes } = require('./leave-usage');
@@ -2695,7 +2696,7 @@ function formatLeaveRequestForExternal(request, lookup = buildLeaveLookup()) {
 }
 
 function formatOvertimeRequestForExternal(request, lookup = buildOvertimeLookup()) {
-  const formatted = formatOvertimeRequestForDashboard(request, lookup);
+  const { break_source, ...formatted } = formatOvertimeRequestForDashboard(request, lookup);
   return {
     ...formatted,
     externalId: request.id,
@@ -5726,6 +5727,7 @@ function attachBrowserRoutes(server) {
       if (endAt <= startAt) throw createHttpError('加班結束時間必須晚於開始時間。', 400);
 
       const { duration_hours: durationHours, break_minutes: breakMinutes } = calculateOvertimePeriod(startAt, endAt, request.body || {}, { rejectLegacyHoursMismatch: true });
+      const breakSource = resolveOvertimeBreakSource(startAt, endAt, breakMinutes, request.body?.breakSource);
       if (durationHours <= 0) throw createHttpError('請輸入有效的加班時數。', 400);
       const now = Date.now();
       const overtimeRequest = {
@@ -5737,6 +5739,7 @@ function attachBrowserRoutes(server) {
         end_at: endAt,
         duration_hours: durationHours,
         break_minutes: breakMinutes,
+        break_source: breakSource,
         reason: String(request.body?.reason || '').trim(),
         status: 'pending_supervisor',
         supervisor_id: supervisorId,
@@ -6713,6 +6716,7 @@ function attachBrowserRoutes(server) {
       if (endAt <= startAt) throw createHttpError('加班結束時間必須晚於開始時間。', 400);
 
       const period = calculateOvertimePeriod(startAt, endAt, request.body || {}, { rejectLegacyHoursMismatch: true });
+      const breakSource = resolveOvertimeBreakSource(startAt, endAt, period.break_minutes, request.body?.breakSource);
       const durationHours = period.duration_hours;
       if (durationHours <= 0) throw createHttpError('請輸入有效的加班時數。', 400);
       const overlappingEmployees = selectedEmployees.filter((employee) => dbModule.hasOverlappingOvertimeRequest(employee.id, startAt, endAt));
@@ -6740,6 +6744,7 @@ function attachBrowserRoutes(server) {
           end_at: endAt,
           duration_hours: durationHours,
           break_minutes: period.break_minutes,
+          break_source: breakSource,
           reason: String(request.body?.reason || '').trim(),
           status: 'approved',
           supervisor_id: request.browserSession.employeeId,
@@ -7987,6 +7992,17 @@ function createServerApp() {
 
   attachExternalApiRoutes(server);
   attachBrowserRoutes(server);
+  attachEmployeeAttendanceRoutes(server, {
+    db: dbModule, requireSession: requireBrowserSession,
+    requireEmployee: requireBrowserRole('employee'),
+    requireCalendarPermission: requireAdminPermission('admin.shifts.manage'),
+    auditEntry: buildBrowserAuditLogEntry,
+    notify: (request) => {
+      const meta = getBrowserSyncMeta(request);
+      notifyDesktop('attendanceCalendar', meta);
+      notifyDesktop('auditLogs', meta);
+    }
+  });
   attachDeviceRecoveryRoutes(server, {
     db: dbModule, accounts: browserAccounts, getEmployee: getEmployeeById,
     normalizeDeviceInfo: normalizeClientDeviceInfo, authorizeDevice: authorizeEmployeeDeviceForLogin,

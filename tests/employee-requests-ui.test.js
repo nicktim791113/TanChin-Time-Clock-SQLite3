@@ -13,7 +13,7 @@ function loadUi() {
         renderDashboard(dashboard) { state.dashboard = dashboard; }, postRenderSetup() {}, handleDashboardClick() {}, handleDashboardSubmit() {},
         handleLogout() { state.token = ''; state.dashboard = null; }, ui: { dashboardMessage: {} }, setMessage(_node, message) { messages.push(message); },
         requestJson(route, options) { requests.push({ route, options }); return new Promise((resolve, reject) => pending.push({ resolve, reject })); } });
-    for (const file of ['leave-days.js', 'employee-requests.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../browser-client', file), 'utf8'), context);
+    for (const file of ['overtime-defaults.js', 'leave-days.js', 'employee-requests.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../browser-client', file), 'utf8'), context);
     const run = (expression) => vm.runInContext(expression, context);
     run('renderDashboard(state.dashboard)');
     return { run, state, requests, pending, confirmations, messages, context, listeners };
@@ -32,6 +32,28 @@ function input(ui, expression, field, value, row = null) {
     ui.context.target = { dataset: { kind: expression, ...(row === null ? { erField: field } : { erRowField: field, row: String(row) }) }, value, closest() { return null; } };
     ui.run('erUpdateDraftInput(target)');
 }
+
+test('personal overtime previews weekend lunch, preserves manual zero, and restores the default', async () => {
+    const ui = loadUi();
+    ui.run("erState('overtime').draft=erNewDraft('overtime')");
+    for (const [key, value] of Object.entries({startDate:'2026-11-07',endDate:'2026-11-07',startTime:'08:20',endTime:'17:00'})) input(ui, 'overtime', key, value);
+    const draft = ui.run("erState('overtime').draft");
+    assert.equal(draft.breakMinutes, '40');
+    assert.equal(draft.durationHours, '8');
+    assert.equal(ui.run("erBuildPayload('overtime',erState('overtime').draft).breakSource"), 'automatic_lunch');
+    input(ui, 'overtime', 'breakMinutes', '0');
+    input(ui, 'overtime', 'endDate', '2026-11-08');
+    input(ui, 'overtime', 'startDate', '2026-11-08');
+    assert.equal(draft.breakMinutes, '0');
+    assert.equal(draft.durationHours, '8.66');
+    assert.equal(ui.run("erBuildPayload('overtime',erState('overtime').draft).breakSource"), 'manual');
+    await ui.run("erHandleAction({dataset:{kind:'overtime',action:'er-auto-break'}})");
+    assert.equal(draft.breakMinutes, '40');
+    assert.equal(draft.durationHours, '8');
+    input(ui, 'overtime', 'startTime', '17:30');
+    input(ui, 'overtime', 'endTime', '19:30');
+    assert.equal(ui.run("Object.hasOwn(erBuildPayload('overtime',erState('overtime').draft),'breakSource')"), false);
+});
 
 test('leave reason is mandatory and lunch options are scoped, default checked, editable and participant-only', async () => {
     const ui = loadUi();
@@ -160,7 +182,8 @@ test('overtime keeps full continuous end date and deducts rest automatically, in
     const ui = loadUi();
     ui.run("erState('overtime').draft=erNewDraft('overtime')");
     input(ui, 'overtime', 'startDate', '2026-12-31'); input(ui, 'overtime', 'startTime', '22:00'); input(ui, 'overtime', 'endDate', '2027-01-02'); input(ui, 'overtime', 'endTime', '02:00');
-    assert.equal(ui.run("erState('overtime').draft.durationHours"), '28');
+    assert.equal(ui.run("erState('overtime').draft.breakMinutes"), '40');
+    assert.equal(ui.run("erState('overtime').draft.durationHours"), '27.33');
     input(ui, 'overtime', 'breakMinutes', '630'); input(ui, 'overtime', 'endTime', '03:00');
     const body = JSON.parse(ui.run("JSON.stringify(erBuildPayload('overtime',erState('overtime').draft))"));
     assert.equal(body.endDate, '2027-01-02'); assert.equal(body.durationHours, 18.5); assert.equal(body.employeeId, 'E001');

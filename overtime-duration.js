@@ -21,4 +21,19 @@ function calculateOvertimePeriod(startAt, endAt, body = {}, { rejectLegacyHoursM
     }
     return { break_minutes: minutes, duration_hours: hours };
 }
-module.exports = { calculateOvertimePeriod };
+const DAY_MS = 86400000, TAIPEI_OFFSET = 8 * 3600000;
+const lunchWindow = dayStart => ({ startAt: dayStart + 740 * 60000, endAt: dayStart + 780 * 60000 });
+
+function resolveOvertimeBreakSource(startAt, endAt, breakMinutes, source) {
+    if (source === undefined || source === null) return null;
+    if (source === 'manual') return source;
+    if (source !== 'automatic_lunch') fail('加班休息來源不正確。');
+    const dayStart = Math.floor((startAt + TAIPEI_OFFSET) / DAY_MS) * DAY_MS - TAIPEI_OFFSET;
+    let firstLunch = lunchWindow(dayStart);
+    if (firstLunch.startAt < startAt) firstLunch = lunchWindow(dayStart + DAY_MS);
+    const lunchCount = Math.max(0, Math.floor((endAt - firstLunch.endAt) / DAY_MS) + 1);
+    if (!lunchCount || breakMinutes !== lunchCount * 40) fail('自動午休須符合完整涵蓋的台北時間 12:20–13:00。');
+    return source;
+}
+
+module.exports = { calculateOvertimePeriod, resolveOvertimeBreakSource, lunchWindow };

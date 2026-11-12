@@ -5,13 +5,56 @@ const vm = require('node:vm');
 function client() {
     const context = { auditActionLabels: {}, auditTargetTypeLabels: {}, state: { dashboard: { supervisorProxy: { canView: true, canUse: false } } }, document: { addEventListener() {} }, escapeHtml: (x) => String(x), renderAdminPaperEmployeePicker: (_, __, ___, options) => JSON.stringify(options), renderLeaveDaysAddTools: () => 'TOOLS', renderLeaveDaysEditor: () => 'EDITOR' };
     for (const name of ['handleLogout', 'renderDashboard', 'renderEmployeeWorkspaceItems', 'renderAdminPermissionAwareContent', 'renderSystemAdminDashboard', 'postRenderSetup', 'handleDashboardClick', 'handleDashboardChange', 'handleDashboardSubmit', 'handleRealtimeSyncMessage']) context[name] = () => {};
-    vm.createContext(context); vm.runInContext(fs.readFileSync(require.resolve('../browser-client/supervisor.js'), 'utf8'), context);
+    vm.createContext(context);
+    for (const file of ['overtime-defaults.js', 'supervisor.js']) vm.runInContext(fs.readFileSync(require.resolve('../browser-client/' + file), 'utf8'), context);
     return { run: (source) => vm.runInContext(source, context), context };
 }
 test('proxy simulated identity can inspect and draft but writes reject before network', async () => {
     const { run } = client();
     assert.equal(run('spCanView()'), true); assert.equal(run('spCanWrite()'), false);
     await assert.rejects(run("spSave('leave', {})"), /身份模擬/);
+});
+test('proxy overtime preserves manual minutes through time changes and supports restoring auto', async () => {
+    const {run, context} = client();
+    const values = {startDate:'2026-11-08',endDate:'2026-11-08',startTime:'08:20',endTime:'17:00',breakMinutes:'0',durationHours:''};
+    const fields = Object.fromEntries(Object.entries(values).map(([name,value]) => [name,{value}]));
+    fields.namedItem = (name) => fields[name];
+    context.form = {dataset:{spForm:'overtime'},elements:fields};
+    run('spSyncOvertime(form)');
+    assert.equal(fields.breakMinutes.value, '40');
+    assert.equal(fields.durationHours.value, '8');
+    fields.breakMinutes.value = '30';
+    run('spSyncOvertime(form, form.elements.breakMinutes)');
+    fields.endTime.value = '18:00';
+    run('spSyncOvertime(form, form.elements.endTime)');
+    assert.equal(fields.breakMinutes.value, '30');
+    const freshFields = Object.fromEntries(Object.entries(values).map(([name,value]) => [name,{value}]));
+    freshFields.namedItem = (name) => freshFields[name];
+    const freshForm = {dataset:{spForm:'overtime'},elements:freshFields};
+    const forms = [context.form, freshForm];
+    context.document.querySelector = () => forms.shift();
+    run("state.token='test'; state.dashboard.role='employee'; supervisorState.identity='test/employee/'; supervisorState.dirty=true; renderDashboard(state.dashboard)");
+    assert.equal(freshFields.breakMinutes.value, '30');
+    assert.equal(freshFields.endTime.value, '18:00');
+    assert.equal(freshForm.dataset.overtimeBreakManual, 'true');
+    context.form = freshForm;
+    context.event = {target:{closest: () => ({dataset:{action:'sp-auto-overtime-break'},closest: () => context.form})},preventDefault() {}};
+    await run('handleDashboardClick(event)');
+    assert.equal(freshFields.breakMinutes.value, '40');
+    assert.equal(freshFields.durationHours.value, '9');
+    const submissions = [];
+    context.submitEvent = { target: { closest: () => freshForm }, preventDefault() {} };
+    context.FormData = class extends Map {
+        constructor() { super([['employeeIds', 'E001'], ['confirmApproval', 'on']]); }
+        getAll(key) { return this.has(key) ? [this.get(key)] : []; }
+    };
+    context.captureSubmit = (operation, body) => submissions.push({ operation, body });
+    await run("state.dashboard.supervisorProxy.canUse=true; spSave=captureSubmit; handleDashboardSubmit(submitEvent)");
+    assert.equal(submissions[0].operation, 'overtime');
+    assert.equal(submissions[0].body.breakSource, 'automatic_lunch');
+    await run("spSyncOvertime(form, form.elements.breakMinutes); handleDashboardSubmit(submitEvent)");
+    assert.equal(submissions[1].body.breakMinutes, '40');
+    assert.equal(submissions[1].body.breakSource, 'manual');
 });
 test('create form has empty target selection and required blank leave type, with tools above list', () => {
     const { run } = client();
@@ -137,8 +180,8 @@ test('supervisor steps replace the old batch paragraph through render and mode-r
 });
 test('proxy overtime deducts explicit rest, clears invalid net hours, and resets with zero rest', () => {
     const {run,context}=client();context.form={dataset:{spForm:'overtime'},elements:Object.fromEntries(Object.entries({startDate:'2026-11-02',startTime:'23:30',endDate:'2026-11-03',endTime:'00:31',breakMinutes:'1',durationHours:'99'}).map(([key,value])=>[key,{value}]))};
-    run('spSyncOvertime(form)');assert.equal(context.form.elements.durationHours.value,'1');
-    for(const rest of ['', '-1','1.5','61','62']){context.form.elements.breakMinutes.value=rest;run('spSyncOvertime(form)');assert.equal(context.form.elements.durationHours.value,'');}
+    run('spSyncOvertime(form, form.elements.breakMinutes)');assert.equal(context.form.elements.durationHours.value,'1');
+    for(const rest of ['', '-1','1.5','61','62']){context.form.elements.breakMinutes.value=rest;run('spSyncOvertime(form, form.elements.breakMinutes)');assert.equal(context.form.elements.durationHours.value,'');}
     run("supervisorState.kind='overtime';supervisorState.data={employees:[],leaveTypes:[]}");
     const html=run('spRequestForm()');assert.match(html,/name="breakMinutes" type="number" value="0"/);assert.match(html,/name="durationHours"[^>]*readonly/);assert.match(html,/disabled>代送出加班申請/);assert.match(html,/"selectedIds":\[\]/);
 });

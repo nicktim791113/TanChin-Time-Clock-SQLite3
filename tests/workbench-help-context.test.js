@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 
-function loadHelp({ role = 'admin', section = 'salaryAdvances', salaryVisible = true, page, dialogStage = '', correctionDialog = false } = {}) {
+function loadHelp({ role = 'admin', section = 'salaryAdvances', salaryVisible = true, page, dialogStage = '', correctionDialog = false, attendanceVisible = false } = {}) {
     let toolbar, activeStage = dialogStage, paints = 0;
     const salaryDialog = { querySelector: () => ({ dataset: { saForm: activeStage } }) };
     const salaryRoot = { closest: () => salaryVisible ? null : {}, querySelector: (selector) => selector === '.workspace-subnav-content' ? workspace : selector === '.sa-dialog[open]' && activeStage ? salaryDialog : null };
@@ -16,7 +16,7 @@ function loadHelp({ role = 'admin', section = 'salaryAdvances', salaryVisible = 
         state: { dashboard: { role }, activeSections: { [role]: section }, activeSubSections: {} },
         ...(page ? { saState: { page }, saPaint() { paints++; } } : {}),
         document: {
-            getElementById: (id) => id === 'salary-advance-workspace' ? salaryRoot : null,
+            getElementById: (id) => id === 'salary-advance-workspace' ? salaryRoot : id === 'employee-attendance-workspace' && attendanceVisible ? { closest: () => null } : null,
             querySelector: (selector) => selector === '#approved-correction-dialog[open]' && correctionDialog ? {} : selector === '#salary-advance-workspace' ? salaryRoot : null,
             addEventListener() {}, createElement: () => ({}), body: { dataset: {} }
         },
@@ -197,4 +197,16 @@ test('approved correction modal help distinguishes readonly history, preview and
     assert.match(describe({}, 'confirmLegacyBreak'), /不把NULL默認為零/);
     assert.match(describe({ acAction: 'edit' }), /保留草稿.*尚未儲存/);
     assert.match(describe({ acAction: 'close' }), /未存.*不寫入/);
+});
+
+
+test('attendance help explains permission-scoped raw and daily evidence and calendar settings', () => {
+    const employee = loadHelp({ role: 'employee', section: 'records', salaryVisible: false, attendanceVisible: true });
+    assert.equal(employee.run('workbenchHelpContext().root'), '#employee-attendance-workspace');
+    assert.match(employee.run('workbenchHelpContext().topic[2].join()'), /最近七日.*不會.*擴大.*已核准加班.*待審只提示/);
+    const admin = loadHelp({ section: 'shifts', salaryVisible: false });
+    admin.run("state.activeSubSections.admin={shifts:'calendar'}");
+    assert.equal(admin.run('workbenchHelpContext().topic[0]'), '出勤工作日');
+    assert.match(admin.describe({ name: 'reason', label: '原因' }), /必填.*查核/);
+    assert.match(admin.describe({ name: 'workdays', label: '工作日' }), /例外優先/);
 });

@@ -132,7 +132,7 @@ function spRequestForm() {
         ${leave ? `<label class="field"><span>假別</span><select name="leaveTypeId" required><option value="">請選擇假別</option>${supervisorState.data.leaveTypes.map((t) => `<option value="${spEscape(t.id)}">${spEscape(t.name)}</option>`).join('')}</select></label>` : ''}
          ${!leave ? spField('休息（分鐘）', 'breakMinutes', 'number', '0', 'min="0" step="1"') : ''}${spField(leave ? '每人整筆時數' : '扣除休息後時數', 'durationHours', 'number', leave ? '' : '2', 'readonly placeholder="由時段自動計算" min="0.01" step="0.01"')}
         ${leave ? renderLeaveDaysAddTools({ autoHours: true, categoryKeywords: true, supervisorLayout: true }) : ''}</div>
-        ${!leave ? '<p class="sp-step-note">休息預設 0 分鐘；填 0 以上整數且小於起訖總分鐘，時數會自動扣除休息。跨夜請核對完整結束日期。</p>' : ''}
+        ${!leave ? `<div class="inline-actions">${spButton('auto-overtime-break', '恢復自動休息')}</div><p class="sp-step-note">每完整涵蓋一天的 12:20–13:00，預帶休息 40 分鐘，可修改。跨夜請核對結束日期。</p>` : ''}
         ${leave ? `${renderLeaveDaysEditor({ batch: true, autoHours: true, externalTools: true, categoryKeywords: true, supervisorSteps: true })}<div data-sp-leave-meals></div>` : ''}
         ${spField('申請事由', 'reason', 'text', '', 'maxlength="2000"')}${spReasonField('proxyReason')}
         <label class="sp-confirm"><input type="checkbox" name="confirmApproval" required>確認替所有勾選員工代申請相同內容；多主管設定依各人審核規則送審，原單主管代辦流程保留</label>
@@ -255,10 +255,19 @@ async function spLoad() {
 const spPreviousRender = renderDashboard;
 renderDashboard = function renderDashboardWithSupervisor(dashboard) {
     const identity = `${state.token}/${dashboard.role}/${dashboard.user?.id || ''}`;
+    const selector = '[data-sp-form="overtime"]';
+    const timing = identity === supervisorState.identity && supervisorState.dirty
+        ? captureOvertimeTiming(document.querySelector?.(selector)) : null;
     if (identity !== supervisorState.identity) (document.querySelectorAll?.('.sp-reasons-dialog') || []).forEach((dialog) => { dialog.close(); dialog.remove(); });
     if (identity !== supervisorState.identity) Object.assign(supervisorState, { identity, data: null, assignments: null, routes: null, month: spToday().slice(0, 7),
         date: spToday(), employeeId: '', recordEmployeeIds: null, assignmentId: '', kind: 'leave', proxyView: 'create', managementView: 'review', page: 1, form: '', loading: false, busy: false, dirty: false, error: '', sequence: supervisorState.sequence + 1 });
-    return spPreviousRender(dashboard);
+    const result = spPreviousRender(dashboard);
+    if (timing) {
+        const form = document.querySelector(selector);
+        restoreOvertimeTiming(form, timing);
+        spSyncOvertime(form);
+    }
+    return result;
 };
 const spPreviousItems = renderEmployeeWorkspaceItems;
 renderEmployeeWorkspaceItems = function renderEmployeeItemsWithSupervisor(dashboard) {
@@ -310,6 +319,11 @@ handleDashboardClick = async function handleSupervisorClick(event) {
     event.preventDefault(); if (supervisorState.busy) return;
     if (action === 'sp-reason-preset') { const input = button.closest('[data-sp-form]').elements[button.dataset.field]; input.value = spPresets().values[Number(button.dataset.index)] || ''; input.dispatchEvent(new Event('input', { bubbles: true })); return; }
     if (action === 'sp-reason-settings') { spOpenReasons(); return; }
+    if (action === 'sp-auto-overtime-break') {
+        const form = button.closest('[data-sp-form="overtime"]');
+        if (form) { delete form.dataset.overtimeBreakManual; spSyncOvertime(form); supervisorState.dirty = true; }
+        return;
+    }
     if (action === 'sp-withdraw' && !spCanWrite()) { spMessage('身份模擬無法代撤回。'); return; }
     if (action === 'sp-management-view') {
         const view = button.dataset.view;
@@ -371,7 +385,7 @@ handleDashboardChange = async function handleSupervisorChange(event) {
     if (target.matches('[data-paper-employee-height]')) return;
     if (target.matches('[data-paper-employee-department]')) return spPreviousChange(event);
     if (target.closest('[data-sp-form]')) {
-        spSyncOvertime(target.closest('[data-sp-form="overtime"]'));
+        spSyncOvertime(target.closest('[data-sp-form="overtime"]'), target);
         if (supervisorState.busy) return;
         if (target.matches('[data-paper-employee-checkbox]')) await spPreviousChange(event);
         spSyncAssignmentClear(target.closest('[data-sp-form]'), target.matches('[name="mode"], [data-paper-employee-checkbox]'));
@@ -432,7 +446,14 @@ handleDashboardSubmit = async function handleSupervisorSubmit(event) {
         else body.confirmApproval = fields.has('confirmApproval');
     }
     try {
-        if (operation === 'overtime') { spSyncOvertime(form); body.durationHours = form.elements.durationHours.value; body.breakMinutes = form.elements.breakMinutes.value; if (!body.durationHours) throw new Error('請填寫有效加班起訖；休息分鐘須為 0 以上整數，且小於總分鐘。'); }
+        if (operation === 'overtime') {
+            spSyncOvertime(form);
+            body.durationHours = form.elements.durationHours.value;
+            body.breakMinutes = form.elements.breakMinutes.value;
+            if (!body.durationHours) throw new Error('請填寫有效加班起訖；休息分鐘須為 0 以上整數，且小於總分鐘。');
+            const source = overtimeBreakProvenance(form.dataset.overtimeBreakManual === 'true', body.breakMinutes);
+            if (source) body.breakSource = source;
+        }
         if (operation === 'leave') {
             if (!body.leaveTypeId) throw new Error('請選擇假別。');
             if (!String(body.reason || '').trim()) throw new Error('請填寫請假事由。');
@@ -465,7 +486,7 @@ handleRealtimeSyncMessage = async function handleSupervisorSync(payload) {
 };
 document.addEventListener('input', (event) => {
     if (!supervisorState.busy && !event.target.matches('[data-paper-employee-search], [data-paper-employee-height]') && event.target.closest('[data-sp-form]')) supervisorState.dirty = true;
-    if (!supervisorState.busy) spSyncOvertime(event.target.closest('[data-sp-form="overtime"]'));
+    if (!supervisorState.busy) spSyncOvertime(event.target.closest('[data-sp-form="overtime"]'), event.target);
     if (!supervisorState.busy) spLoadLeaveMeals(event.target.closest('[data-sp-form="leave"]')).catch(() => {});
 });
 document.addEventListener('click', (event) => {
@@ -483,10 +504,14 @@ function spPresets() { return supervisorState.data?.reasonPresets || { values: [
 function spReasonField(name) {
     return `<div class="field sp-reason-field"><div class="sp-reason-label"><label for="sp-${name}">代辦原因</label><div class="sp-reason-pills">${spPresets().values.map((value, index) => `<button type="button" class="sp-reason-pill" data-action="sp-reason-preset" data-field="${name}" data-index="${index}">${spEscape(value)}</button>`).join('')}</div>${spButton('reason-settings', '管理常用原因')}</div><input id="sp-${name}" name="${name}" type="text" maxlength="500" required></div>`;
 }
-function spSyncOvertime(form) {
+function spSyncOvertime(form, target) {
     if (form?.dataset?.spForm !== 'overtime') return;
     const f = form.elements;
     if (!f?.startDate || !f.startTime || !f.endDate || !f.endTime || !f.durationHours || !f.breakMinutes) return;
+    if (target === f.breakMinutes) form.dataset.overtimeBreakManual = 'true';
+    if (form.dataset.overtimeBreakManual !== 'true') {
+        f.breakMinutes.value = String(overtimeDefaultBreakMinutes(f.startDate.value, f.startTime.value, f.endDate.value, f.endTime.value));
+    }
     const start = new Date(`${f.startDate.value}T${f.startTime.value}:00+08:00`).getTime(), end = new Date(`${f.endDate.value}T${f.endTime.value}:00+08:00`).getTime();
     const minutes = (end - start) / 60000;
     const rest = Number(f.breakMinutes.value);
