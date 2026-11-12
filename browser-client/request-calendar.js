@@ -1,6 +1,6 @@
 const requestCalendars = { identity: '', dashboard: null, leave: null, overtime: null, review: {}, reviewKind: 'leave' };
 const requestCalendarLabels = { leave: '請假', overtime: '加班' };
-const requestCalendarStatuses = { pending_supervisor: '待主管審核', pending_admin: '待管理部終審', approved: '已核准', rejected: '已駁回', withdrawn: '已撤回', cancelled: '已作廢' };
+const requestCalendarStatuses = { pending_supervisor: '待主管審核', pending_additional: '待額外複核', pending_admin: '待管理部終審', approved: '已核准', rejected: '已駁回', withdrawn: '已撤回', cancelled: '已作廢' };
 const rcEscape = (value) => escapeHtml(String(value ?? ''));
 function rcToday() { return new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); }
 function rcAdmin() { return state.dashboard?.role === 'admin'; }
@@ -61,8 +61,9 @@ function rcActions(kind, row) {
     if (actions.review) return `<div class="review-action-stack"><label class="field"><span>審核備註</span><input class="review-comment-input" type="text" data-${kind}-review-comment></label><div class="table-actions">${decision('approved', actions.review === 'admin' ? '終審核准' : '核准')}${decision('rejected', '駁回')}</div></div>`;
     if (actions.withdraw) return `<button type="button" class="mini-btn" data-action="${kind}-withdraw" ${attrs}>撤回</button>`;
     if (rcAdmin() && typeof renderApprovedCorrectionActions === 'function' && acEligible(kind,row)) return renderApprovedCorrectionActions(kind,row);
-    if (rcAdmin() && hasCurrentAdminPermission(`admin.${kind}.paperCreate`) && row.status === 'approved' && row.approval_mode === 'admin_paper_approved') {
-        return `<div class="table-actions"><button type="button" class="mini-btn" data-action="paper-${kind}-correct" ${attrs}>修正</button><button type="button" class="mini-btn danger-text" data-action="paper-${kind}-cancel" ${attrs}>作廢</button></div>`;
+    if (rcAdmin() && hasCurrentAdminPermission(`admin.${kind}.paperCreate`) && row.approval_mode === 'admin_paper_approved'
+        && (row.status === 'approved' || (kind === 'overtime' && row.status === 'pending_additional'))) {
+        return `<div class="table-actions">${row.status === 'approved' ? `<button type="button" class="mini-btn" data-action="paper-${kind}-correct" ${attrs}>修正</button>` : ''}<button type="button" class="mini-btn danger-text" data-action="paper-${kind}-cancel" ${attrs}>作廢</button></div>`;
     }
     return '';
 }
@@ -126,7 +127,7 @@ function rcRender(kind, advancedHtml = '') {
     const current = rcState(kind), data = current.data, label = requestCalendarLabels[kind];
     const policy = rcHistoryWindow(kind), minimum = rcMinMonth(kind);
     if (current.view === 'advanced' && rcAdmin()) return `<section id="rc-${kind}" class="rc-workspace" data-kind="${kind}"><div class="rc-toolbar"><h3>${label}進階查詢</h3>${rcButton(kind, 'view', '返回日曆', 'data-view="calendar"')}</div>${advancedHtml}</section>`;
-    const statuses = Object.entries(requestCalendarStatuses).filter(([id]) => kind === 'leave' || id !== 'pending_admin');
+    const statuses = Object.entries(requestCalendarStatuses).filter(([id]) => kind === 'leave' ? id !== 'pending_additional' : id !== 'pending_admin');
     const detail = data?.detail;
     const availableEmployees = data?.employees || current.employees || [];
     const selectedEmployee = current.filters.employeeId;
@@ -208,7 +209,7 @@ const rcPreviousEmployeeItems = renderEmployeeWorkspaceItems;
 renderEmployeeWorkspaceItems = function renderEmployeeItemsWithCalendars(dashboard) {
     const items = rcPreviousEmployeeItems(dashboard).map((item) => ['leave-history', 'overtime-history'].includes(item.id) ? { ...item, meta: '日曆／列表' } : item);
     if (dashboard.supervisorReview?.canUse) items.push({ id: 'supervisor-review', label: '主管審核', meta: `${dashboard.supervisorReview.count} 筆待審`,
-        html: `<section aria-label="主管審核"><h3>主管審核</h3><div class="meal-tabs" role="tablist" aria-label="審核項目">${['leave', 'overtime'].map((kind) => `<button type="button" role="tab" data-action="rc-review-kind" data-kind="${kind}" aria-selected="${requestCalendars.reviewKind === kind}">${requestCalendarLabels[kind]}</button>`).join('')}</div>${rcRender(requestCalendars.reviewKind)}</section>` });
+        html: `<section aria-label="主管審核"><h3>主管審核</h3><div class="meal-tabs" role="tablist" aria-label="審核項目">${['leave', 'overtime'].map((kind) => `<button type="button" role="tab" data-action="rc-review-kind" data-kind="${kind}" aria-selected="${requestCalendars.reviewKind === kind}">${requestCalendarLabels[kind]}</button>`).join('')}</div>${requestCalendars.reviewKind === 'overtime' && typeof cotRenderInbox === 'function' ? cotRenderInbox() : ''}${rcRender(requestCalendars.reviewKind)}</section>` });
     return items;
 };
 for (const kind of ['leave', 'overtime']) {

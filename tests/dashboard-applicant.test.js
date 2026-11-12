@@ -14,7 +14,7 @@ test('metric applicant uses the recorded applicant for self and proxy, without i
 });
 function renderer() {
     const context = vm.createContext({ URLSearchParams, state: {}, ui: {}, auditActionLabels: {}, auditTargetTypeLabels: {}, document: { getElementById() {} },
-        escapeHtml: (v) => String(v).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;'),
+        escapeHtml: (v) => String(v).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
         renderInsightTable: (headers, rows) => '<table><thead>' + headers.map(h => '<th>' + h + '</th>').join('') + '</thead><tbody>' + rows.join('') + '</tbody></table>',
         renderLeaveDaysSummary: () => '', renderAdminEmployeeInsight() {}, renderAdminTodayNormalInsight() {}, renderAdminAbnormalInsight() {}, getAdminInsightTitle() {}, renderAdminDashboardInsightContent() {},
         handleDashboardClick() {}, renderEmployeeDashboard() {}, renderDashboard() {}, handleRealtimeSyncMessage() {}, handleLogout() {} });
@@ -58,6 +58,19 @@ for (const key of ['leavePendingSupervisor', 'leavePendingAdmin', 'overtimePendi
     assert.match(cell, /核准備註/);
     const content = html.match(/<details class="dm-request-detail">([\s\S]*?)<\/td>/)[1];
     assert.match(content, /事由文字/); assert.doesNotMatch(content, /dm-review-progress|核准備註/);
+});
+
+test('additional review detail displays the currently eligible reviewer or reassignment state', () => {
+    const context = renderer();
+    context.key = 'overtimePendingAdditional';
+    context.dashboard = { dashboardMetrics: { catalog: [{ key: context.key, available: true, label: '加班待額外複核' }], groups: [] } };
+    const record = { employeeId: 'E1', employeeName: '對象', applicantId: 'E1', status: 'pending_additional', statusText: '待額外複核' };
+    context.records = [{ ...record, reviewActors: { pendingAdditionalReviewers: [{ id: 'R1', name: '<複核人>' }] } }, record];
+    vm.runInContext("dmState.detail = { metric:{key},kind:'overtime',records,summary:{},filters:{},page:1,totalPages:1,totalRecords:2,unfilteredRecords:2 }", context);
+    const html = vm.runInContext('renderAdminDashboardInsightContent(key,dashboard)', context);
+    assert.match(html, /<th>待審查人／核准人<\/th>/);
+    assert.match(html, /待額外複核：<\/span>&lt;複核人&gt;（R1）/);
+    assert.match(html, /無可用額外複核人，待管理者改派/);
 });
 
 test('reviewer display preserves unknown identities, escapes data and leaves weekly detail columns unchanged', () => {

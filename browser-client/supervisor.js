@@ -34,9 +34,12 @@ function spField(label, name, type, value = '', extra = '') {
 function spCanAssignments() { return state.dashboard?.role === 'system_admin' || hasCurrentAdminPermission('admin.supervisors.manage'); }
 function spCanRoutes() { return state.dashboard?.role === 'system_admin' || hasCurrentAdminPermission('admin.leave.settings'); }
 function spManagementView() {
-    if (supervisorState.managementView === 'review' && !spCanRoutes()) supervisorState.managementView = 'assignments';
-    if (supervisorState.managementView === 'assignments' && !spCanAssignments()) supervisorState.managementView = 'review';
+    const views = spManagementViews().filter(([, , visible]) => visible);
+    if (!views.some(([id]) => id === supervisorState.managementView)) supervisorState.managementView = views[0]?.[0] || 'review';
     return supervisorState.managementView;
+}
+function spManagementViews() {
+    return [['review', '主管審核', spCanRoutes()], ['conditional', '條件複核', typeof cotCanSettings === 'function' && cotCanSettings()], ['assignments', '代辦主管', spCanAssignments()]];
 }
 function spReviewPolicyLabel(employee) {
     const missing = (employee.requiredSupervisorIds || []).filter((id) => !(employee.supervisorIds || []).includes(id));
@@ -76,9 +79,9 @@ function renderSupervisorAssignments() {
         <div class="inline-message sp-message" aria-live="polite">${spEscape(supervisorState.error)}</div>
         <div class="workspace-subnav-layout">
             <aside class="workspace-subnav-sidebar" aria-label="主管指定子導覽"><nav class="workspace-subnav-card"><div class="workspace-subnav-items">
-                ${[['review', '主管審核', spCanRoutes()], ['assignments', '代辦主管', spCanAssignments()]].filter(([, , visible]) => visible).map(([id, label]) => `<button type="button" class="workspace-subnav-item ${view === id ? 'is-active' : ''}" data-action="sp-management-view" data-view="${id}" aria-current="${view === id ? 'page' : 'false'}">${label}</button>`).join('')}
+                ${spManagementViews().filter(([, , visible]) => visible).map(([id, label]) => `<button type="button" class="workspace-subnav-item ${view === id ? 'is-active' : ''}" data-action="sp-management-view" data-view="${id}" aria-current="${view === id ? 'page' : 'false'}">${label}</button>`).join('')}
             </div></nav></aside><div class="workspace-subnav-content">
-        ${view === 'review' ? `<div class="sp-toolbar">${spButton('refresh', '重新整理')}</div>${spRenderRoutes()}` : `
+        ${view === 'conditional' ? cotRenderSettings() : view === 'review' ? `<div class="sp-toolbar">${spButton('refresh', '重新整理')}</div>${spRenderRoutes()}` : `
         <div class="sp-toolbar"><h3>指定代辦主管</h3>${spButton('refresh', '重新整理')}</div>
         ${!data ? '<p role="status">讀取主管指定資料中…</p>' : `${data.employees.length ? `<form data-sp-form="assignments/batch" class="sp-form">
             ${renderAdminPaperEmployeePicker(data.employees, '設定主管的員工', [], { name: 'assignmentEmployeeIds', maxSelection: 100 })}
@@ -135,6 +138,7 @@ function spRequestForm() {
         ${!leave ? `<div class="inline-actions">${spButton('auto-overtime-break', '恢復自動休息')}</div><p class="sp-step-note">每完整涵蓋一天的 12:20–13:00，預帶休息 40 分鐘，可修改。跨夜請核對結束日期。</p>` : ''}
         ${leave ? `${renderLeaveDaysEditor({ batch: true, autoHours: true, externalTools: true, categoryKeywords: true, supervisorSteps: true })}<div data-sp-leave-meals></div>` : ''}
         ${spField('申請事由', 'reason', 'text', '', 'maxlength="2000"')}${spReasonField('proxyReason')}
+        ${!leave && typeof cotFormPreviewHost === 'function' ? cotFormPreviewHost() : ''}
         <label class="sp-confirm"><input type="checkbox" name="confirmApproval" required>確認替所有勾選員工代申請相同內容；多主管設定依各人審核規則送審，原單主管代辦流程保留</label>
         <div class="inline-actions"><button class="primary-btn" type="submit" ${supervisorState.busy || !spCanWrite() ? 'disabled' : ''}>代送出${spCategoryLabel(kind)}申請</button>${spButton('reset-form', '重設表單')}</div>
     </form>`;
@@ -178,6 +182,7 @@ function spRequestDetail() {
             ${supervisorState.kind === 'leave' ? renderLeaveDaysSummary(row, { categoryKeywords: true }) : ''}
             <p>${spEscape(row.approvalModeText)}${row.applicantId || row.applicant_id ? ` · 申請人：${spEscape(row.applicantId || row.applicant_id)} ${spEscape(row.applicantName || '姓名未記錄')}` : ' · 申請人：未記錄'}</p>
             ${typeof renderApprovedCorrectionIndicator === 'function' ? renderApprovedCorrectionIndicator(row) : ''}
+            ${typeof cotReviewProgress === 'function' ? cotReviewProgress(row) : ''}
             ${row.proxyReason || row.proxy_reason ? `<p>代辦原因：${spEscape(row.proxyReason || row.proxy_reason)}</p>` : ''}
             ${supervisorState.form === `withdraw:${row.id}` && row.canProxyWithdraw ? `<form data-sp-form="leave/withdraw" class="sp-form">
                 <input type="hidden" name="employeeId" value="${spEscape(row.employeeId)}"><input type="hidden" name="requestId" value="${spEscape(row.id)}"><input type="hidden" name="updatedAt" value="${row.updated_at}">
@@ -234,6 +239,7 @@ function spSyncRequired(form) {
 }
 async function spLoad() {
     const identity = supervisorState.identity, sequence = ++supervisorState.sequence, managing = spManagement();
+    if (managing && spManagementView() === 'conditional') return;
     supervisorState.loading = true;
     try {
         const url = managing ? spCanAssignments() ? '/api/browser/supervisors/assignments' : '/api/browser/supervisors/reviewers' : `/api/browser/employee/supervisor?${new URLSearchParams({
@@ -309,6 +315,7 @@ handleDashboardClick = async function handleSupervisorClick(event) {
         return;
     }
     if (!action?.startsWith('sp-')) {
+        if (button && (button.dataset.action.includes('workspace') || button.dataset.action.includes('section')) && typeof cotDiscardSettings === 'function' && !cotDiscardSettings()) { event.preventDefault(); return; }
         if (supervisorState.dirty && button && (button.dataset.action.includes('workspace') || button.dataset.action.includes('section'))) {
             if (!await spDiscard()) { event.preventDefault(); return; }
             supervisorState.dirty = false; supervisorState.form = '';
@@ -327,9 +334,13 @@ handleDashboardClick = async function handleSupervisorClick(event) {
     if (action === 'sp-withdraw' && !spCanWrite()) { spMessage('身份模擬無法代撤回。'); return; }
     if (action === 'sp-management-view') {
         const view = button.dataset.view;
-        if (!['review', 'assignments'].includes(view) || (view === 'review' ? !spCanRoutes() : !spCanAssignments()) || view === spManagementView()) return;
+        if (!spManagementViews().some(([id, , allowed]) => id === view && allowed) || view === spManagementView()) return;
+        if (typeof cotDiscardSettings === 'function' && !cotDiscardSettings()) return;
         if (!await spDiscard()) return;
-        supervisorState.dirty = false; supervisorState.managementView = view; spPaint(); return;
+        supervisorState.dirty = false; supervisorState.managementView = view; spPaint();
+        if (view === 'conditional') { if (!cotSettings.data) cotLoadSettings(); }
+        else if (view === 'review' ? !supervisorState.routes : !supervisorState.assignments) await spLoad();
+        return;
     }
     if (action === 'sp-cancel-meal') {
         const form = spRoot()?.querySelector('[data-sp-form="meals"]');
@@ -361,6 +372,7 @@ handleDashboardClick = async function handleSupervisorClick(event) {
 const spPreviousChange = handleDashboardChange;
 handleDashboardChange = async function handleSupervisorChange(event) {
     const target = event.target;
+    if (target.id === 'workspace-switch' && typeof cotDiscardSettings === 'function' && !cotDiscardSettings()) { target.value = state.dashboard.role; return; }
     if (target.id === 'workspace-switch' && supervisorState.dirty) {
         if (!await spDiscard()) { target.value = state.dashboard.role; return; }
         supervisorState.dirty = false;
@@ -453,6 +465,11 @@ handleDashboardSubmit = async function handleSupervisorSubmit(event) {
             if (!body.durationHours) throw new Error('請填寫有效加班起訖；休息分鐘須為 0 以上整數，且小於總分鐘。');
             const source = overtimeBreakProvenance(form.dataset.overtimeBreakManual === 'true', body.breakMinutes);
             if (source) body.breakSource = source;
+            if (typeof cotReviewForm === 'function') {
+                const fingerprints = await cotReviewForm(form, body, body.employeeIds, 'employeeIds');
+                if (!fingerprints || !form.isConnected || supervisorState.busy) return;
+                body.conditionalReviewFingerprints = fingerprints;
+            }
         }
         if (operation === 'leave') {
             if (!body.leaveTypeId) throw new Error('請選擇假別。');
@@ -466,7 +483,7 @@ handleDashboardSubmit = async function handleSupervisorSubmit(event) {
             body.mealOptOuts = collectLeaveMealChoices(form, body);
         }
         await spSave(operation === 'meals' ? 'meals/choice' : operation, body);
-    } catch (error) { spMessage(error.message); if (operation === 'leave') spLoadLeaveMeals(form, true).catch(() => {}); }
+    } catch (error) { if (operation === 'overtime' && typeof cotResetForm === 'function') cotResetForm(form); spMessage(error.message); if (operation === 'leave') spLoadLeaveMeals(form, true).catch(() => {}); }
 };
 const spPreviousSync = handleRealtimeSyncMessage;
 handleRealtimeSyncMessage = async function handleSupervisorSync(payload) {

@@ -27,7 +27,8 @@ test('continuous work and approved overtime use the same pair without counting e
         overtime: [
             request('inside', at(date,'14:00'), at(date,'15:00'), { duration_hours: 1, break_minutes: 0 }),
             request('outside', at(date,'17:00'), at(date,'19:01'), { duration_hours: 1.51, break_minutes: 30 }),
-            request('pending', at(date,'20:00'), at(date,'21:00'), { status: 'pending_supervisor', duration_hours: 1, break_minutes: 0 })
+            request('pending', at(date,'20:00'), at(date,'21:00'), { status: 'pending_supervisor', duration_hours: 1, break_minutes: 0 }),
+            request('additional', at(date,'21:00'), at(date,'22:00'), { status: 'pending_additional', duration_hours: 1, break_minutes: 0 })
         ]
     });
     assert.equal(result.status, 'completed');
@@ -35,7 +36,11 @@ test('continuous work and approved overtime use the same pair without counting e
     assert.equal(result.punches[1].excluded, true);
     assert.equal(result.overtime.status,'completed');
     assert.deepEqual([result.overtime.approvedMinutes,result.overtime.coveredMinutes,result.overtime.lateMinutes,result.overtime.earlyMinutes], [91,91,0,0]);
-    assert.equal(result.overtime.pendingCount,1);
+    assert.equal(result.overtime.pendingCount,2);
+    const additional = result.overtime.requests.find(row => row.id === 'additional');
+    assert.equal(additional.status, 'pending_additional');
+    assert.equal(additional.assessmentStatus, 'pending');
+    assert.equal(additional.approvedMinutes, null);
     assert.equal(result.overtime.requests.find(row => row.id === 'inside').assessmentStatus,'normal_overlap');
 });
 

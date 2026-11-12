@@ -15,6 +15,7 @@ const { attachSupervisorRoutes } = require('./supervisor-routes');
 const { isSupervisorSimulation } = require('./supervisor-management');
 const { punchHistoryWindow } = require('./employee-browser-settings');
 const { attachEmployeeAttendanceRoutes } = require('./employee-attendance');
+const { attachConditionalOvertimeRoutes, SETTINGS_PERMISSION: CONDITIONAL_OVERTIME_PERMISSION } = require('./overtime-conditional-routes');
 const { attachRequestHistoryRoutes } = require('./request-history');
 const { attachLeaveEntitlementRoutes } = require('./leave-entitlement-routes');
 const { attachLeaveUsageRoutes } = require('./leave-usage');
@@ -79,6 +80,7 @@ const ADMIN_PERMISSION_DEFINITIONS = [
   { code: 'admin.overtime.view', category: '加班管理', label: '查看加班申請、警示與匯出', section: 'overtime' },
   { code: 'admin.overtime.paperCreate', category: '加班管理', label: '紙本加班補登', section: 'overtime', highRisk: true },
   { code: 'admin.overtime.approvedCorrect', category: '加班管理', label: '修正已核准線上加班', section: 'overtime', highRisk: true, delegatedOnly: true },
+  { code: CONDITIONAL_OVERTIME_PERMISSION, category: '主管指定', label: '管理週六加班條件複核與改派', section: 'supervisors', highRisk: true, delegatedOnly: true },
   { code: 'admin.meals.view', category: '午餐團膳', label: '查看團膳名單、餐數與匯出', section: 'meals' },
   { code: 'admin.meals.manage', category: '午餐團膳', label: '參加資格與代登用餐', section: 'meals' },
   { code: 'admin.meals.settings', category: '午餐團膳', label: '供餐日與截止時間設定', section: 'meals' },
@@ -107,7 +109,7 @@ const ADMIN_SECTION_RULES = [
   { id: 'overtime', label: '加班管理', permissions: ['admin.overtime.view', 'admin.overtime.paperCreate'] },
   { id: 'meals', label: '午餐團膳', permissions: ['admin.meals.view'] },
   { id: 'salaryAdvances', label: '借支管理', permissions: Object.values(SALARY_ADVANCE_PERMISSIONS) },
-  { id: 'supervisors', label: '主管指定', permissions: ['admin.supervisors.manage', 'admin.leave.settings'] },
+  { id: 'supervisors', label: '主管指定', permissions: ['admin.supervisors.manage', 'admin.leave.settings', CONDITIONAL_OVERTIME_PERMISSION] },
   { id: 'system', label: '系統設定', permissions: ['admin.system.manage'] },
   { id: 'bells', label: '響鈴設定', permissions: ['admin.bells.manage'] },
   { id: 'themes', label: '主題特效', permissions: ['admin.themes.manage'] }
@@ -389,6 +391,13 @@ const API_ROUTE_CATALOG = [
   { category: '主管設定 API', method: 'POST', path: '/api/browser/supervisors/routes', auth: '審核路徑設定權限或系統管理者', description: '儲存請假／加班共用部門主管審核路徑' },
   { category: '主管設定 API', method: 'GET', path: '/api/browser/supervisors/reviewers', auth: '審核路徑設定權限或系統管理者', description: '讀取個別員工請假／加班審核主管' },
   { category: '主管設定 API', method: 'POST', path: '/api/browser/supervisors/reviewers/batch', auth: '審核路徑設定權限或系統管理者', description: '批量指定個別員工的單一審核主管；完整版本、原因、確認與稽核' },
+  { category: '條件複核 API', method: 'GET', path: '/api/browser/supervisors/conditional-overtime/settings', auth: '條件複核設定權限或系統管理者', description: '讀取週六加班規則、指定假別與主備複核人' },
+  { category: '條件複核 API', method: 'POST', path: '/api/browser/supervisors/conditional-overtime/settings', auth: '條件複核設定權限或系統管理者', description: '核對版本、原因與確認後儲存；身份模擬禁止' },
+  { category: '條件複核 API', method: 'POST', path: '/api/browser/supervisors/conditional-overtime/preview', auth: '本人、授權代辦或紙本補登管理者', description: '預覽平日請假觸發及獨立複核人；送出時驗證預覽指紋' },
+  { category: '條件複核 API', method: 'GET', path: '/api/browser/supervisors/conditional-overtime/inbox', auth: '本關複核人或加班查看管理者', description: '取得待額外複核案件，原主管完成後才進入本關' },
+  { category: '條件複核 API', method: 'GET', path: '/api/browser/supervisors/conditional-overtime/:id/history', auth: '案件可查閱者', description: '讀取案件條件依據與不可改寫的複核歷程' },
+  { category: '條件複核 API', method: 'POST', path: '/api/browser/supervisors/conditional-overtime/:id/decision', auth: '獨立複核人本人', description: '驗證本人、版本、意見與確認後完成額外複核；不得自審或重複第一關' },
+  { category: '條件複核 API', method: 'POST', path: '/api/browser/supervisors/conditional-overtime/:id/reassign', auth: '條件複核設定權限或系統管理者', description: '有原因及確認的改派；保留原複核人及歷史決定' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/leave/request', auth: '員工', description: '員工送出請假申請' },
   { category: '瀏覽器入口', method: 'GET', path: '/api/browser/employee/workspace-nav-order', auth: '員工', description: '讀取本人工作台功能順序；不改變功能權限' },
   { category: '瀏覽器入口', method: 'POST', path: '/api/browser/employee/workspace-nav-order/save', auth: '員工本人', description: '儲存個人工作台功能順序，跨裝置保留，禁止身份模擬' },
@@ -2318,6 +2327,7 @@ function getAdminLeaveState(employees = dbModule.loadEmployees(), options = {}) 
 
 const OVERTIME_STATUS_LABELS = {
   pending_supervisor: '主管審核中',
+  pending_additional: '待額外複核',
   approved: '已核准',
   rejected: '已駁回',
   withdrawn: '已撤回',
@@ -2360,6 +2370,8 @@ function formatOvertimeRequestForDashboard(request, lookup = buildOvertimeLookup
   return {
     ...request,
     reviewPolicy: formatRequestReviewPolicy('overtime', request, lookup),
+    additionalReview: request.additionalReview ? { ...request.additionalReview,
+      reviewers: request.additionalReview.reviewerIds.map(id => ({ id, name: lookup.employeeMap.get(id)?.name || '已移除員工' })) } : null,
     correctionSummary: dbModule.getApprovedCorrections().summary('overtime', request.id),
     breakMinutes: request.break_minutes == null ? null : Number(request.break_minutes),
     employeeId: request.employee_id,
@@ -2696,9 +2708,10 @@ function formatLeaveRequestForExternal(request, lookup = buildLeaveLookup()) {
 }
 
 function formatOvertimeRequestForExternal(request, lookup = buildOvertimeLookup()) {
-  const { break_source, ...formatted } = formatOvertimeRequestForDashboard(request, lookup);
+  const { break_source, additionalReview, ...formatted } = formatOvertimeRequestForDashboard(request, lookup);
   return {
     ...formatted,
+    ...(additionalReview ? { additionalReviewStatus: additionalReview.status, reconciliationRequired: Boolean(additionalReview.reconciliationRequired) } : {}),
     externalId: request.id,
     employeeNo: request.employee_id,
     applicantEmployeeNo: request.applicant_id || '',
@@ -2726,7 +2739,8 @@ function getEmployeeOvertimeState(employee) {
       isSelf: item.id === employee.id
     })),
     historyWindow: dbModule.getRequestHistory().window('overtime', historyNow),
-    supervisorQueueCount: dbModule.countOvertimeRequests({ supervisorId: employee.id, status: 'pending_supervisor' }),
+    supervisorQueueCount: dbModule.countOvertimeRequests({ supervisorId: employee.id, status: 'pending_supervisor' }) + dbModule.countOvertimeRequests({ additionalReviewerId: employee.id, status: 'pending_additional' }),
+    additionalQueueCount: dbModule.countOvertimeRequests({ additionalReviewerId: employee.id, status: 'pending_additional' }),
     myRequests: dbModule.queryOvertimeRequests({ employeeOrApplicantId: employee.id, ...dbModule.getRequestHistory().filters('overtime', historyNow), limit: 80 })
       .map((request) => formatOvertimeRequestForDashboard(request, lookup)),
     supervisorQueue: dbModule.queryOvertimeRequests({
@@ -2864,7 +2878,9 @@ function getAdminOvertimeState(employees = dbModule.loadEmployees(), options = {
     summaryMonth,
     monthTotalCount,
     pendingSupervisor,
-    pendingSupervisorTotalCount
+    pendingSupervisorTotalCount,
+    pendingAdditionalTotalCount: canView ? dbModule.countOvertimeRequests({ status: 'pending_additional' }) : 0,
+    pendingAdditionalRequests: canView ? dbModule.queryOvertimeRequests({ status: 'pending_additional', limit: 50 }).map(row => formatOvertimeRequestForDashboard(row, lookup)) : []
   };
 }
 
@@ -3346,7 +3362,7 @@ function buildEmployeeDashboard(employee, session = null) {
     leave,
     overtime,
     supervisorReview: { count: reviewCount, leaveCount: leave.supervisorQueueCount, overtimeCount: overtime.supervisorQueueCount,
-      canUse: reviewCount > 0 || dbModule.getReviewSupervisors().rows().some((row) => row.supervisor_id === employee.id) },
+      canUse: reviewCount > 0 || dbModule.getReviewSupervisors().rows().some((row) => row.supervisor_id === employee.id) || dbModule.getConditionalOvertimeReview().state().reviewerIds.includes(employee.id) },
     meals: dbModule.getMeals().calendar({ employeeId: employee.id }),
     supervisorProxy: { count: dbModule.getSupervisors().assignedEmployees(employee.id).length,
       canView: dbModule.getSupervisors().assignedEmployees(employee.id).length > 0 && (isSupervisorSimulation(session) ||
@@ -4173,6 +4189,11 @@ function notifyDesktop(type, meta = {}) {
     mainWindowRef.webContents.send('data-updated', { type, ...meta });
   }
   broadcastBrowserDataUpdate(type, meta);
+  // Leave/calendar edits can reopen the independent overtime review in the same transaction.
+  if (type === 'leaveRequests' || type === 'attendanceCalendar') {
+    broadcastBrowserDataUpdate('overtimeRequests', meta);
+    if (mainWindowRef) mainWindowRef.webContents.send('data-updated', { type: 'overtimeRequests', ...meta });
+  }
 }
 
 function getBrowserSyncMeta(request) {
@@ -5554,6 +5575,7 @@ function attachBrowserRoutes(server) {
 
   server.post('/api/browser/employee/leave/request', requireBrowserSession, requireBrowserRole('employee'), (request, response) => {
     try {
+      if (request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能送出請假申請。', 403);
       const employee = getEmployeeById(request.browserSession.employeeId);
       if (!employee) throw createHttpError('登入帳號對應的員工資料已不存在，請重新登入。', 401);
       if (typeof request.body?.reason !== 'string' || !request.body.reason.trim()) throw createHttpError('請填寫請假事由。', 400);
@@ -5625,6 +5647,7 @@ function attachBrowserRoutes(server) {
 
   server.post('/api/browser/employee/leave/withdraw', requireBrowserSession, requireBrowserRole('employee'), (request, response) => {
     try {
+      if (request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能撤回請假申請。', 403);
       const requestId = String(request.body?.requestId || '').trim();
       const leaveRequest = dbModule.getLeaveRequestById(requestId);
       if (!leaveRequest) throw createHttpError('找不到指定的請假申請。', 404);
@@ -5740,6 +5763,7 @@ function attachBrowserRoutes(server) {
         duration_hours: durationHours,
         break_minutes: breakMinutes,
         break_source: breakSource,
+        conditional_review_fingerprint: request.body?.conditionalReviewFingerprints?.[applicant.id],
         reason: String(request.body?.reason || '').trim(),
         status: 'pending_supervisor',
         supervisor_id: supervisorId,
@@ -5778,6 +5802,9 @@ function attachBrowserRoutes(server) {
 
   server.post('/api/browser/employee/overtime/withdraw', requireBrowserSession, requireBrowserRole('employee'), (request, response) => {
     try {
+      if (request.browserSession.impersonation?.active || request.browserSession.realEmployeeId && request.browserSession.realEmployeeId !== request.browserSession.employeeId) {
+        throw createHttpError('請以本人身份登入後撤回加班申請，身份模擬不能撤回。', 403);
+      }
       const requestId = String(request.body?.requestId || '').trim();
       const overtimeRequest = dbModule.getOvertimeRequestById(requestId);
       if (!overtimeRequest) throw createHttpError('找不到指定的加班申請。', 404);
@@ -5785,16 +5812,20 @@ function attachBrowserRoutes(server) {
       if (overtimeRequest.employee_id !== actorId && overtimeRequest.applicant_id !== actorId) {
         throw createHttpError('只能撤回自己相關的加班申請。', 403);
       }
-      if (overtimeRequest.status !== 'pending_supervisor') {
-        throw createHttpError('只有主管尚未審核的加班申請可以撤回。', 400);
+      if (!['pending_supervisor', 'pending_additional'].includes(overtimeRequest.status)) {
+        throw createHttpError('只有尚未完成核准的加班申請可以撤回。', 400);
       }
-      dbModule.withdrawOvertimeRequest({ requestId, withdrawnAt: Date.now() });
-      writeBrowserAuditLog(request, {
+      dbModule.getSupervisors().transaction(() => {
+      const result = dbModule.withdrawOvertimeRequest({ requestId, withdrawnAt: Date.now(), actorId });
+      if (result.changes !== 1) throw createHttpError('加班狀態已變更，請重新整理後再試。', 409);
+      dbModule.addAuditLog(buildBrowserAuditLogEntry(request, {
         action: 'withdraw',
         target_type: 'overtime_request',
         target_id: requestId,
         summary: `撤回加班申請 ${requestId}`,
-        before_data: overtimeRequest
+        before_data: overtimeRequest,
+        after_data: dbModule.getOvertimeRequestById(requestId)
+      }));
       });
       notifyDesktop('overtimeRequests', getBrowserSyncMeta(request));
       response.json({
@@ -5840,7 +5871,7 @@ function attachBrowserRoutes(server) {
       notifyDesktop('overtimeRequests', getBrowserSyncMeta(request));
       response.json({
         success: true,
-        message: dbModule.getOvertimeRequestById(requestId).status === 'pending_supervisor' ? '已記錄您的核准，等待指定必審主管。' : decision === 'approved' ? '加班申請已核准。' : '加班申請已由主管駁回。',
+        message: dbModule.getOvertimeRequestById(requestId).status === 'pending_supervisor' ? '已記錄您的核准，等待指定必審主管。' : dbModule.getOvertimeRequestById(requestId).status === 'pending_additional' ? '主管階段已完成，等待週六加班額外複核。' : decision === 'approved' ? '加班申請已核准。' : '加班申請已由主管駁回。',
         data: { dashboard: buildDashboardForSession(request.browserSession) }
       });
     } catch (error) {
@@ -6440,6 +6471,7 @@ function attachBrowserRoutes(server) {
 
   server.post('/api/browser/admin/leave/paper-approved', requireBrowserSession, requireAdminPermission('admin.leave.paperCreate'), (request, response) => {
     try {
+      if (request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能儲存紙本請假補登。', 403);
       const employees = dbModule.loadEmployees();
       const leaveTypes = dbModule.loadLeaveTypes();
       const employeeIds = parsePaperApprovalEmployeeIds(request.body);
@@ -6533,6 +6565,7 @@ function attachBrowserRoutes(server) {
 
   server.post('/api/browser/admin/leave/paper-approved/correct', requireBrowserSession, requireAdminPermission('admin.leave.paperCreate'), (request, response) => {
     try {
+      if (request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能修正紙本請假補登。', 403);
       const requestId = String(request.body?.requestId || '').trim();
       const original = dbModule.getLeaveRequestById(requestId);
       if (!original) throw createHttpError('找不到要修正的請假補登紀錄。', 404);
@@ -6619,6 +6652,7 @@ function attachBrowserRoutes(server) {
 
   server.post('/api/browser/admin/leave/paper-approved/cancel', requireBrowserSession, requireAdminPermission('admin.leave.paperCreate'), (request, response) => {
     try {
+      if (request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能作廢紙本請假補登。', 403);
       const requestId = String(request.body?.requestId || '').trim();
       const original = dbModule.getLeaveRequestById(requestId);
       if (!original) throw createHttpError('找不到要作廢的請假補登紀錄。', 404);
@@ -6745,6 +6779,7 @@ function attachBrowserRoutes(server) {
           duration_hours: durationHours,
           break_minutes: period.break_minutes,
           break_source: breakSource,
+          conditional_review_fingerprint: request.body?.conditionalReviewFingerprints?.[employee.id],
           reason: String(request.body?.reason || '').trim(),
           status: 'approved',
           supervisor_id: request.browserSession.employeeId,
@@ -6764,21 +6799,21 @@ function attachBrowserRoutes(server) {
           action: 'create',
           target_type: 'overtime_request',
           target_id: overtimeRequest.id,
-          summary: `管理者紙本補登 ${employee.id} ${employee.name} 已核准加班`,
+          summary: `管理者紙本補登 ${employee.id} ${employee.name} 加班（${getOvertimeStatusText(dbModule.getOvertimeRequestById(overtimeRequest.id).status)}）`,
           after_data: {
-            ...overtimeRequest,
+            ...dbModule.getOvertimeRequestById(overtimeRequest.id),
             paper_no: paperNo,
             paper_approved_by: paperApprovedBy,
             batch_employee_ids: employeeIds
           }
         }));
-        return overtimeRequest;
+        return dbModule.getOvertimeRequestById(overtimeRequest.id);
       }));
       notifyDesktop('auditLogs', getBrowserSyncMeta(request));
       notifyDesktop('overtimeRequests', getBrowserSyncMeta(request));
       response.json({
         success: true,
-        message: `已為 ${createdRequests.length} 位員工建立紙本核准加班紀錄。`,
+        message: `已為 ${createdRequests.length} 位員工建立紙本加班紀錄${createdRequests.some(row => row.status === 'pending_additional') ? '；符合條件者待額外複核後才完成核准' : ''}。`,
         data: {
           createdCount: createdRequests.length,
           dashboard: buildDashboardForSession(request.browserSession)
@@ -6877,14 +6912,15 @@ function attachBrowserRoutes(server) {
 
   server.post('/api/browser/admin/overtime/paper-approved/cancel', requireBrowserSession, requireAdminPermission('admin.overtime.paperCreate'), (request, response) => {
     try {
+      if (request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能作廢紙本加班補登。', 403);
       const requestId = String(request.body?.requestId || '').trim();
       const original = dbModule.getOvertimeRequestById(requestId);
       if (!original) throw createHttpError('找不到要作廢的加班補登紀錄。', 404);
       if (original.approval_mode !== 'admin_paper_approved') {
         throw createHttpError('只能作廢管理者建立的紙本加班補登。', 403);
       }
-      if (original.status !== 'approved') {
-        throw createHttpError('只有仍為已核准狀態的紙本加班補登可以作廢。', 400);
+      if (!['approved', 'pending_additional'].includes(original.status)) {
+        throw createHttpError('只有已核准或待額外複核的紙本加班補登可以作廢。', 400);
       }
       const cancelledAt = Date.now();
       const auditLog = buildBrowserAuditLogEntry(request, {
@@ -6911,6 +6947,7 @@ function attachBrowserRoutes(server) {
 
   server.post('/api/browser/admin/leave/final-decision', requireBrowserSession, requireAdminPermission('admin.leave.review'), (request, response) => {
     try {
+      if (request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能終審請假申請。', 403);
       const requestId = String(request.body?.requestId || '').trim();
       const decision = String(request.body?.decision || '').trim() === 'approved' ? 'approved' : 'rejected';
       const leaveRequest = dbModule.getLeaveRequestById(requestId);
@@ -7992,6 +8029,12 @@ function createServerApp() {
 
   attachExternalApiRoutes(server);
   attachBrowserRoutes(server);
+  attachConditionalOvertimeRoutes(server, {
+    db: dbModule, requireSession: requireBrowserSession, hasPermission: hasAdminPermission,
+    auditEntry: buildBrowserAuditLogEntry, formatRecord: formatOvertimeRequestForDashboard,
+    parseDateTime: parseLeaveDateTime, validateBoundDevice: validateBoundEmployeeDevice,
+    notify: request => { for (const type of ['overtimeRequests', 'conditionalOvertime', 'auditLogs']) notifyDesktop(type, getBrowserSyncMeta(request)); }
+  });
   attachEmployeeAttendanceRoutes(server, {
     db: dbModule, requireSession: requireBrowserSession,
     requireEmployee: requireBrowserRole('employee'),

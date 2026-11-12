@@ -1,0 +1,46 @@
+.cot-settings, .cot-inbox, .cot-notice {
+    display: grid;
+    gap: .65rem;
+    min-width: 0;
+    padding: .85rem;
+    border: 1px solid #b0c7dc;
+    border-radius: 12px;
+    background: #f3f8fd;
+    color: #183549;
+    overflow-wrap: anywhere;
+}
+.cot-inbox { margin-block: .85rem; }
+.cot-settings { align-content: start; }
+.cot-settings > :is(h3, p), .cot-settings h4 { margin-block: 0; }
+.cot-settings > .wb-page-toolbar { margin-block: 0; }
+.cot-settings form.stack-form { gap: .65rem; }
+.cot-inbox { grid-template-columns: minmax(0, 1fr); }
+.cot-table-scroll { max-width: 100%; min-width: 0; overflow-x: auto; }
+.cot-table { width: 100%; min-width: 640px; border-collapse: collapse; font-size: .86rem; }
+.cot-table th, .cot-table td { padding: .45rem .55rem; border-bottom: 1px solid #b0c7dc; text-align: left; vertical-align: top; }
+.cot-table th { background: #e4eff9; }
+.cot-table td small { display: block; margin-top: .2rem; }
+.cot-table .outline-btn { white-space: nowrap; }
+.cot-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; font-size: .86rem; }
+.cot-inbox > [data-cot-inbox-refresh] { justify-self: start; }
+.cot-notice :is(h4, p, ul), .cot-inbox :is(h3, h4, p) { margin-block: 0; }
+.cot-settings fieldset { display: grid; gap: .65rem; min-width: 0; border: 0; padding: 0; margin: 0; }
+.cot-settings-grid { display: grid; gap: .65rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); }
+.cot-type-list, .cot-settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem .9rem; }
+.cot-settings-actions > button { flex: 0 1 auto; width: auto; }
+.cot-type-list .cot-check { margin-block: 0; }
+.cot-check { display: flex; align-items: start; gap: .45rem; margin-block: .45rem; }
+.cot-check input { flex: 0 0 auto; width: auto; margin-top: .2em; }
+.cot-dialog { width: min(42rem, calc(100vw - 1.5rem)); max-height: calc(100dvh - 1.5rem); overflow: auto; border: 1px solid #b0c7dc; border-radius: 14px; color: #183549; background: #fff; padding: 1rem; }
+.cot-dialog::backdrop { background: rgb(15 34 49 / 55%); }
+.cot-dialog form { margin-block: 1rem; }
+.cot-dialog [role="alert"] { color: #a42628; }
+.cot-warning { color: #854508; font-weight: 650; }
+.cot-progress > summary { cursor: pointer; color: #274c67; font-weight: 650; }
+.cot-progress > .cot-notice { margin-top: .35rem; }
+.rc-status-pending_additional { color: #895105; }
+.er-workspace .er-status-pending_additional { background: #fff5de; color: #8b6114; }
+@media (max-width: 540px) {
+    .cot-settings-grid { grid-template-columns: minmax(0, 1fr); }
+    .cot-settings-actions { align-items: stretch; flex-direction: column; }
+}

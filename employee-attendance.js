@@ -214,7 +214,7 @@ function buildEmployeeAttendance({ range, historyWindow, calendar, punches, leav
     const exceptions = new Map(calendar.exceptions.map(row => [row.date, row]));
     const types = new Map(leaveTypes.map(row => [row.id, row.name]));
     const leave = leaveRequests.filter(relevantStatus).map(row => ({ row, segments: getLeaveDateSegments(row) }));
-    const overtime = overtimeRequests.filter(relevantStatus);
+    const overtime = overtimeRequests.filter(row => relevantStatus(row) || row.status === 'pending_additional');
     const days = [];
     for (let start = range.start; start < range.end; start += DAY) {
         const date = taipeiDate(start);

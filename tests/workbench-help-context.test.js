@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 
-function loadHelp({ role = 'admin', section = 'salaryAdvances', salaryVisible = true, page, dialogStage = '', correctionDialog = false, attendanceVisible = false } = {}) {
+function loadHelp({ role = 'admin', section = 'salaryAdvances', salaryVisible = true, page, dialogStage = '', correctionDialog = false, attendanceVisible = false, conditionalVisible = false, conditionalDialog = false } = {}) {
     let toolbar, activeStage = dialogStage, paints = 0;
     const salaryDialog = { querySelector: () => ({ dataset: { saForm: activeStage } }) };
     const salaryRoot = { closest: () => salaryVisible ? null : {}, querySelector: (selector) => selector === '.workspace-subnav-content' ? workspace : selector === '.sa-dialog[open]' && activeStage ? salaryDialog : null };
@@ -16,8 +16,8 @@ function loadHelp({ role = 'admin', section = 'salaryAdvances', salaryVisible = 
         state: { dashboard: { role }, activeSections: { [role]: section }, activeSubSections: {} },
         ...(page ? { saState: { page }, saPaint() { paints++; } } : {}),
         document: {
-            getElementById: (id) => id === 'salary-advance-workspace' ? salaryRoot : id === 'employee-attendance-workspace' && attendanceVisible ? { closest: () => null } : null,
-            querySelector: (selector) => selector === '#approved-correction-dialog[open]' && correctionDialog ? {} : selector === '#salary-advance-workspace' ? salaryRoot : null,
+            getElementById: (id) => id === 'salary-advance-workspace' ? salaryRoot : (id === 'employee-attendance-workspace' && attendanceVisible) || (id === 'conditional-overtime-settings' && conditionalVisible) ? { closest: () => null } : null,
+            querySelector: (selector) => (selector === '#approved-correction-dialog[open]' && correctionDialog) || (selector === '#conditional-overtime-dialog[open]' && conditionalDialog) ? {} : selector === '#salary-advance-workspace' ? salaryRoot : null,
             addEventListener() {}, createElement: () => ({}), body: { dataset: {} }
         },
         ui: { dashboardContent: { querySelector: (selector) => null, querySelectorAll: () => [] } },
@@ -75,7 +75,7 @@ test('integrated employee pages explain their distinct review and draft rules wi
     assert.match(employee.run('workbenchHelpContext(false).topic[3].join(" ")'), /重整／關頁不保存/);
     employee.run("state.employeeWorkspacePanel = 'overtime'");
     assert.equal(employee.run('workbenchHelpContext(false).topic[0]'), '我的加班');
-    assert.match(employee.run('workbenchHelpContext(false).topic[3].join(" ")'), /僅待主管時可撤回/);
+    assert.match(employee.run('workbenchHelpContext(false).topic[3].join(" ")'), /待主管或待額外複核時可撤回/);
     assert.match(employee.run('workbenchHelpContext(false).topic[3].join(" ")'), /新申請只限本人/);
     employee.run("state.employeeWorkspacePanel = 'records'");
     assert.equal(employee.run('workbenchHelpContext(false).topic[0]'), '員工工作台');
@@ -83,6 +83,19 @@ test('integrated employee pages explain their distinct review and draft rules wi
     const admin = loadHelp({ role: 'admin', section: 'reports', salaryVisible: false });
     admin.run("state.employeeWorkspacePanel = 'leave'");
     assert.equal(admin.run('workbenchHelpContext(false).topic[0]'), '考勤報表');
+});
+
+test('conditional overtime help follows the settings panel, reviewer inbox, and open history dialog', () => {
+    const admin = loadHelp({ section: 'supervisors', salaryVisible: false, conditionalVisible: true, conditionalDialog: true });
+    assert.equal(admin.run('workbenchHelpContext(false).topic[0]'), '條件複核');
+    assert.equal(admin.run('workbenchHelpContext(false).root'), '#conditional-overtime-settings');
+    assert.match(admin.run('workbenchHelpContext(false).topic[2].join(" ")'), /生效日期.*備援複核人/);
+    assert.equal(admin.run('workbenchHelpContext().root'), '#conditional-overtime-dialog');
+    assert.match(admin.run('workbenchHelpContext().topic[2].join(" ")'), /必填意見/);
+    const employee = loadHelp({ role: 'employee', section: '', salaryVisible: false });
+    employee.run("state.employeeWorkspacePanel='supervisor-review'");
+    assert.equal(employee.run('workbenchHelpContext(false).topic[0]'), '主管審核');
+    assert.match(employee.run('workbenchHelpContext(false).topic[2].join(" ")'), /待額外複核/);
 });
 
 test('salary controls explain actual management review, cancellation and monthly export without using leave workflows', () => {

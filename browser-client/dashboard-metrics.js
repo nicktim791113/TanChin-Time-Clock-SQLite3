@@ -8,7 +8,7 @@ const dmGroupsFallback = [
     { key: 'leaveWeek', label: '請假 7 日', kind: 'week', items: Array.from({ length: 7 }, (_, i) => `leaveDay:${i - 3}`) },
     { key: 'leaveReview', label: '請假待審核', kind: 'review', items: ['leavePendingSupervisor', 'leavePendingAdmin'] },
     { key: 'overtimeWeek', label: '加班 7 日', kind: 'week', items: Array.from({ length: 7 }, (_, i) => `overtimeDay:${i - 3}`) },
-    { key: 'overtimeReview', label: '加班待審核', kind: 'review', items: ['overtimePendingSupervisor'] },
+    { key: 'overtimeReview', label: '加班待審核', kind: 'review', items: ['overtimePendingSupervisor', 'overtimePendingAdditional'] },
     { key: 'meals', label: '午餐團膳', kind: 'meals', items: ['mealToday', 'mealTomorrow', 'mealParticipants'] },
     { key: 'schedule', label: '班別與響鈴', kind: 'settings', items: ['shiftCount', 'bellScheduleCount'] },
     { key: 'salary', label: '借支管理', kind: 'salary', items: ['salaryPendingCount', 'salaryPendingPeople', 'salaryPendingAmount', 'salaryApprovedAmount'] },
@@ -27,7 +27,7 @@ function dmValue(item, dashboard) {
     return item.key.startsWith('salary') && item.key.endsWith('Amount') ? `NT$ ${Number(item.value).toLocaleString('zh-TW')}` : item.value;
 }
 function dmShortLabel(item) {
-    return ({ leavePendingSupervisor: '待主管審核', leavePendingAdmin: '待管理部複核', overtimePendingSupervisor: '待主管審核', mealParticipants: '參加團膳人數' })[item.key] || item.label;
+    return ({ leavePendingSupervisor: '待主管審核', leavePendingAdmin: '待管理部複核', overtimePendingSupervisor: '待主管審核', overtimePendingAdditional: '待額外複核', mealParticipants: '參加團膳人數' })[item.key] || item.label;
 }
 function dmItemButton(item, dashboard) {
     const tone = item.key === 'todayAbnormalPunchCount' ? 'danger' : item.key.includes('Pending') ? 'warning' : item.key === 'todayPunchCount' ? 'success' : '';
@@ -146,6 +146,12 @@ function dmReviewActorsCell(row) {
     if (pending.length) lines.push(`<p><span class="dm-review-actor-label">待審查：</span>${pending.map(person).join('、')}</p>`);
     if (actors.pendingAdmin) lines.push('<p><span class="dm-review-actor-label">待審查：</span>管理部複核</p>');
     if (row.status === 'pending_supervisor' && !pending.length) lines.push('<p class="dm-cell-secondary">待審查人未記錄</p>');
+    if (row.status === 'pending_additional') {
+        const reviewers = actors.pendingAdditionalReviewers || [];
+        lines.push(reviewers.length
+            ? `<p><span class="dm-review-actor-label">待額外複核：</span>${reviewers.map(person).join('、')}</p>`
+            : '<p class="dm-cell-secondary">無可用額外複核人，待管理者改派</p>');
+    }
     if (approved.length) lines.push(`<p><span class="dm-review-actor-label">已核准：</span>${approved.map(person).join('、')}</p>`);
     if (actors.approvedAdmin) lines.push(`<p><span class="dm-review-actor-label">管理部核准：</span>${person(actors.approvedAdmin)}</p>`);
     return `<div class="dm-review-actors">${lines.join('') || '<span class="dm-cell-secondary">未記錄</span>'}${renderRequestReviewProgress(row)}</div>`;
@@ -161,7 +167,7 @@ renderAdminDashboardInsightContent = function metricInsightContent(key, dashboar
     if (data.error) return `<div class="dm-detail">${tabs}<p class="inline-message error">${dmEscape(data.error)}</p><button class="outline-btn" data-dm-retry>重新讀取</button></div>`;
     const meal = data.kind === 'meal', summary = data.summary || {}, filters = data.filters || {}, details = data.records || [];
     if (data.kind === 'salary') return dmSalaryDetail(data, tabs, item);
-    const showApplicant = ['leavePendingSupervisor', 'leavePendingAdmin', 'overtimePendingSupervisor'].includes(key);
+    const showApplicant = ['leavePendingSupervisor', 'leavePendingAdmin', 'overtimePendingSupervisor', 'overtimePendingAdditional'].includes(key);
     const summaryItems = meal ? [[summary.people ?? data.totalRecords, '符合條件人數'], [summary.departments || 0, '部門']] : [[summary.people || 0, '符合條件人數'], [data.totalRecords, '申請單數'], ...(data.kind === 'leave' && summary.dayHours != null ? [[summary.dayHours, '當日請假時數']] : []), [summary.requestHours || 0, '整張申請合計時數']];
     return `<div class="dm-detail dm-record-detail${showApplicant ? ' dm-review-detail' : ''}">${tabs}${dmSummary(summaryItems)}<div class="dm-detail-heading"><div><h3>${dmEscape(item.label)}</h3><p>${dmEscape(item.date || '全部日期')} · ${dmEscape(item.subtitle)}${!meal ? data.kind === 'leave' && summary.dayHours != null ? ' · 當日時數只計本日；整筆時數包含其他實際請假日。' : ' · 同人多單分別列出；整筆時數包含整張申請。' : ''}</p></div></div>
         <form class="dm-filters" data-dm-filter><label><span>搜尋人員</span><input name="keyword" maxlength="100" value="${dmEscape(filters.keyword || '')}" placeholder="工號、姓名、部門"></label><label><span>部門</span><select name="department"><option value="">全部部門</option>${(data.departments || []).map((department) => `<option value="${dmEscape(department)}" ${filters.department === department ? 'selected' : ''}>${dmEscape(department)}</option>`).join('')}</select></label><button type="submit" class="primary-btn">查詢</button><button type="button" class="outline-btn" data-dm-clear>清除篩選</button></form>

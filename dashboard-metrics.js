@@ -6,7 +6,7 @@ const METRIC_GROUPS = [
     { key: 'leaveWeek', label: '請假 7 日', items: Array.from({ length: 7 }, (_, i) => `leaveDay:${i - 3}`), kind: 'week' },
     { key: 'leaveReview', label: '請假待審核', items: ['leavePendingSupervisor', 'leavePendingAdmin'], kind: 'review' },
     { key: 'overtimeWeek', label: '加班 7 日', items: Array.from({ length: 7 }, (_, i) => `overtimeDay:${i - 3}`), kind: 'week' },
-    { key: 'overtimeReview', label: '加班待審核', items: ['overtimePendingSupervisor'], kind: 'review' },
+    { key: 'overtimeReview', label: '加班待審核', items: ['overtimePendingSupervisor', 'overtimePendingAdditional'], kind: 'review' },
     { key: 'meals', label: '午餐團膳', items: ['mealToday', 'mealTomorrow', 'mealParticipants'], kind: 'meals' },
     { key: 'schedule', label: '班別與響鈴', items: ['shiftCount', 'bellScheduleCount'], kind: 'settings' },
     { key: 'salary', label: '借支管理', items: ['salaryPendingCount', 'salaryPendingPeople', 'salaryPendingAmount', 'salaryApprovedAmount'], kind: 'salary' },
@@ -14,6 +14,10 @@ const METRIC_GROUPS = [
 ];
 const ALL_CARDS = METRIC_GROUPS.map((group) => group.key);
 const DEFAULT_CARDS = ALL_CARDS.filter((key) => key !== 'appearance');
+const PENDING_METRIC_STATUS = {
+    leavePendingSupervisor: 'pending_supervisor', leavePendingAdmin: 'pending_admin',
+    overtimePendingSupervisor: 'pending_supervisor', overtimePendingAdditional: 'pending_additional'
+};
 const salaryAllowed = (can) => ['view', 'review', 'paper', 'settings', 'export'].some((key) => can(`admin.salary_advances.${key}`));
 const relative = ['前3天', '前天', '昨天', '今天', '明天', '後天', '後3天'];
 const dateText = (now) => new Date(now + OFFSET).toISOString().slice(0, 10);
@@ -53,7 +57,7 @@ function metricSources(db, can, now) {
         if (!can(permission)) return [];
         const query = kind === 'leave' ? db.queryLeaveRequests : db.queryOvertimeRequests;
         const nearby = query({ overlapStartAt: start - 3 * DAY, overlapEndAt: start + 4 * DAY - 1, limit: null });
-        const pending = query({ status: kind === 'leave' ? ['pending_supervisor', 'pending_admin'] : 'pending_supervisor', limit: null });
+        const pending = query({ status: kind === 'leave' ? ['pending_supervisor', 'pending_admin'] : ['pending_supervisor', 'pending_additional'], limit: null });
         return [...new Map([...nearby, ...pending].map((row) => [row.id, row])).values()];
     };
     const leaves = requests('leave', 'admin.leave.review'), overtime = requests('overtime', 'admin.overtime.view');
@@ -84,6 +88,7 @@ function buildDashboardMetrics(db, can, summary = {}, now = Date.now(), supplied
     add('leavePendingSupervisor', '請假待主管審核', '請假', can('admin.leave.review'), source.leaves.filter((r) => r.status === 'pending_supervisor').length, '全部日期 · 單數');
     add('leavePendingAdmin', '請假待管理部複核', '請假', can('admin.leave.review'), source.leaves.filter((r) => r.status === 'pending_admin').length, '全部日期 · 單數');
     add('overtimePendingSupervisor', '加班待主管審核', '加班', can('admin.overtime.view'), source.overtime.filter((r) => r.status === 'pending_supervisor').length, '全部日期 · 單數');
+    add('overtimePendingAdditional', '加班待額外複核', '加班', can('admin.overtime.view'), source.overtime.filter((r) => r.status === PENDING_METRIC_STATUS.overtimePendingAdditional).length, '全部日期 · 單數');
     for (const [key, label, name] of [['mealToday', '今天午餐份數', 'today'], ['mealTomorrow', '明天午餐份數', 'tomorrow']]) {
         const meal = source.meals?.[name];
         add(key, label, '午餐', Boolean(meal), meal?.currentCount || 0, meal ? `${meal.serving ? '供餐' : '未供餐'} · ${meal.submittedCount == null ? '未交單' : `已交單 ${meal.submittedCount} 份`}` : '', meal?.date);
@@ -104,7 +109,7 @@ function metricApplicant(row, employees) {
     const applicantId = String(row.applicant_id || '').trim();
     return { applicantId, applicantName: applicantId ? employees.get(applicantId)?.name || '' : '', applicantIsSelf: Boolean(applicantId && applicantId === row.employee_id) };
 }
-function metricReviewActors(kind, row, policy, employees, workflow) {
+function metricReviewActors(kind, row, policy, employees, workflow, additionalReview) {
     const person = (id) => ({ id, name: employees.get(id)?.name || '' });
     const pendingSupervisors = [], approvedSupervisors = [];
     if (policy) {
@@ -121,7 +126,9 @@ function metricReviewActors(kind, row, policy, employees, workflow) {
         if (id && row.supervisor_decision === 'approved') approvedSupervisors.push({ ...person(id), required: false, decidedAt: row.supervisor_decided_at ?? null, revoked: false });
     }
     const adminId = String(row.admin_decision_by || '').trim();
-    return { pendingSupervisors, approvedSupervisors, pendingAdmin: kind === 'leave' && row.status === 'pending_admin',
+    const pendingAdditionalReviewers = kind === 'overtime' && row.status === 'pending_additional'
+        ? (additionalReview?.eligibleReviewerIds || []).map(person) : [];
+    return { pendingSupervisors, approvedSupervisors, pendingAdditionalReviewers, pendingAdmin: kind === 'leave' && row.status === 'pending_admin',
         approvedAdmin: kind === 'leave' && row.status === 'approved' && adminId ? { ...person(adminId), decidedAt: row.admin_decided_at ?? null } : null };
 }
 function attachDashboardMetricRoutes(server, { db, requireSession, requireAdmin, can, auditEntry, notify, formatRecord }) {
@@ -140,7 +147,7 @@ function attachDashboardMetricRoutes(server, { db, requireSession, requireAdmin,
         let rows, kind;
         if (metric.key.startsWith('leave') || metric.key.startsWith('overtime')) {
             kind = metric.key.startsWith('leave') ? 'leave' : 'overtime'; const all = kind === 'leave' ? source.leaves : source.overtime;
-            rows = metric.key.includes('Day:') ? all.filter((r) => r.status === 'approved' && source.onDay(kind, r, metric.date)) : all.filter((r) => r.status === (metric.key === 'leavePendingAdmin' ? 'pending_admin' : 'pending_supervisor'));
+            rows = metric.key.includes('Day:') ? all.filter((r) => r.status === 'approved' && source.onDay(kind, r, metric.date)) : all.filter((r) => r.status === PENDING_METRIC_STATUS[metric.key]);
         } else if (metric.key.startsWith('meal')) {
             kind = 'meal'; const meal = metric.key === 'mealTomorrow' ? source.meals.tomorrow : source.meals.today;
             rows = meal.rows.filter((r) => metric.key === 'mealParticipants' ? r.eligible : r.eating);
@@ -166,7 +173,7 @@ function attachDashboardMetricRoutes(server, { db, requireSession, requireAdmin,
         const totalPages = Math.max(1, Math.ceil(rows.length / 50)), current = Math.min(page, totalPages);
         const requestRecord = (row) => {
             const formatted = formatRecord(kind, row);
-            return { ...formatted, ...metricApplicant(row, employees), reviewActors: metricReviewActors(kind, row, formatted.reviewPolicy, employees, db.getReviewWorkflow()),
+            return { ...formatted, ...metricApplicant(row, employees), reviewActors: metricReviewActors(kind, row, formatted.reviewPolicy, employees, db.getReviewWorkflow(), formatted.additionalReview),
                 ...(isLeaveDay ? { dayHours: dayHours(row) } : {}) };
         };
         response.json({ success: true, detail: { metric, kind, page: current, totalPages, totalRecords: rows.length, unfilteredRecords, summary, departments, filters: { keyword, department }, records: rows.slice((current - 1) * 50, current * 50).map((r) => kind === 'salary' ? ({ requestId: r.requestId, employeeId: r.employeeId, employeeName: r.employeeName, employeeDepartment: r.department, applicationMonth: r.applicationMonth, status: r.status, entryMode: r.entryMode, requestedAmount: r.requestedAmount, approvedAmount: r.approvedAmount, revision: r.revision, updatedAt: r.updatedAt }) : kind === 'meal' ? ({ employeeId: r.employee_id, employeeName: r.name, employeeDepartment: r.department, eating: r.eating, submittedEating: r.submittedEating }) : requestRecord(r)) } });

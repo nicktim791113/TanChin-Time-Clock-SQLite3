@@ -141,6 +141,8 @@ $projectFiles = @(
     "leave-usage.js",
     "approved-request-corrections.js",
     "employee-attendance.js",
+    "overtime-conditional-review.js",
+    "overtime-conditional-routes.js",
     "leave-date-selection.js",
     "leave-entitlement-routes.js",
     "annual-leave-calculator.js",

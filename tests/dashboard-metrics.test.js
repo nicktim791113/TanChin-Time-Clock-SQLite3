@@ -16,12 +16,14 @@ test('seven Taipei dates count unique approved people, actual leave days, midnig
         { id: 'second', employee_id: 'E2', status: 'approved', start_at: at('2027-01-01T10:00:00'), end_at: at('2027-01-01T11:00:00') },
         { id: 'pending', employee_id: 'E3', status: 'pending_admin', start_at: at('2027-01-01T10:00:00'), end_at: at('2027-01-01T11:00:00') }
     ];
-    const db = { queryLeaveRequests: () => leaves, queryOvertimeRequests: () => leaves,
+    const overtime = [...leaves, { ...leaves.at(-1), id: 'additional', status: 'pending_additional' },
+        { ...leaves.at(-1), id: 'supervisor', status: 'pending_supervisor' }];
+    const db = { queryLeaveRequests: () => leaves, queryOvertimeRequests: () => overtime,
         getLeaveEntitlements: () => ({ charges: (id) => id === 'gap' ? [{ date: '2026-12-30', hours: 8 }, { date: '2027-01-01', hours: 8 }] : [] }),
         loadEmployees: () => [{ id: 'E1', name: 'Name', card: 'secret-card', salary: 123 }],
         getMeals: () => ({ dayState: (date) => ({ date, serving: date === '2027-01-01', currentCount: date === '2027-01-01' ? 2 : 0, submittedCount: 3, rows: [{ eligible: true }, { eligible: true }, { eligible: false }] }) }) };
     const metrics = buildDashboardMetrics(db, () => true, { bellScheduleCount: '2/3' }, now), get = (key) => metrics.catalog.find((c) => c.key === key);
-    assert.equal(metrics.catalog.length, 31);
+    assert.equal(metrics.catalog.length, 32);
     assert.deepEqual(metrics.groups.filter((group) => group.key !== 'appearance').map((group) => group.key), DEFAULT_CARDS);
     assert.equal(metrics.groups.length, 9);
     assert.equal(metrics.groups.find((group) => group.key === 'people').items.length, 3);
@@ -30,6 +32,9 @@ test('seven Taipei dates count unique approved people, actual leave days, midnig
     assert.equal(get('leaveDay:-1').value, 0); assert.equal(get('overtimeDay:-1').value, 1);
     assert.equal(get('leaveDay:0').value, 2); assert.equal(get('leaveDay:1').value, 0);
     assert.equal(get('leavePendingAdmin').value, 1);
+    assert.equal(get('overtimePendingSupervisor').value, 1);
+    assert.equal(get('overtimePendingAdditional').value, 1);
+    assert.equal(get('overtimeDay:0').value, 2);
     assert.equal(get('mealToday').value, 2); assert.match(get('mealToday').subtitle, /已交單 3/);
     assert.equal(get('mealTomorrow').value, 0); assert.match(get('mealTomorrow').subtitle, /未供餐/);
     assert.equal(get('mealParticipants').value, 2);
@@ -249,7 +254,7 @@ test('record metric layout preserves full navigation, summaries, scoped filters,
     context.dashboard = { dashboardMetrics: { today: '2026-10-30', groups: METRIC_GROUPS,
         catalog: METRIC_GROUPS.flatMap((group) => group.items.map((key) => ({ key, label: key, available: true, value: 25, date: key.startsWith('salary') ? '2026-10' : '2026-10-30', subtitle: '完整授權範圍' }))) } };
     context.state.dashboard = context.dashboard;
-    for (const key of ['leaveDay:0', 'leavePendingSupervisor', 'leavePendingAdmin', 'overtimeDay:0', 'overtimePendingSupervisor', 'salaryPendingAmount', 'salaryApprovedAmount']) {
+    for (const key of ['leaveDay:0', 'leavePendingSupervisor', 'leavePendingAdmin', 'overtimeDay:0', 'overtimePendingSupervisor', 'overtimePendingAdditional', 'salaryPendingAmount', 'salaryApprovedAmount']) {
         context.key = key;
         const salary = key.startsWith('salary');
         context.detail = { metric: { key }, kind: salary ? 'salary' : key.startsWith('leave') ? 'leave' : 'overtime', summary: { people: 62, requestHours: 496, dayHours: 8, requests: 62, requestedAmount: 62000, approvedAmount: 31000 },

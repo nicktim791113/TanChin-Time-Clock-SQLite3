@@ -166,6 +166,7 @@ function attachSupervisorRoutes(server, context) {
             const batchId = crypto.randomUUID();
             const records = targets.map((target) => ({ id: `${kind}_${now}_${crypto.randomBytes(8).toString('hex')}`, employee_id: target.id,
                 applicant_id: actorId, applicant_role: 'supervisor_proxy', proxy_reason: reason, ...period,
+                ...(kind === 'overtime' ? { conditional_review_fingerprint: body.conditionalReviewFingerprints?.[target.id] } : {}),
                 reason: typeof body.reason === 'string' ? body.reason.trim().slice(0, 2000) : '',
                 status: kind === 'leave' ? 'pending_admin' : 'approved', supervisor_id: actorId,
                 supervisor_decision: 'approved', supervisor_comment: `指定主管代申請並核准：${reason}`, supervisor_decided_at: now,
@@ -193,9 +194,10 @@ function attachSupervisorRoutes(server, context) {
                             { actorId, label: '指定主管代請假並取消午餐', audit: (entry) => auditEntry(request, entry) }, now);
                     }
                     const target = targets[index];
+                    const savedRecord = kind === 'leave' ? db.getLeaveRequestById(record.id) : db.getOvertimeRequestById(record.id);
                     db.addAuditLog(auditEntry(request, { action: 'supervisor_proxy_create', target_type: `${kind}_request`, target_id: record.id,
-                        summary: `指定主管代 ${target.id} ${target.name} 申請${kind === 'leave' ? '請假' : '加班'}（${record.status === 'pending_supervisor' ? '依多主管規則送審' : record.status === 'pending_admin' ? '送管理部終審' : '已核准'}）：${reason}`,
-                        after_data: { ...(kind === 'leave' ? db.getLeaveRequestById(record.id) : record), batchId, batchSize: targets.length } }));
+                        summary: `指定主管代 ${target.id} ${target.name} 申請${kind === 'leave' ? '請假' : '加班'}（${savedRecord.status === 'pending_supervisor' ? '依多主管規則送審' : savedRecord.status === 'pending_admin' ? '送管理部終審' : savedRecord.status === 'pending_additional' ? '待額外複核' : '已核准'}）：${reason}`,
+                        after_data: { ...savedRecord, batchId, batchSize: targets.length } }));
                 });
             });
             notify(request, kind === 'leave' ? 'leaveRequests' : 'overtimeRequests');

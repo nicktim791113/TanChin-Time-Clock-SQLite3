@@ -23,9 +23,11 @@ function installAdminPageFrame() {
         root.prepend(header);
     }
     header.classList.add('admin-page-header');
-    header.querySelector('h3').textContent = frame[0];
+    const conditional = section === 'supervisors' && root.querySelector('#conditional-overtime-settings');
+    header.querySelector('h3').textContent = conditional ? '條件複核' : frame[0];
     let actions = header.querySelector('.badge-row');
     if (!actions) { actions = document.createElement('div'); actions.className = 'badge-row'; header.querySelector('.list-toolbar').append(actions); }
+    if (conditional) { header.querySelector('.admin-page-refresh')?.remove(); return; }
     const refreshes = [...root.querySelectorAll(adminRefreshSelector)];
     // Prefer a newly painted module's control, so loading/permission disabled state stays current.
     let refresh = refreshes.find((button) => !header.contains(button)) || refreshes[0];

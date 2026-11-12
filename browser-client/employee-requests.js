@@ -1,7 +1,7 @@
 /* Employee-only request workspaces. Request semantics and authorization stay on the existing APIs. */
 const employeeRequests = { identity: '', dashboard: null, leave: null, overtime: null, balances: null, balanceError: '', balanceLoading: false, balanceSequence: 0, balancesOpen: false };
 const erLabels = { leave: '請假', overtime: '加班' };
-const erStatuses = { pending_supervisor: '待主管審核', pending_admin: '待管理部終審', approved: '已核准', rejected: '已駁回', withdrawn: '已撤回', cancelled: '已作廢' };
+const erStatuses = { pending_supervisor: '待主管審核', pending_additional: '待額外複核', pending_admin: '待管理部終審', approved: '已核准', rejected: '已駁回', withdrawn: '已撤回', cancelled: '已作廢' };
 const erEscape = (value) => escapeHtml(String(value ?? ''));
 const erToday = () => new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
 const erMobile = () => Boolean(window.matchMedia?.('(max-width: 720px)').matches);
@@ -130,6 +130,7 @@ function erFullRecord(kind, row) {
         <h4>審核進度</h4><p class="er-note">${erEscape(row.approval_mode && row.approval_mode !== 'self_request' ? row.approvalModeText || '依原申請流程' : kind === 'leave' ? '指定主管審核 → 管理部終審' : '指定主管審核')}</p>
         ${reviewers.length ? `<p>${policy.mode === 'required' ? '指定必審主管全部核准' : '任一位指定主管核准即可'}</p><ul class="er-reviewers">${reviewers.map((reviewer) => `<li><strong>${erEscape(reviewer.id)} ${erEscape(reviewer.name)}${reviewer.required ? '（必審）' : ''}</strong><span>${reviewer.revoked ? '已停用' : reviewer.decision === 'approved' ? '已核准' : reviewer.decision === 'rejected' ? '已駁回' : row.status === 'pending_supervisor' ? '待審核' : '免再審核'}</span>${reviewer.comment ? `<p>${erEscape(reviewer.comment)}</p>` : ''}${reviewer.decidedAt ? `<p>${erEscape(erDateTime(reviewer.decidedAt).date)} ${erEscape(erDateTime(reviewer.decidedAt).time)}</p>` : ''}</li>`).join('')}</ul>` : `<p>${erEscape(row.supervisorId || '')} ${erEscape(row.supervisorName || '依原審核流程')}</p>`}
         ${row.supervisor_comment ? `<p class="er-note">主管意見：${erEscape(row.supervisor_comment)}</p>` : ''}${row.supervisorDecidedText ? `<p class="er-note">主管審核時間：${erEscape(row.supervisorDecidedText)}</p>` : ''}
+        ${kind === 'overtime' && typeof cotReviewProgress === 'function' ? cotReviewProgress(row) : ''}
         ${kind === 'leave' ? `<p class="er-note">管理部：${erEscape(row.adminName || (row.status === 'pending_admin' ? '待終審' : '尚無終審紀錄'))}${row.adminDecidedText ? ` · ${erEscape(row.adminDecidedText)}` : ''}</p>${row.admin_comment ? `<p class="er-note">管理部意見：${erEscape(row.admin_comment)}</p>` : ''}` : ''}
         ${typeof renderApprovedCorrectionIndicator === 'function' ? renderApprovedCorrectionIndicator(row) : ''}
         ${row.approval_mode === 'admin_paper_approved' ? `<details><summary>紙本核准資料</summary><p>單號 ${erEscape(row.paperNo || '—')} · 核准者 ${erEscape(row.paperApprovedBy || '—')}</p><p>${erEscape(row.paperComment || '')}</p></details>` : ''}
@@ -154,7 +155,7 @@ function erSummary(kind, draft) { return `<strong data-er-summary>${erDraftSumma
 function erConfirmation(kind, draft) {
     const type = state.dashboard?.leave?.leaveTypes?.find((row) => row.id === draft.leaveTypeId);
     return `<div class="er-confirmation"><h4>送出前核對整張申請</h4>${kind === 'leave' ? `<p><strong>${erEscape(type?.name || draft.leaveTypeId)}</strong></p><ol class="er-confirm-periods">${draft.rows.map((row) => `<li><strong>${erEscape(row.date)}</strong><span>${erEscape(row.startTime)}–${row.endTime === '00:00' ? '24:00' : erEscape(row.endTime)} · ${erEscape(row.hours)} 小時</span>${row.breakMinutes !== undefined ? `<span>休息 ${erEscape(row.breakMinutes)} 分鐘，已從請假時數扣除</span>` : ''}</li>`).join('')}</ol>` : `<p>${erEscape(draft.startDate)} ${erEscape(draft.startTime)}<br>至 ${erEscape(draft.endDate)} ${erEscape(draft.endTime)}<br>休息 ${erEscape(draft.breakMinutes)} 分鐘 · 扣除後 ${erEscape(draft.durationHours)} 小時</p>`}
-        <h4>事由</h4><p class="er-reason">${erEscape(draft.reason || '未填寫')}</p>${kind === 'leave' ? `<div data-er-leave-meals>${renderLeaveMealOptions(draft)}</div>` : ''}<p class="er-note">${kind === 'leave' ? '送出後依指定主管審核規則，再交管理部終審。' : '送出後交指定主管審核，本人的申請不會自動核准。'}實際審核主管與進度可在送出後的整單詳情查看。</p></div>`;
+        <h4>事由</h4><p class="er-reason">${erEscape(draft.reason || '未填寫')}</p>${kind === 'leave' ? `<div data-er-leave-meals>${renderLeaveMealOptions(draft)}</div>` : typeof cotPreviewMarkup === 'function' ? cotPreviewMarkup(draft.conditionalPreview) : ''}<p class="er-note">${kind === 'leave' ? '送出後依指定主管審核規則，再交管理部終審。' : '送出後交指定主管審核；若預覽顯示需條件複核，主管通過後會轉交複核。'}實際審核主管與進度可在送出後的整單詳情查看。</p></div>`;
 }
 function erEditor(kind) {
     const current = erState(kind), draft = current.draft, label = erLabels[kind];
@@ -188,7 +189,7 @@ function erBalanceHtml() {
 }
 function renderEmployeeRequestWorkspace(kind) {
     const current = erState(kind), label = erLabels[kind], minimum = erMinimum(kind), data = current.data;
-    const filters = current.filters, statuses = Object.entries(erStatuses).filter(([value]) => kind === 'leave' || value !== 'pending_admin');
+    const filters = current.filters, statuses = Object.entries(erStatuses).filter(([value]) => kind === 'leave' ? value !== 'pending_additional' : value !== 'pending_admin');
     return `<section class="er-workspace" id="er-${kind}" data-er-kind="${kind}" aria-label="我的${label}" data-no-collapsible="true">
         <header class="er-heading"><div><h3>我的${label}</h3><p>選日期、送申請、查進度，都在這裡。</p></div><div class="er-heading-actions">${current.draft ? erButton(kind, 'resume', '繼續填寫草稿', current.busy ? 'disabled' : '') : erButton(kind, 'new', '＋ 新增申請', current.busy ? 'disabled' : '', true)}</div></header>
         ${kind === 'leave' ? erBalanceHtml() : ''}
@@ -336,6 +337,12 @@ async function erSend(kind) {
     if (!draft || current.busy || !draft.confirming || !erLive(identity, current, kind)) return;
     let body;
     try { body = erBuildPayload(kind, draft); if (kind === 'leave') requireLeaveMealOptionsReady(draft, { ...body, employeeIds: [state.dashboard.user.id] }); } catch (error) { draft.error = error.message; draft.confirming = false; erPaint(kind); return; }
+    if (kind === 'overtime' && typeof cotPreviewKey === 'function') {
+        const preview = draft.conditionalPreview;
+        const fingerprints = preview?.key === cotPreviewKey(body, [body.employeeId]) ? cotPreviewFingerprints(preview) : null;
+        if (!fingerprints) { draft.error = '請重新確認條件複核預覽。'; draft.confirming = false; erPaint(kind); return; }
+        body.conditionalReviewFingerprints = fingerprints;
+    }
     current.busy = true; draft.error = ''; erPaint(kind);
     try {
         const result = await requestJson(`/api/browser/employee/${kind}/request`, { method: 'POST', auth: true, body });
@@ -344,7 +351,13 @@ async function erSend(kind) {
         current.date = body.startDate; current.month = body.startDate.slice(0, 7); current.filters = {}; current.page = 1; current.requestId = ''; current.request = null; current.data = null;
         current.notice = result.message || `${erLabels[kind]}申請已送出。請點紀錄查看整張申請及審核進度。`;
         renderDashboard(result.data.dashboard); setMessage(ui.dashboardMessage, current.notice, 'success');
-    } catch (error) { if (erLive(identity, current, kind) && current.draft === draft) { draft.error = error.message; if (kind === 'leave') { draft.confirming = false; erLoadMealOptions(true).catch(() => {}); } } }
+    } catch (error) {
+        if (erLive(identity, current, kind) && current.draft === draft) {
+            draft.error = error.message;
+            if (kind === 'leave') { draft.confirming = false; erLoadMealOptions(true).catch(() => {}); }
+            else if (error.status === 409) { draft.confirming = false; draft.conditionalPreview = null; }
+        }
+    }
     finally { if (erLive(identity, current, kind)) { current.busy = false; erPaint(kind); } }
 }
 async function erWithdraw(kind, id, confirmed = false) {
@@ -451,14 +464,24 @@ handleDashboardSubmit = async function submitEmployeeRequestDraft(event) {
     event.preventDefault(); const kind = form.dataset.erForm, current = erState(kind);
     if (!erLive(employeeRequests.identity, current, kind) || current.busy || current.confirmation || !current.draft) return;
     const draft = current.draft, identity = employeeRequests.identity;
+    const previewOvertime = kind === 'overtime' && typeof cotRequestPreview === 'function';
     try {
         erBuildPayload(kind, draft); if (kind === 'leave') await erLoadMealOptions();
         if (!erLive(identity, current, kind) || current.draft !== draft) return;
         const body = erBuildPayload(kind, draft); if (kind === 'leave') requireLeaveMealOptionsReady(draft, { ...body, employeeIds: [state.dashboard.user.id] });
+        if (previewOvertime) {
+            current.busy = true; draft.error = ''; erPaint(kind);
+            const preview = await cotRequestPreview(body, [body.employeeId]);
+            if (!erLive(identity, current, kind) || current.draft !== draft) return;
+            const latest = erBuildPayload(kind, draft);
+            if (preview.key !== cotPreviewKey(latest, [latest.employeeId])) throw new Error('加班時段已變更，請重新查詢。');
+            draft.conditionalPreview = preview;
+            if (cotPreviewFingerprints(preview) === null) throw new Error(preview.previews.find(row => row.blockedReason)?.blockedReason || '條件複核預覽缺少確認資料。');
+        }
         draft.error = ''; draft.confirming = true;
     }
     catch (error) { if (erLive(identity, current, kind) && current.draft === draft) draft.error = error.message; }
-    erPaint(kind);
+    finally { if (erLive(identity, current, kind)) { if (previewOvertime) current.busy = false; erPaint(kind); } }
 };
 const erPreviousLogout = handleLogout;
 handleLogout = function logoutEmployeeRequests(...args) { erReset(); return erPreviousLogout(...args); };

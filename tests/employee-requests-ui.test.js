@@ -4,16 +4,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function loadUi() {
+function loadUi({ conditionalOvertime = false } = {}) {
     const state = { token: 'session-E001', employeeWorkspacePanel: 'leave', dashboard: { role: 'employee', user: { id: 'E001', name: 'Employee' }, leave: { leaveTypes: [{ id: 'annual', name: '特休' }], historyWindow: { earliestMonth: '2026-01' } }, overtime: { historyWindow: { earliestMonth: '2026-01' } } } };
     const requests = [], pending = [], listeners = {}, confirmations = [], messages = [];
     const document = { activeElement: null, getElementById() { return null; }, querySelectorAll() { return []; }, addEventListener(type, handler) { (listeners[type] ||= []).push(handler); } };
     const context = vm.createContext({ state, document, window: { matchMedia() { return { matches: false, addEventListener() {} }; }, addEventListener() {}, confirm(message) { confirmations.push(message); return true; } },
         escapeHtml(value) { return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'); }, URLSearchParams,
         renderDashboard(dashboard) { state.dashboard = dashboard; }, postRenderSetup() {}, handleDashboardClick() {}, handleDashboardSubmit() {},
-        handleLogout() { state.token = ''; state.dashboard = null; }, ui: { dashboardMessage: {} }, setMessage(_node, message) { messages.push(message); },
+        handleLogout() { state.token = ''; state.dashboard = null; }, handleRealtimeSyncMessage() {}, renderRequestReviewProgress() {},
+        ui: { dashboardMessage: {} }, setMessage(_node, message) { messages.push(message); },
         requestJson(route, options) { requests.push({ route, options }); return new Promise((resolve, reject) => pending.push({ resolve, reject })); } });
     for (const file of ['overtime-defaults.js', 'leave-days.js', 'employee-requests.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../browser-client', file), 'utf8'), context);
+    if (conditionalOvertime) vm.runInContext(fs.readFileSync(path.join(__dirname, '../browser-client/conditional-overtime.js'), 'utf8'), context);
     const run = (expression) => vm.runInContext(expression, context);
     run('renderDashboard(state.dashboard)');
     return { run, state, requests, pending, confirmations, messages, context, listeners };
@@ -241,6 +243,36 @@ test('double submission is blocked, failure keeps every field, and success posts
     const retry = ui.run("erSend('overtime')"); ui.pending[1].resolve({ data: { dashboard: { ...ui.state.dashboard } }, message: 'sent' }); await retry;
     assert.equal(ui.run("erState('overtime').draft"), null); assert.equal(ui.run("erState('overtime').month"), '2026-10');
     assert.equal(ui.messages.at(-1), 'sent');
+});
+
+test('personal overtime shows server preview before submission, and a stale fingerprint keeps the exact draft for fresh confirmation', async () => {
+    const ui = loadUi({ conditionalOvertime: true });
+    ui.run("erState('overtime').draft=erNewDraft('overtime'); erState('overtime').draft.reason='preserve original reason'");
+    ui.context.event = { target: { closest: () => ({ dataset: { erForm: 'overtime' } }) }, preventDefault() {} };
+    const next = ui.run('handleDashboardSubmit(event)');
+    assert.equal(ui.requests[0].route, '/api/browser/supervisors/conditional-overtime/preview');
+    assert.equal(ui.requests[0].options.body.employeeIds[0], 'E001');
+    await ui.run("erSend('overtime')");
+    assert.equal(ui.requests.length, 1, 'preview must finish before an actual write');
+    ui.pending[0].resolve({ previews: [{ employeeId: 'E001', required: true, fingerprint: 'preview-1',
+        evidence: [{ weekSaturday: '2026-10-31', leaveDate: '2026-10-26' }], reviewers: [{ id: 'R01', name: 'Reviewer' }] }] });
+    await next;
+    assert.match(ui.run("erEditor('overtime')"), /條件複核預覽[\s\S]*2026-10-26[\s\S]*確認送出加班/);
+    const send = ui.run("erSend('overtime')");
+    assert.equal(ui.requests[1].route, '/api/browser/employee/overtime/request');
+    assert.equal(ui.requests[1].options.body.conditionalReviewFingerprints.E001, 'preview-1');
+    ui.pending[1].reject(Object.assign(new Error('請重新預覽並確認'), { status: 409 }));
+    await send;
+    assert.equal(ui.run("erState('overtime').draft.reason"), 'preserve original reason');
+    assert.equal(ui.run("erState('overtime').draft.confirming"), false);
+    assert.equal(ui.run("erState('overtime').draft.conditionalPreview"), null);
+    await ui.run("erSend('overtime')");
+    assert.equal(ui.requests.length, 2);
+    const retry = ui.run('handleDashboardSubmit(event)');
+    assert.equal(ui.requests[2].route, '/api/browser/supervisors/conditional-overtime/preview');
+    ui.pending[2].resolve({ previews: [{ employeeId: 'E001', required: false }] });
+    await retry;
+    assert.match(ui.run("erEditor('overtime')"), /未觸發條件複核/);
 });
 
 test('late submit response after account change cannot overwrite the new dashboard or clear its draft', async () => {

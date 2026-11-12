@@ -20,6 +20,13 @@ test('metric review actors distinguish live pending votes, actual approvals, man
     const policy = { supervisorIds: ['A001', 'A002', 'D001'], requiredSupervisorIds: ['A001', 'A002'], mode: 'required' };
     seed('leave', 'multi-partial', { applicant_id: 'A002', review_policy: policy });
     seed('overtime', 'overtime-partial', { applicant_id: 'A002', review_policy: policy });
+    const previousMonth = now - 30 * 86400000;
+    seed('overtime', 'additional-old', { status: 'pending_additional', supervisor_decision: 'approved', start_at: previousMonth, end_at: previousMonth + 3600000 });
+    seed('overtime', 'additional-unassigned', { status: 'pending_additional', supervisor_decision: 'approved' });
+    seed('overtime', 'overtime-approved', { status: 'approved' });
+    sql.prepare('INSERT INTO overtime_additional_reviews(request_id,data_json) VALUES (?,?)').run('additional-old', JSON.stringify({
+        status: 'pending', reviewerIds: ['E001', 'A002', 'D001'], assignedAt: now + 500, evidence: [], reviewerVotes: []
+    }));
     for (const kind of ['leave', 'overtime']) {
         const id = kind === 'leave' ? 'multi-partial' : 'overtime-partial';
         sql.prepare("UPDATE request_review_votes SET decision='approved', decided_at=? WHERE kind=? AND request_id=? AND reviewer_id='A001'").run(now + 100, kind, id);
@@ -69,8 +76,18 @@ test('metric review actors distinguish live pending votes, actual approvals, man
     const unknown = approved.detail.records.find((item) => item.id === 'approved-unknown').reviewActors;
     assert.deepEqual(unknown.approvedSupervisors, []); assert.equal(unknown.approvedAdmin, null);
     const overtime = await call('/admin/dashboard-metrics/detail?key=overtimePendingSupervisor', admin.token);
+    assert.deepEqual(overtime.detail.records.map(item => item.id), ['overtime-partial']);
     assert.deepEqual(overtime.detail.records[0].reviewActors.pendingSupervisors.map((person) => person.id), ['A002']);
     assert.equal(overtime.detail.records[0].reviewActors.pendingAdmin, false);
+    const additional = await call('/admin/dashboard-metrics/detail?key=overtimePendingAdditional', admin.token);
+    assert.equal(additional.status, 200);
+    assert.equal(additional.detail.metric.value, 2);
+    assert.deepEqual(additional.detail.records.map(item => item.id).sort(), ['additional-old', 'additional-unassigned']);
+    assert.deepEqual(additional.detail.records.find(item => item.id === 'additional-old').reviewActors.pendingAdditionalReviewers, [{ id: 'A002', name: 'Delegated Manager' }]);
+    assert.deepEqual(additional.detail.records.find(item => item.id === 'additional-unassigned').reviewActors.pendingAdditionalReviewers, []);
+    const approvedOvertime = await call('/admin/dashboard-metrics/detail?key=overtimeDay:0&date=' + today, admin.token);
+    assert.deepEqual(approvedOvertime.detail.records.map(item => item.id), ['overtime-approved']);
+    for (const token of [null, limited.token, employee.token]) assert.ok([401, 403].includes((await call('/admin/dashboard-metrics/detail?key=overtimePendingAdditional', token)).status));
     for (const token of [null, limited.token, employee.token]) assert.ok([401, 403].includes((await call('/admin/dashboard-metrics/detail?key=leavePendingSupervisor', token)).status));
     assert.equal(snapshot(), before, 'read-only detail projections do not alter requests or review votes');
 });

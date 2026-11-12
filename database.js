@@ -14,6 +14,7 @@ const { createLeaveEntitlementStore } = require('./leave-entitlements');
 const { createAnnualLeaveStore } = require('./annual-leave-store');
 const { createApprovedCorrectionStore } = require('./approved-request-corrections');
 const { createAttendanceCalendarStore } = require('./employee-attendance');
+const { createConditionalOvertimeStore } = require('./overtime-conditional-review');
 const { createReviewWorkflow } = require('./review-workflow');
 const { createDashboardMetricStore } = require('./dashboard-metrics');
 const { createSalaryAdvanceStore } = require('./salary-advances');
@@ -32,6 +33,7 @@ let leaveEntitlements = null;
 let annualLeave = null;
 let approvedCorrections = null;
 let attendanceCalendar = null;
+let conditionalOvertimeReview = null;
 let reviewWorkflow = null;
 let dashboardMetrics = null;
 let salaryAdvances = null;
@@ -538,13 +540,28 @@ function init(dbFilePath) {
   leaveEntitlements = createLeaveEntitlementStore(db, (entry) => addAuditLog(entry));
   annualLeave = createAnnualLeaveStore(db, (entry) => addAuditLog(entry));
   leaveEntitlements.setAnnualProvider(annualLeave);
-  attendanceCalendar = createAttendanceCalendarStore(db, addAuditLog);
+  const calendarStore = createAttendanceCalendarStore(db, addAuditLog);
+  attendanceCalendar = {
+    ...calendarStore,
+    save: (body, auditEntry) => db.transaction(() => {
+      const result = calendarStore.save(body, auditEntry);
+      conditionalOvertimeReview.refreshAll(auditEntry);
+      return result;
+    })()
+  };
+  reviewWorkflow = createReviewWorkflow(db);
+  conditionalOvertimeReview = createConditionalOvertimeStore(db, {
+    queryLeave: filters => queryLeaveRequests(filters), calendar: () => attendanceCalendar.state(), addAuditLog
+  });
   approvedCorrections = createApprovedCorrectionStore(db, {
     getRecord: (kind, id) => kind === 'leave' ? getLeaveRequestById(id) : getOvertimeRequestById(id),
     normalizeLeave: (next, original) => assignLeaveSegmentIds({ ...next, ...normalizeLeaveDateSelection(next) }, original),
-    replaceSegments: replaceLeaveSegments, entitlements: () => leaveEntitlements, annual: () => annualLeave, audit: addAuditLog
+    replaceSegments: replaceLeaveSegments, entitlements: () => leaveEntitlements, annual: () => annualLeave, audit: addAuditLog,
+    recheckConditional: (kind, row, original, auditEntry) => {
+      if (kind === 'overtime') conditionalOvertimeReview.refreshRequest(row.id, auditEntry);
+      else conditionalOvertimeReview.refreshAll(auditEntry, [original.employee_id, row.employee_id]);
+    }
   });
-  reviewWorkflow = createReviewWorkflow(db);
   dashboardMetrics = createDashboardMetricStore(db, (entry) => addAuditLog(entry));
   salaryAdvances = createSalaryAdvanceStore(db, (entry) => addAuditLog(entry));
   deviceRecovery = createDeviceRecoveryStore(db, (entry) => addAuditLog(entry));
@@ -564,6 +581,7 @@ function close() {
   annualLeave = null;
   approvedCorrections = null;
   attendanceCalendar = null;
+  conditionalOvertimeReview = null;
   reviewWorkflow = null;
   dashboardMetrics = null;
   salaryAdvances = null;
@@ -1466,7 +1484,8 @@ function mapOvertimeRequestRow(row) {
     return {
         ...row,
         duration_hours: Number(row.duration_hours || 0),
-        break_minutes: row.break_minutes == null ? null : Number(row.break_minutes)
+        break_minutes: row.break_minutes == null ? null : Number(row.break_minutes),
+        additionalReview: conditionalOvertimeReview?.detail(row.id) ?? null
     };
 }
 
@@ -1499,6 +1518,8 @@ const createOvertimeRequest = (request) => {
     `);
     const isAutoApproved = request.status === 'approved';
     db.transaction(() => {
+        const needsPreviewCheck = conditionalOvertimeReview.state().enabled || request.conditional_review_fingerprint !== undefined;
+        const preview = needsPreviewCheck ? conditionalOvertimeReview.checkSubmission(request) : null;
         insertRequest.run({
             ...request,
             break_minutes: request.break_minutes ?? null,
@@ -1524,6 +1545,7 @@ const createOvertimeRequest = (request) => {
             request.created_at
         );
         if (request.status === 'pending_supervisor') reviewWorkflow.snapshot('overtime', request, request.review_policy);
+        if (preview?.required) conditionalOvertimeReview.refreshRequest(request.id, undefined, { preview, newApproval: true, actorId: request.applicant_id });
     })();
 };
 
@@ -1561,6 +1583,23 @@ const buildOvertimeRequestWhere = (filters = {}) => {
         const review = reviewWorkflow.filter('overtime', String(filters.supervisorId));
         clauses.push(review.sql);
         params.push(...review.params);
+    }
+    if (filters.additionalReviewerId) {
+        const actor = String(filters.additionalReviewerId);
+        clauses.push(`status='pending_additional' AND ? = (
+          SELECT reviewers.value FROM overtime_additional_reviews r, json_each(r.data_json,'$.reviewerIds') reviewers
+          WHERE r.request_id=overtime_requests.id AND json_extract(r.data_json,'$.status')='pending'
+            AND reviewers.value<>overtime_requests.employee_id AND reviewers.value<>COALESCE(overtime_requests.applicant_id,'')
+            AND COALESCE((SELECT after_at FROM request_review_epochs WHERE employee_id=reviewers.value),-1)<json_extract(r.data_json,'$.assignedAt')
+            AND EXISTS (SELECT 1 FROM employees WHERE id=reviewers.value)
+            AND NOT EXISTS (SELECT 1 FROM request_review_votes v WHERE v.kind='overtime' AND v.request_id=overtime_requests.id AND v.reviewer_id=reviewers.value AND v.decision='approved')
+            AND NOT EXISTS (SELECT 1 FROM overtime_approval_steps s WHERE s.request_id=overtime_requests.id AND s.reviewer_role='supervisor' AND s.reviewer_id=reviewers.value AND s.status='approved')
+            AND (COALESCE(overtime_requests.supervisor_decision,'')<>'approved'
+              OR reviewers.value<>COALESCE(overtime_requests.supervisor_id,'')
+              OR EXISTS (SELECT 1 FROM request_review_votes v WHERE v.kind='overtime' AND v.request_id=overtime_requests.id AND v.decision='approved')
+              OR EXISTS (SELECT 1 FROM overtime_approval_steps s WHERE s.request_id=overtime_requests.id AND s.reviewer_role='supervisor' AND s.status='approved'))
+          ORDER BY CAST(reviewers.key AS INTEGER) LIMIT 1)`);
+        params.push(actor);
     }
     if (filters.status) {
         if (Array.isArray(filters.status)) {
@@ -1619,7 +1658,7 @@ const hasOverlappingOvertimeRequest = (employeeId, startAt, endAt, excludeId = '
     const rows = all(
         `SELECT id FROM overtime_requests
          WHERE employee_id = ?
-           AND status IN ('pending_supervisor', 'approved')
+           AND status IN ('pending_supervisor', 'pending_additional', 'approved')
            AND start_at < ?
            AND end_at > ?`,
         employeeId,
@@ -1648,31 +1687,34 @@ const updateOvertimeRequestSupervisorDecision = ({ requestId, decision, comment,
         );
         run(
             `UPDATE overtime_approval_steps
-             SET status = ?, comment = ?, decided_at = ?
+             SET status = ?, comment = ?, decided_at = ?, reviewer_id = COALESCE(?, reviewer_id)
              WHERE request_id = ? AND reviewer_role = 'supervisor'`,
             decision,
             comment || '',
             decision === 'pending' ? null : decidedAt,
+            decision === 'pending' ? null : reviewerId || null,
             requestId
         );
+        if (decision !== 'pending') conditionalOvertimeReview.refreshRequest(requestId, undefined, { newApproval: true, actorId: reviewerId });
     })();
 };
 
-const withdrawOvertimeRequest = ({ requestId, withdrawnAt }) => run(
-    `UPDATE overtime_requests
-     SET status = 'withdrawn', withdrawn_at = ?, updated_at = ?
-     WHERE id = ?`,
-    withdrawnAt,
-    withdrawnAt,
-    requestId
-);
+const withdrawOvertimeRequest = ({ requestId, withdrawnAt, actorId }) => db.transaction(() => {
+    const result = run(
+        `UPDATE overtime_requests SET status='withdrawn', withdrawn_at=?, updated_at=?
+         WHERE id=? AND status IN ('pending_supervisor','pending_additional')`,
+        withdrawnAt, withdrawnAt, requestId
+    );
+    if (result.changes === 1) conditionalOvertimeReview.refreshRequest(requestId, undefined, { actorId });
+    return result;
+})();
 
 const cancelPaperOvertimeRequestRow = ({ requestId, cancelledAt }) => run(
     `UPDATE overtime_requests
      SET status = 'cancelled', cancelled_at = ?, updated_at = ?
      WHERE id = ?
        AND approval_mode = 'admin_paper_approved'
-       AND status = 'approved'`,
+       AND status IN ('approved','pending_additional')`,
     cancelledAt,
     cancelledAt,
     requestId
@@ -1680,7 +1722,10 @@ const cancelPaperOvertimeRequestRow = ({ requestId, cancelledAt }) => run(
 
 const cancelPaperOvertimeRequest = ({ requestId, cancelledAt, auditLog = null }) => db.transaction(() => {
     const result = cancelPaperOvertimeRequestRow({ requestId, cancelledAt });
-    if (result.changes === 1 && auditLog) addAuditLog(auditLog);
+    if (result.changes === 1) {
+        conditionalOvertimeReview.refreshRequest(requestId, auditLog ? entry => ({ ...auditLog, ...entry }) : undefined);
+        if (auditLog) addAuditLog(auditLog);
+    }
     return result;
 })();
 
@@ -1730,7 +1775,8 @@ const updatePaperOvertimeRequest = ({ requestId, updates, auditLog }) => db.tran
         error.code = 'PAPER_REQUEST_STATE_CHANGED';
         throw error;
     }
-    run(
+    const additional = conditionalOvertimeReview.refreshRequest(requestId, entry => ({ ...auditLog, ...entry }));
+    if (!additional) run(
         `UPDATE overtime_approval_steps
          SET reviewer_id = ?, status = 'approved', comment = ?, decided_at = ?
          WHERE request_id = ? AND reviewer_role = 'supervisor'`,
@@ -1740,7 +1786,7 @@ const updatePaperOvertimeRequest = ({ requestId, updates, auditLog }) => db.tran
         requestId
     );
     const saved = getOvertimeRequestById(requestId);
-    addAuditLog({ ...auditLog, after_data: { ...auditLog.after_data, break_source: saved.break_source } });
+    addAuditLog({ ...auditLog, after_data: { ...auditLog.after_data, status: saved.status, break_source: saved.break_source } });
     return saved;
 })();
 
@@ -2427,8 +2473,12 @@ const countPunchFailureAuditLogsSince = (startTimestamp, excludedFailureCodes = 
 // Reconcile exact source allocations in the same transaction as each request mutation.
 // Existing caller transactions and strict audit logs remain the outer atomic boundary.
 const withAnnualLeave = (callback) => (...args) => db.transaction(() => {
+    const previous = args[0]?.requestId ? getLeaveRequestById(args[0].requestId) : null;
     const result = callback(...args);
     annualLeave?.reconcile();
+    const current = args[0]?.requestId ? getLeaveRequestById(args[0].requestId) : result;
+    const employees = [...new Set([previous?.employee_id, current?.employee_id].filter(Boolean))];
+    if (employees.length) conditionalOvertimeReview.refreshAll(undefined, employees);
     return result;
 })();
 
@@ -2442,6 +2492,7 @@ module.exports = {
   getAnnualLeave: () => annualLeave,
   getApprovedCorrections: () => approvedCorrections,
   getAttendanceCalendar: () => attendanceCalendar,
+  getConditionalOvertimeReview: () => conditionalOvertimeReview,
   queryEmployeeAttendancePunches: (employeeId, startAt, endAt) => all(
     'SELECT timestamp,type,status,source,risk_flags FROM punch_records WHERE id=? AND timestamp>=? AND timestamp<=? ORDER BY timestamp',
     employeeId, startAt, endAt

@@ -46,6 +46,42 @@ test('calendar totals count each request once while precise gaps and multiple se
     assert.ok(result.days.slice(1, 4).every((day) => day.totalCount === 0));
 });
 
+test('pending additional overtime is visible to its owner and administrators but outside the original supervisor queue', async (t) => {
+    const fixture = await startFixture();
+    t.after(() => fixture.close());
+    const start = at('2026-10-10T18:00:00');
+    fixture.db.createOvertimeRequest({
+        id: 'calendar-additional', employee_id: 'E001', applicant_id: 'E001', supervisor_id: 'A001',
+        start_at: start, end_at: start + 3600000, duration_hours: 1, status: 'pending_additional',
+        approval_mode: 'self_request', applicant_role: 'employee', reason: 'Fixture overtime', created_at: start, updated_at: start
+    });
+    const request = async (route, token, body) => {
+        const response = await fetch(fixture.url + '/api/browser' + route, {
+            method: body ? 'POST' : 'GET',
+            headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+            body: body ? JSON.stringify(body) : undefined
+        });
+        return { status: response.status, ...await response.json() };
+    };
+    const employee = await request('/login', null, { employeeId: 'E001', secret: 'employee-card', role: 'account', deviceInfo: { deviceId: 'calendar-additional-employee' } });
+    const supervisor = await request('/login', null, { employeeId: 'A001', secret: 'manager-card', role: 'account', deviceInfo: { deviceId: 'calendar-additional-supervisor' } });
+    const account = await request('/login', null, { employeeId: 'A001', secret: 'A001-test-password', role: 'account' });
+    const admin = await request('/workspace', account.token, { role: 'admin' });
+    const period = 'month=2026-10&status=pending_additional';
+    const owned = await request(`/employee/overtime/calendar?${period}&requestId=calendar-additional`, employee.token);
+    assert.equal(owned.status, 200);
+    assert.deepEqual(owned.calendar.request.calendarActions, { review: '', withdraw: true });
+    assert.equal(owned.calendar.events[0].statusText, '待額外複核');
+    assert.deepEqual(owned.calendar.days[9], { date: '2026-10-10', totalCount: 1, approvedCount: 0, approvedPeople: 0, pendingCount: 1, otherCount: 0 });
+    const review = await request(`/employee/overtime/calendar?${period}&scope=review`, supervisor.token);
+    assert.equal(review.calendar.totalCount, 0);
+    assert.equal((await request(`/employee/overtime/calendar?${period}&requestId=calendar-additional`, supervisor.token)).status, 404);
+    const managed = await request(`/admin/overtime/calendar?${period}`, admin.token);
+    assert.equal(managed.calendar.detail.totalCount, 1);
+    assert.deepEqual(managed.calendar.detail.records[0].calendarActions, { review: '', withdraw: false });
+    assert.equal((await request(`/admin/leave/calendar?${period}`, admin.token)).status, 400);
+});
+
 test('calendar browser endpoints retain complete history, permission scopes, filters and unchanged stored data', async (t) => {
     const fixture = await startFixture();
     const inspection = new Database(fixture.databasePath);

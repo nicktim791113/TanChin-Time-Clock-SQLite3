@@ -1,8 +1,8 @@
 const DAY_MS = 86400000;
 const TAIPEI_OFFSET = 8 * 3600000;
 const PAGE_SIZE = 50;
-const REQUEST_STATUSES = ['pending_supervisor', 'pending_admin', 'approved', 'rejected', 'withdrawn', 'cancelled'];
-const STATUS_LABELS = { pending_supervisor: '主管審核中', pending_admin: '管理部複核中', approved: '已核准', rejected: '已駁回', withdrawn: '已撤回', cancelled: '已取消' };
+const STATUS_LABELS = { pending_supervisor: '主管審核中', pending_admin: '管理部複核中', pending_additional: '待額外複核', approved: '已核准', rejected: '已駁回', withdrawn: '已撤回', cancelled: '已取消' };
+const PENDING_STATUSES = new Set(['pending_supervisor', 'pending_admin', 'pending_additional']);
 const { getLeaveDateSegments, leaveOverlapsRange } = require('./leave-date-selection');
 
 function invalid(message) {
@@ -56,7 +56,7 @@ function buildCalendar(month, records, now = Date.now()) {
             if (row.status === 'approved') {
                 day.approvedCount += 1;
                 people[index].add(row.employee_id);
-            } else if (row.status === 'pending_supervisor' || row.status === 'pending_admin') day.pendingCount += 1;
+            } else if (PENDING_STATUSES.has(row.status)) day.pendingCount += 1;
             else day.otherCount += 1;
         }
     }
@@ -80,8 +80,9 @@ function attachRequestCalendarRoutes(server, context) {
                         if (!['mine', 'review'].includes(scope)) throw invalid('無效的紀錄範圍。');
                         const historyWindow = role === 'employee' && scope === 'mine' ? db.getRequestHistory().window(kind) : null;
                         if (historyWindow?.earliestMonth && range.month < historyWindow.earliestMonth) throw Object.assign(new Error(`本人${kind === 'leave' ? '請假' : '加班'}紀錄最早可查看 ${historyWindow.earliestMonth}；更早紀錄請洽有查詢權限的管理者。`), { status: 403 });
-                        if (input.status && !REQUEST_STATUSES.includes(input.status)) throw invalid('無效的申請狀態。');
+                        if (input.status && (typeof input.status !== 'string' || !Object.hasOwn(STATUS_LABELS, input.status))) throw invalid('無效的申請狀態。');
                         if (kind === 'overtime' && input.status === 'pending_admin') throw invalid('無效的加班狀態。');
+                        if (kind === 'leave' && input.status === 'pending_additional') throw invalid('無效的請假狀態。');
                         const relation = input.relation || 'all';
                         if (!['all', 'self', 'proxy'].includes(relation) || (relation !== 'all' && !(role === 'employee' && scope === 'mine' && kind === 'overtime'))) throw invalid('無效的本人／代申請範圍。');
                         if (input.requestId != null && (typeof input.requestId !== 'string' || !input.requestId.trim() || input.requestId.length > 200)) throw invalid('無效的申請識別碼。');
@@ -111,7 +112,7 @@ function attachRequestCalendarRoutes(server, context) {
                         const actionsFor = (row) => ({
                             review: role === 'employee' && scope === 'review' ? 'supervisor' : role === 'admin' && kind === 'leave' && row.status === 'pending_admin' ? 'admin' : '',
                             withdraw: role === 'employee' && scope === 'mine' && (row.employee_id === actorId || (kind === 'overtime' && row.applicant_id === actorId)) &&
-                                (row.status === 'pending_supervisor' || (kind === 'leave' && row.status === 'pending_admin'))
+                                (row.status === 'pending_supervisor' || (kind === 'leave' ? row.status === 'pending_admin' : row.status === 'pending_additional'))
                         });
                         const detailFor = (row) => ({
                             ...formatRecord(kind, row, lookup), startText: timeText(row.start_at), endText: timeText(row.end_at), calendarActions: actionsFor(row)

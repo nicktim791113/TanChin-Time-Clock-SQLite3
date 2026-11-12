@@ -757,7 +757,7 @@ async function requestJson(url, { method = "GET", body, auth = false } = {}) {
         throw new Error(result.error || "登入狀態已失效，請重新登入。");
     }
     if (!response.ok || result.success === false) {
-        throw new Error(result.error || result.message || "操作失敗");
+        throw Object.assign(new Error(result.error || result.message || "操作失敗"), { status: response.status });
     }
     return result;
 }
@@ -9411,13 +9411,13 @@ function resetAdminPaperCorrection(form) {
     const modeHelp = form.querySelector("[data-paper-mode-help]");
     const selectVisible = form.querySelector('[data-action="paper-select-visible-employees"]');
     if (title) title.textContent = kind === "leave" ? "紙本請假補登" : "紙本加班補登";
-    if (badge) badge.textContent = "直接建立已核准紀錄";
+    if (badge) badge.textContent = kind === "leave" ? "直接建立已核准紀錄" : "符合條件時須額外複核";
     if (submit) submit.textContent = kind === "leave" ? "建立紙本核准請假" : "建立紙本核准加班";
     if (cancel) cancel.classList.add("hidden");
     if (modeHelp) {
         modeHelp.textContent = kind === "leave"
             ? "儲存後會直接成為已核准請假，不會再進主管或管理部待審。"
-            : "儲存後只會建立加班核准紀錄，不會直接修改打卡或出勤時間。";
+            : "紙本核准補登若命中條件，須完成額外複核才會核准。補登不會直接修改打卡或出勤時間。";
     }
     if (selectVisible) selectVisible.disabled = false;
     setFormMessage(form.id, "");
@@ -9665,6 +9665,7 @@ function renderAdminRequestFilters(kind, datasets, pageState) {
         ]
         : [
             ["pending_supervisor", "主管審核中"],
+            ["pending_additional", "待額外複核"],
             ["approved", "已核准"],
             ["rejected", "已駁回"],
             ["withdrawn", "已撤回"],
@@ -10630,6 +10631,7 @@ handleRealtimeSyncMessage = async function handleRealtimeSyncMessageLeaveOverrid
 
 const overtimeStatusBadgeTypes = {
     pending_supervisor: "warning",
+    pending_additional: "warning",
     approved: "success",
     rejected: "danger",
     withdrawn: "",
@@ -10687,17 +10689,17 @@ function renderOvertimeRequestRows(requests = [], { showEmployee = false, showAp
                                             <button class="mini-btn" type="button" data-action="overtime-supervisor-decision" data-id="${escapeHtml(request.id)}" data-decision="approved">核准</button>
                                             <button class="mini-btn" type="button" data-action="overtime-supervisor-decision" data-id="${escapeHtml(request.id)}" data-decision="rejected">駁回</button>
                                         ` : ""}
-                                        ${!reviewMode && allowWithdraw && request.status === "pending_supervisor" ? `
+                                        ${!reviewMode && allowWithdraw && ["pending_supervisor", "pending_additional"].includes(request.status) ? `
                                             <button class="mini-btn" type="button" data-action="overtime-withdraw" data-id="${escapeHtml(request.id)}">撤回</button>
                                         ` : ""}
                                         ${typeof renderApprovedCorrectionActions === 'function' ? renderApprovedCorrectionActions('overtime', request) : ''}
-                                        ${!reviewMode && allowPaperManage && request.approval_mode === "admin_paper_approved" && request.status === "approved" ? `
-                                            <button class="mini-btn" type="button" data-action="paper-overtime-correct" data-id="${escapeHtml(request.id)}">修正</button>
+                                        ${!reviewMode && allowPaperManage && request.approval_mode === "admin_paper_approved" && ["approved", "pending_additional"].includes(request.status) ? `
+                                            ${request.status === "approved" ? `<button class="mini-btn" type="button" data-action="paper-overtime-correct" data-id="${escapeHtml(request.id)}">修正</button>` : ""}
                                             <button class="mini-btn danger-text" type="button" data-action="paper-overtime-cancel" data-id="${escapeHtml(request.id)}">作廢</button>
                                         ` : ""}
                                         ${!reviewMode
-                                            && !(allowPaperManage && request.approval_mode === "admin_paper_approved" && request.status === "approved")
-                                            && (!allowWithdraw || request.status !== "pending_supervisor") ? "<span>-</span>" : ""}
+                                            && !(allowPaperManage && request.approval_mode === "admin_paper_approved" && ["approved", "pending_additional"].includes(request.status))
+                                            && (!allowWithdraw || !["pending_supervisor", "pending_additional"].includes(request.status)) ? "<span>-</span>" : ""}
                                     </div>
                                 </div>
                             </td>
@@ -10857,6 +10859,7 @@ function calculatePaperOvertimeNet(values) {
     return { breakMinutes: rest, durationHours: hours };
 }
 function setPaperOvertimeRestState(form, request = null) {
+    if (typeof cotResetForm === 'function') cotResetForm(form);
     delete form.dataset.overtimeBreakManual;
     delete form.dataset.overtimeTimingEdited;
     const legacy = Boolean(request && (request.breakMinutes ?? request.break_minutes) == null);
@@ -10869,6 +10872,8 @@ function syncPaperOvertimeNet(form, target) {
     const rest = form.elements.namedItem('breakMinutes'), total = form.elements.namedItem('durationHours');
     if (!rest || !total) return null;
     const correction = Boolean(form.dataset.correctionRequestId);
+    const preview = form.querySelector('[data-cot-form-preview]');
+    if (preview) preview.hidden = correction;
     const reset = form.querySelector('[data-paper-overtime-auto-break]');
     if (reset) reset.hidden = correction;
     if (target === rest) form.dataset.overtimeBreakManual = 'true';
@@ -10934,9 +10939,9 @@ function renderAdminPaperOvertimeForm(datasets = {}) {
             <div class="list-toolbar">
                 <div>
                     <h3 data-paper-form-title>紙本加班補登</h3>
-                    <p class="helper-text">員工已走紙本或現場核准流程時，由管理者直接補登為已核准加班；資料會進加班查核與申請匯出。</p>
+                    <p class="helper-text">員工已完成紙本或現場核准流程時，由管理者補登。符合週六加班條件者，完成額外複核後才核准。</p>
                 </div>
-                <span class="badge warning" data-paper-form-badge>直接建立已核准紀錄</span>
+                <span class="badge warning" data-paper-form-badge>符合條件時須額外複核</span>
             </div>
             <form id="admin-paper-overtime-form" class="stack-form">
                 <div class="field-grid dense-form admin-paper-field-grid">
@@ -10988,9 +10993,10 @@ function renderAdminPaperOvertimeForm(datasets = {}) {
                         <button class="outline-btn" type="button" data-paper-overtime-auto-break>恢復自動休息</button>
                         <button class="outline-btn hidden" type="button" data-action="cancel-paper-correction">取消修正</button>
                     </div>
-                    <p class="helper-text" data-paper-mode-help>儲存後只會建立加班核准紀錄，不會直接修改打卡或出勤時間。</p>
+                    <p class="helper-text" data-paper-mode-help>紙本核准補登若命中條件，須完成額外複核才會核准。補登不會直接修改打卡或出勤時間。</p>
                 </div>
                 <p class="helper-text">新增補登每完整涵蓋一天的 12:20–13:00，預帶休息 40 分鐘，可修改。</p>
+                ${typeof cotFormPreviewHost === 'function' ? cotFormPreviewHost() : ''}
                 <label class="sp-confirm" data-paper-legacy-rest-confirm hidden><input name="confirmLegacyBreak" type="checkbox" disabled>舊單休息未記錄；已核對休息分鐘與重新計算的時數，確認套用修正。</label>
                 <div class="inline-message" data-form-message-for="admin-paper-overtime-form" aria-live="polite"></div>
             </form>
@@ -11029,11 +11035,13 @@ function renderAdminOvertimeSection(datasets) {
                     </div>
                     <div class="badge-row">
                         ${canView ? renderBadge(`待主管審核 ${overtime.pendingSupervisorTotalCount || 0} 筆`, overtime.pendingSupervisorTotalCount ? "warning" : "success") : ""}
+                        ${canView ? renderBadge(`待額外複核 ${overtime.pendingAdditionalTotalCount || 0} 筆`, overtime.pendingAdditionalTotalCount ? "warning" : "success") : ""}
                         ${canView ? renderBadge(`查核警示 ${alerts.length} 筆`, alerts.length ? "warning" : "success") : ""}
                         ${canView ? `<span class="badge" data-overtime-month-summary>${escapeHtml(adminOvertimeMonthSummary(datasets).label)}</span>` : ""}
                     </div>
                 </div>
                 <p class="helper-text">加班申請與請假分開保存；查核只做比對與警示，不會直接改動出勤打卡時間。</p>
+                ${canView && overtime.pendingAdditionalTotalCount && typeof cotRenderInbox === 'function' ? cotRenderInbox() : ''}
             </article>
 
             ${renderAdminPaperOvertimeForm(datasets)}
@@ -11071,6 +11079,7 @@ function renderAdminOvertimeSection(datasets) {
 }
 
 const originalHandleDashboardSubmitWithOvertime = handleDashboardSubmit;
+const paperOvertimeSubmitting = new WeakSet();
 handleDashboardSubmit = async function handleDashboardSubmitOvertimeOverride(event) {
     const form = event.target instanceof HTMLFormElement
         ? event.target
@@ -11081,6 +11090,8 @@ handleDashboardSubmit = async function handleDashboardSubmitOvertimeOverride(eve
     }
 
     event.preventDefault();
+    if (paperOvertimeSubmitting.has(form)) return;
+    let lockedPaper = false;
     setFormMessage(formId, "");
     try {
         const values = Object.fromEntries(new FormData(form).entries());
@@ -11098,6 +11109,13 @@ handleDashboardSubmit = async function handleDashboardSubmitOvertimeOverride(eve
                 ? "/api/browser/admin/overtime/paper-approved/correct"
                 : "/api/browser/admin/overtime/paper-approved";
             const breakSource = !correctionRequestId && overtimeBreakProvenance(form.dataset.overtimeBreakManual === 'true', calculated.breakMinutes);
+            let conditionalReviewFingerprints;
+            if (!correctionRequestId && typeof cotReviewForm === 'function') {
+                conditionalReviewFingerprints = await cotReviewForm(form, values, employeeIds, 'employeeIds');
+                if (!conditionalReviewFingerprints || !form.isConnected || paperOvertimeSubmitting.has(form)) return;
+            }
+            paperOvertimeSubmitting.add(form);
+            lockedPaper = true;
             const result = await requestJson(endpoint, {
                 method: "POST",
                 auth: true,
@@ -11111,6 +11129,7 @@ handleDashboardSubmit = async function handleDashboardSubmitOvertimeOverride(eve
                     durationHours: calculated.durationHours,
                     breakMinutes: calculated.breakMinutes,
                     ...(breakSource && { breakSource }),
+                    ...(conditionalReviewFingerprints && { conditionalReviewFingerprints }),
                     confirmLegacyBreak: form.elements.namedItem('confirmLegacyBreak').checked,
                     reason: values.reason?.trim() || "",
                     paperNo: values.paperNo?.trim() || "",
@@ -11142,8 +11161,11 @@ handleDashboardSubmit = async function handleDashboardSubmitOvertimeOverride(eve
         renderDashboard(result.data.dashboard);
         setMessage(ui.dashboardMessage, result.message || "加班申請已送出。", "success");
     } catch (error) {
+        if (formId === "admin-paper-overtime-form" && typeof cotResetForm === 'function') cotResetForm(form);
         setMessage(ui.dashboardMessage, error.message, "error");
         setFormMessage(formId, error.message, "error");
+    } finally {
+        if (lockedPaper) paperOvertimeSubmitting.delete(form);
     }
 };
 
