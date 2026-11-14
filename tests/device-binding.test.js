@@ -315,6 +315,48 @@ test('device binding retains credentials, enforces configurable limits, and expo
         assert.ok(!JSON.stringify(employee.dashboard).includes('deviceLoginDiagnostics'));
     });
 
+    await t.test('login audit failure rolls back a newly created binding so the same identity can retry', async () => {
+        const original = db.addAuditLog;
+        const target = 'A002', input = device('audit-fault-device');
+        const before = db.loadEmployeeDevices(target);
+        db.addAuditLog = entry => {
+            if (entry.action === 'login' && entry.target_type === 'session' && entry.target_id === target) throw new Error('fixture login audit failure');
+            return original(entry);
+        };
+        try {
+            assert.equal((await login(target,'delegated-card',input)).status,500);
+            assert.deepEqual(db.loadEmployeeDevices(target),before);
+            const diagnostic = db.queryAuditLogs({targetType:'device_login',limit:20}).find(entry=>
+                entry.after_data.originalDeviceId === input.deviceId);
+            assert.equal(diagnostic.success,false);
+            assert.equal(diagnostic.after_data.bindingOutcome,'blocked');
+            assert.equal(diagnostic.after_data.boundDeviceCountAfter,before.length);
+            assert.equal(diagnostic.after_data.canonicalDeviceId,'');
+        } finally { db.addAuditLog = original; }
+        const retried = await login(target,'delegated-card',input);
+        assert.equal(retried.status,200);
+        assert.ok(retried.deviceBinding.issuedDeviceToken);
+    });
+
+    await t.test('workspace dashboard failure rolls back the new binding and retains the prior session for retry', async () => {
+        const target = 'A002';
+        const account = await login(target,'A002-test-password');
+        assert.equal(account.dashboard.role,'workspace');
+        const input = device('dashboard-fault-device');
+        const before = db.loadEmployeeDevices(target);
+        const original = db.getBrowserPunchPermissions;
+        db.getBrowserPunchPermissions = () => { throw new Error('fixture workspace dashboard failure'); };
+        try {
+            const failed = await request('/workspace',{role:'employee',deviceInfo:input},account.token);
+            assert.equal(failed.status,500);
+            assert.match(failed.error,/fixture workspace dashboard failure/);
+            assert.deepEqual(db.loadEmployeeDevices(target),before);
+        } finally { db.getBrowserPunchPermissions = original; }
+        const retried = await request('/workspace',{role:'employee',deviceInfo:input},account.token);
+        assert.equal(retried.status,200);
+        assert.ok(retried.deviceBinding.issuedDeviceToken);
+    });
+
     await t.test('diagnostic persistence errors do not turn a valid login into a failure', async () => {
         const original = db.addAuditLog;
         let attempted = false;

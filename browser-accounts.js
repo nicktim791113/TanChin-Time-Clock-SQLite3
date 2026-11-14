@@ -178,6 +178,32 @@ function createBrowserAccounts(context) {
       deviceBrowserName: device.browserName, ipAddress: getIp(request), userAgent: request.headers['user-agent'] || null };
   }
 
+  function commitSession(request, role, employeeId, device, extra, authorize, audit) {
+    let token;
+    const priorSession = request.browserSession;
+    try {
+      return db.getSupervisors().transaction(() => {
+        const authorization = authorize?.();
+        token = createSession(role, employeeId, sessionMetadata(request, device, extra));
+        request.browserSession = sessions.get(token);
+        db.addAuditLog(audit());
+        return { success: true, token, dashboard: buildDashboard(request.browserSession), deviceBinding: deviceBinding(authorization, device) };
+      });
+    } catch (error) {
+      if (token) revoke(token);
+      request.browserSession = priorSession;
+      const binding = request.deviceAuthorization;
+      if (binding) {
+        request.deviceAuthorization = {
+          ...binding, bindingOutcome: 'blocked', canonicalDeviceId: '',
+          boundDeviceCountAfter: binding.boundDeviceCountBefore
+        };
+      }
+      request.deviceIdentityRecovered = false;
+      throw error;
+    }
+  }
+
   function endpoint(handler, diagnosticStage = '') {
     return async (request, response) => {
       response.setHeader('Cache-Control', 'no-store');
@@ -197,7 +223,7 @@ function createBrowserAccounts(context) {
     if (!id || typeof secret !== 'string' || !secret || secret.length > 128) throw httpError('請輸入帳號與卡號或個人網頁密碼。');
     const authenticated = throttle(request, `login:${id}`);
     const device = normalizeDeviceInfo(deviceInfo || {});
-    let activeRole, extra, employee, authorization;
+    let activeRole, extra, employee, authorize;
     if (role === 'system_admin') {
       const account = getSystemAdminCredentials();
       if (id !== account.username || secret !== account.password) throw httpError('系統管理者帳號或密碼不正確。', 401);
@@ -210,7 +236,7 @@ function createBrowserAccounts(context) {
         request.deviceDiagnosticEmployee = employee;
         activeRole = 'employee';
         extra = { authMethod: 'card', cardSignature: fingerprint(employee.card) };
-        authorization = authorizeDevice(employee, request, device);
+        authorize = () => authorizeDevice(employee, request, device);
       } else {
         const stored = db.getWebCredential(id);
         if (!await credentials.verifyPassword(stored?.credential, secret)) throw httpError('工號與卡號或個人網頁密碼不正確。', 401);
@@ -219,17 +245,16 @@ function createBrowserAccounts(context) {
         activeRole = stored.must_change_password ? 'password_change' : 'workspace';
         if (!stored.must_change_password && effectiveRoles(id).length === 1) {
           activeRole = 'employee';
-          authorization = authorizeDevice(employee, request, device);
+          authorize = () => authorizeDevice(employee, request, device);
         }
         extra = { authMethod: 'web_password', credentialRevision: stored.revision };
       }
       extra.realEmployeeName = employee.name;
     }
+    const result = commitSession(request, activeRole, employee?.id || '__system_admin__', device, extra, authorize,
+      () => auditEntry(request, { action: 'login', target_type: 'session', target_id: id, summary: '網頁個人帳號登入。', after_data: { role: activeRole, auth_method: extra.authMethod } }));
     authenticated();
-    const token = createSession(activeRole, employee?.id || '__system_admin__', sessionMetadata(request, device, extra));
-    request.browserSession = sessions.get(token);
-    db.addAuditLog(auditEntry(request, { action: 'login', target_type: 'session', target_id: id, summary: '網頁個人帳號登入。', after_data: { role: activeRole, auth_method: extra.authMethod } }));
-    response.json({ success: true, token, dashboard: buildDashboard(request.browserSession), deviceBinding: deviceBinding(authorization, device) });
+    response.json(result);
   }, 'login');
 
   async function authenticateRecovery(request) {
@@ -285,14 +310,13 @@ function createBrowserAccounts(context) {
         || !effectiveRoles(session.employeeId).includes(role)) throw httpError('這個登入方式或帳號沒有此工作台權限。', 403);
       const employee = getEmployee(session.employeeId);
       const device = normalizeDeviceInfo(request.body?.deviceInfo || {});
-      const authorization = role === 'employee' ? authorizeDevice(employee, request, device) : null;
-      const token = createSession(role, employee.id, sessionMetadata(request, device,
-        { authMethod: session.authMethod, credentialRevision: session.credentialRevision, realEmployeeName: employee.name, authenticatedAt: session.authenticatedAt }));
-      db.addAuditLog(auditEntry(request, { action: 'workspace_switch', target_type: 'session', target_id: employee.id,
-        summary: `切換至${ROLE_LABELS[role]}。`, before_data: { role: session.role }, after_data: { role } }));
-      const dashboard = buildDashboard(sessions.get(token));
+      const result = commitSession(request, role, employee.id, device,
+        { authMethod: session.authMethod, credentialRevision: session.credentialRevision, realEmployeeName: employee.name, authenticatedAt: session.authenticatedAt },
+        role === 'employee' ? () => authorizeDevice(employee, request, device) : undefined,
+        () => auditEntry(request, { action: 'workspace_switch', target_type: 'session', target_id: employee.id,
+          summary: `切換至${ROLE_LABELS[role]}。`, before_data: { role: session.role }, after_data: { role } }));
       revoke(session.token);
-      response.json({ success: true, token, dashboard, deviceBinding: deviceBinding(authorization, device) });
+      response.json(result);
     }, 'workspace_switch'));
 
     server.post('/api/browser/account/password/initialize', requireSession, endpoint(async (request, response) => {

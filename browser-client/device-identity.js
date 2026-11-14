@@ -63,9 +63,16 @@
                 localToken = localPut(TOKENS, JSON.stringify(tokens));
             } else localToken = localPut(LEGACY_TOKEN, localDeviceToken);
         } else {
-            // Verify that more than the short ID can be written before requesting a new binding.
+            // Test the complete proposed token map without replacing any existing credential.
             const probe = 'tanchin.browser.device.storage-check';
-            localToken = localPut(probe, '0'.repeat(256));
+            let sample = '0'.repeat(64);
+            if (employeeId) {
+                const tokens = parse(localGet(TOKENS));
+                tokens['id:' + employeeId] = sample;
+                tokens['verified:id:' + employeeId] = true;
+                sample = '0'.repeat(JSON.stringify(tokens).length);
+            }
+            localToken = localPut(probe, sample);
             try { options.storage().removeItem(probe); } catch { /* no credential is stored here */ }
         }
         // A failed new token write must not also replace the old local ID.

@@ -34,7 +34,7 @@ function fixture() {
         getDatasets:()=>({employees:[]}),setFormMessage:(...args)=>messages.push(args),setMessage:(...args)=>messages.push(args),ui:{},renderDashboard(){},
         requestJson:async(url,options)=>{requests.push({url,...options});throw new Error('fixture query failed');}
     });
-    const names=['createDefaultAdminReportState','ensureAdminReportState','renderOptions','renderEmptyState','renderBadge','adminReportCategories','adminReportFilteredRows','adminReportMonthRange','syncAdminReportEmployee','renderAdminReportStats','renderAdminReportFilterNote','renderAdminReportRows','renderAdminReportSection','ensureWorkspaceSubnavState','flattenWorkspaceSubnavGroups','getWorkspaceSubnavItemPanelHtml','warnMissingWorkspaceSubnavPanel','compactWorkspaceSummaryCard','parseWorkspaceSubnavPanels','prepareWorkspaceSubnavGroups','getActiveWorkspaceSubnavItem','renderWorkspaceSubnav','renderWorkspaceSubnavSection','handleDashboardSubmit','handleDashboardClick'];
+    const names=['createDefaultAdminReportState','ensureAdminReportState','renderOptions','renderEmptyState','renderBadge','adminReportCategories','adminReportFilteredRows','adminReportMonthRange','adminReportMonthButtons','adminReportSummaryIdentity','adminReportSummaryPreference','adminReportSummaryOrder','moveAdminReportCard','paintAdminReportSummaryOrder','loadAdminReportSummaryOrder','saveAdminReportSummaryOrder','handleAdminReportCardDrag','adminReportColumns','adminReportSortedRows','syncAdminReportEmployee','renderAdminReportStats','renderAdminReportFilterNote','renderAdminReportRows','renderAdminReportSection','ensureWorkspaceSubnavState','flattenWorkspaceSubnavGroups','getWorkspaceSubnavItemPanelHtml','warnMissingWorkspaceSubnavPanel','compactWorkspaceSummaryCard','parseWorkspaceSubnavPanels','prepareWorkspaceSubnavGroups','getActiveWorkspaceSubnavItem','renderWorkspaceSubnav','renderWorkspaceSubnavSection','handleDashboardSubmit','handleDashboardClick'];
     for(const name of names)vm.runInContext(functionSource(name),context);
     const start=app.indexOf('        reports: {',app.indexOf('const workspaceSubnavConfigs'));
     const end=app.indexOf('        leave: {',start);
@@ -55,14 +55,63 @@ test('old report summary/detail subsection state converges to one query page wit
     }
 });
 
-test('Taipei month shortcuts fill full calendar months, including leap February and the UTC boundary', () => {
+test('Taipei shortcuts end the current month today and preserve full previous months', () => {
     const f = fixture();
     const now = Date.parse('2024-03-31T16:00:00Z');
     assert.equal(f.run(`JSON.stringify([0,-1,-2].map(offset => adminReportMonthRange(offset,${now})))`), JSON.stringify([
-        { startDate:'2024-04-01', endDate:'2024-04-30' },
+        { startDate:'2024-04-01', endDate:'2024-04-01' },
         { startDate:'2024-03-01', endDate:'2024-03-31' },
         { startDate:'2024-02-01', endDate:'2024-02-29' }
     ]));
+    const newYear = Date.parse('2025-12-31T16:00:00Z');
+    const buttons = f.run(`adminReportMonthButtons(${newYear})`);
+    assert.match(buttons, /本月 2026\/01/);
+    assert.match(buttons, /上月 2025\/12/);
+    assert.match(buttons, /上上月 2025\/11/);
+});
+
+test('report sorting is stable, natural and numeric without altering CSV source records', () => {
+    const f = fixture();
+    f.context.rows = [
+        { employeeId:'E10', employeeName:'Ten', leaveDurationHours:10, timeText:'12:05:00' },
+        { employeeId:'E2', employeeName:'First two', leaveDurationHours:2.75, timeText:'09:50:00' },
+        { employeeId:'E2', employeeName:'Second two', leaveDurationHours:2.5, timeText:'09:30:00' },
+        { employeeId:'E3', employeeName:'No hours', timeText:'07:00:00' }
+    ];
+    const names = (key, direction) => JSON.parse(f.run(`JSON.stringify(adminReportSortedRows(rows, {key:'${key}',direction:'${direction}'}).map(row=>row.employeeName))`));
+    assert.deepEqual(names('employeeId','ascending'), ['First two','Second two','No hours','Ten']);
+    assert.deepEqual(names('leaveDurationHours','ascending'), ['Second two','First two','Ten','No hours']);
+    assert.deepEqual(names('timeText','descending'), ['Ten','First two','Second two','No hours']);
+    assert.equal(f.context.rows[0].employeeId, 'E10');
+    f.state.adminReport = { queried: true, records: f.context.rows, sort: { key:'employeeId', direction:'ascending' } };
+    const html = f.render();
+    assert.match(html, /<th scope="col" aria-sort="ascending"><button[^>]+data-sort-key="employeeId"/);
+    assert.equal((html.match(/data-action="sort-admin-report"/g) || []).length, 11);
+});
+
+test('summary card moves post a complete versioned order and ignore an old identity response', async () => {
+    const f = fixture();
+    f.state.token = 'first';
+    f.state.dashboard.user = { id: 'Admin1' };
+    f.context.document.querySelector = () => null;
+    let complete;
+    f.context.requestJson = (url, options) => {
+        f.requests.push({ url, ...options });
+        return new Promise(resolve => { complete = resolve; });
+    };
+    const initial = f.run('loadAdminReportSummaryOrder()');
+    const defaults = JSON.parse(f.run('JSON.stringify(adminReportSummaryOrder())'));
+    complete({ preferences: { order: defaults, defaultOrder: defaults, revision: 'rev1', canEdit: true } });
+    await initial;
+    const saving = f.run("moveAdminReportCard('leave',-1,true)");
+    assert.equal(f.requests[1].body.revision, 'rev1');
+    assert.equal(f.requests[1].body.order.join(','), ['all','leave','valid',...defaults.slice(3)].join(','));
+    f.state.token = 'second';
+    f.state.dashboard.user = { id: 'Admin2' };
+    complete({ preferences: { order: f.requests[1].body.order, revision: 'rev2', canEdit: true } });
+    await saving;
+    assert.equal(f.run('adminReportSummaryPreference().data'), null);
+    assert.deepEqual(JSON.parse(f.run('JSON.stringify(adminReportSummaryOrder())')), defaults);
 });
 
 test('employee code only selects an exact employee and invalid codes block a query', async () => {

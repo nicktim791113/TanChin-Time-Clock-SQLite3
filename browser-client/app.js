@@ -930,6 +930,7 @@ async function reloadDashboard(message = "", type = "success", options = {}) {
             refreshedReport = {
                 ...reportResult.data,
                 category: reportState.category,
+                sort: reportState.sort,
                 queried: true
             };
         } catch (error) {
@@ -2013,8 +2014,15 @@ function adminReportMonthRange(offset, now = Date.now()) {
     const year = taipei.getUTCFullYear(), month = taipei.getUTCMonth() + offset;
     return {
         startDate: new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10),
-        endDate: new Date(Date.UTC(year, month + 1, 0)).toISOString().slice(0, 10)
+        endDate: (offset === 0 ? taipei : new Date(Date.UTC(year, month + 1, 0))).toISOString().slice(0, 10)
     };
+}
+
+function adminReportMonthButtons(now = Date.now()) {
+    return [[0, "本月"], [-1, "上月"], [-2, "上上月"]].map(([offset, label]) => {
+        const [year, month] = adminReportMonthRange(offset, now).startDate.split("-");
+        return `<button type="button" class="mini-btn" data-action="admin-report-month" data-offset="${offset}" aria-label="${label} ${year} 年 ${Number(month)} 月">${label} ${year}/${month}</button>`;
+    }).join("");
 }
 
 function syncAdminReportEmployee(form, employees, fromCode = true) {
@@ -2042,10 +2050,106 @@ function handleAdminReportEmployeeInput(event) {
     if (form) syncAdminReportEmployee(form, getDatasets().employees || [], target.name === "employeeCode");
 }
 
+function adminReportSummaryIdentity() {
+    const dashboard = state.dashboard;
+    if (dashboard?.role !== "admin" || !dashboard.user?.id) return "";
+    return JSON.stringify([state.token, dashboard.user.id, Boolean(dashboard.impersonation?.active), dashboard.impersonation?.realEmployeeId]);
+}
+
+function adminReportSummaryPreference() {
+    const identity = adminReportSummaryIdentity();
+    if (state.adminReportSummaryPreference?.identity !== identity) state.adminReportSummaryPreference = { identity, data: null, loading: false, saving: false, error: "" };
+    return state.adminReportSummaryPreference;
+}
+
+function adminReportSummaryOrder() {
+    const defaults = [...adminReportCategories().map(([category]) => category || "all"), "employees"];
+    const saved = adminReportSummaryPreference().data?.order;
+    const valid = Array.isArray(saved) ? [...new Set(saved.filter(value => defaults.includes(value)))] : [];
+    return [...valid, ...defaults.filter(value => !valid.includes(value))];
+}
+
 function renderAdminReportStats(reportState) {
-    return `<div class="stats-grid report-filter-stats">${adminReportCategories().map(([category, label, key]) =>
-        `<button type="button" class="stat-card" data-action="filter-admin-report" data-category="${category}" aria-pressed="${(reportState.category || "") === category}" aria-controls="admin-report-detail"><span class="stat-label">${label}${category === "" ? "（全部）" : ""}</span><strong class="stat-value">${escapeHtml(reportState.summary?.[key] ?? 0)}</strong></button>`
-    ).join("")}<div class="stat-card"><span class="stat-label">涵蓋員工數</span><strong class="stat-value">${escapeHtml(reportState.summary?.employeeCount ?? 0)}</strong></div></div>`;
+    const preference = adminReportSummaryPreference();
+    const editable = Boolean(preference.data?.canEdit && !state.dashboard?.impersonation?.active && !preference.saving && !preference.loading);
+    const labels = new Map([...adminReportCategories().map(([category, label, key]) => [category || "all", [label, key]]), ["employees", ["涵蓋員工數", "employeeCount"]]]);
+    const order = adminReportSummaryOrder();
+    return `<div data-report-summary-order><div class="report-summary-order-tools"><span role="status">${escapeHtml(preference.error || (preference.saving ? "正在儲存摘要順序…" : preference.loading ? "正在讀取摘要順序…" : ""))}</span>
+        ${editable ? '<button type="button" class="outline-btn" data-action="reset-admin-report-cards">還原摘要順序</button>' : ''}
+        ${preference.error ? '<button type="button" class="outline-btn" data-action="reload-admin-report-cards">重新讀取摘要順序</button>' : ''}</div>
+        <div class="stats-grid report-filter-stats">${order.map((card, index) => {
+        const [label, key] = labels.get(card), category = card === "all" ? "" : card;
+        const contents = `<span class="stat-label">${label}${category === "" ? "（全部）" : ""}</span><strong class="stat-value">${escapeHtml(reportState.summary?.[key] ?? 0)}</strong>`;
+        return `<div class="stat-card report-summary-card" data-report-card="${card}" ${editable ? 'draggable="true"' : ""}>
+            ${category === "employees" ? `<div class="report-stat-display">${contents}</div>` : `<button type="button" class="report-stat-select" data-action="filter-admin-report" data-category="${category}" aria-pressed="${(reportState.category || "") === category}" aria-controls="admin-report-detail">${contents}</button>`}
+            ${editable ? `<div class="report-stat-moves"><button type="button" class="mini-btn" data-action="move-admin-report-card" data-direction="-1" aria-label="上移 ${label}" ${index === 0 ? "disabled" : ""}>上移</button><button type="button" class="mini-btn" data-action="move-admin-report-card" data-direction="1" aria-label="下移 ${label}" ${index === order.length - 1 ? "disabled" : ""}>下移</button></div>` : ""}</div>`;
+    }).join("")}</div></div>`;
+}
+
+function moveAdminReportCard(category, destination, relative = false) {
+    const order = adminReportSummaryOrder();
+    const from = order.indexOf(category), to = relative ? from + destination : order.indexOf(destination);
+    if (from < 0 || to < 0 || to >= order.length || from === to) return;
+    order.splice(to, 0, ...order.splice(from, 1));
+    return saveAdminReportSummaryOrder(order, category, relative ? destination : undefined);
+}
+
+function paintAdminReportSummaryOrder(focusCategory, direction) {
+    const grid = document.querySelector("[data-report-summary-order]");
+    if (!grid) return;
+    grid.outerHTML = renderAdminReportStats(ensureAdminReportState());
+    if (focusCategory !== undefined) {
+        const card = [...document.querySelectorAll("[data-report-card]")].find(item => item.dataset.reportCard === focusCategory);
+        (card?.querySelector(`[data-direction="${direction}"]:not([disabled])`) || card?.querySelector("button:not([disabled])"))?.focus({ preventScroll: true });
+    }
+}
+
+async function loadAdminReportSummaryOrder() {
+    const preference = adminReportSummaryPreference();
+    if (!preference.identity || preference.loading || preference.saving) return;
+    preference.loading = true; preference.error = ""; paintAdminReportSummaryOrder();
+    try {
+        const result = await requestJson("/api/browser/admin/reports/summary-order", { auth: true });
+        if (preference !== adminReportSummaryPreference()) return;
+        preference.data = result.preferences;
+    } catch (error) {
+        if (preference === adminReportSummaryPreference()) preference.error = error.message;
+    } finally {
+        if (preference === adminReportSummaryPreference()) { preference.loading = false; paintAdminReportSummaryOrder(); }
+    }
+}
+
+async function saveAdminReportSummaryOrder(order, focusCategory, direction) {
+    const preference = adminReportSummaryPreference();
+    if (!preference.identity || !preference.data?.canEdit || state.dashboard?.impersonation?.active || preference.saving || preference.loading) return;
+    preference.saving = true; preference.error = ""; paintAdminReportSummaryOrder();
+    try {
+        const result = await requestJson("/api/browser/admin/reports/summary-order", { method: "POST", auth: true, body: { order, revision: preference.data.revision } });
+        if (preference === adminReportSummaryPreference()) preference.data = result.preferences;
+    } catch (error) {
+        if (preference === adminReportSummaryPreference()) preference.error = error.message;
+    } finally {
+        if (preference === adminReportSummaryPreference()) { preference.saving = false; paintAdminReportSummaryOrder(focusCategory, direction); }
+    }
+}
+
+function handleAdminReportCardDrag(event) {
+    const card = event.target.closest("[data-report-card]");
+    const preference = adminReportSummaryPreference();
+    if (!card || !preference.data?.canEdit || preference.saving || preference.loading || state.dashboard?.impersonation?.active) return;
+    if (event.type === "dragstart") {
+        preference.draggedCard = card.dataset.reportCard;
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("application/x-tanchin-report-card", card.dataset.reportCard);
+    } else if (event.type === "dragend") {
+        delete preference.draggedCard;
+    } else if (event.dataTransfer.types.includes("application/x-tanchin-report-card")) {
+        event.preventDefault();
+        if (event.type !== "drop") return;
+        const source = event.dataTransfer.getData("application/x-tanchin-report-card");
+        if (source === preference.draggedCard) moveAdminReportCard(source, card.dataset.reportCard);
+        delete preference.draggedCard;
+    }
 }
 
 function renderAdminReportFilterNote(reportState) {
@@ -2054,11 +2158,38 @@ function renderAdminReportFilterNote(reportState) {
     return `目前顯示與匯出：${escapeHtml(reportState.category ? label : "全部")} · 明細 ${adminReportFilteredRows(reportState).length} 筆`;
 }
 
+function adminReportColumns() {
+    return [
+        ["employeeId", "工號"], ["employeeName", "姓名"], ["department", "部門"], ["dateText", "日期"],
+        ["timeText", "時間"], ["shift", "班別"], ["typeText", "類型"], ["attendanceStatusText", "狀態"],
+        ["leaveStartText", "請假區段"], ["leaveDurationHours", "請假時數"], ["sourceText", "來源"]
+    ];
+}
+
+function adminReportSortedRows(records, sort) {
+    if (!adminReportColumns().some(([key]) => key === sort?.key)) return records;
+    const collator = new Intl.Collator("zh-Hant-TW", { numeric: true, sensitivity: "base" });
+    const direction = sort.direction === "descending" ? -1 : 1;
+    const key = sort.key;
+    function value(row) {
+        if (key === "attendanceStatusText") return [row.attendanceStatusText, ...(row.attendanceFlags || [])].filter(Boolean).join(" ");
+        if (key === "leaveStartText") return row.leaveStartText ? `${row.leaveStartText} ${row.leaveEndText || ""}` : null;
+        if (key === "leaveDurationHours") return row[key] != null && row[key] !== "" && Number.isFinite(Number(row[key])) ? Number(row[key]) : null;
+        return row[key];
+    }
+    return records.slice().sort((a, b) => {
+        const left = value(a), right = value(b);
+        const emptyLeft = left == null || left === "" || left === "-", emptyRight = right == null || right === "" || right === "-";
+        if (emptyLeft || emptyRight) return Number(emptyLeft) - Number(emptyRight);
+        return direction * (typeof left === "number" ? left - right : collator.compare(left, right));
+    });
+}
+
 function renderAdminReportRows(reportState) {
     if (!reportState.queried) {
         return renderEmptyState("請先選擇日期區間並查詢考勤報表。");
     }
-    const records = adminReportFilteredRows(reportState);
+    const records = adminReportSortedRows(adminReportFilteredRows(reportState), reportState.sort);
     if (!records.length) {
         if (reportState.category) return renderEmptyState("此摘要篩選沒有符合的考勤明細。按已選項目或「查詢筆數（全部）」清除。");
         return renderEmptyState("此條件下沒有查到任何出勤紀錄。");
@@ -2069,17 +2200,10 @@ function renderAdminReportRows(reportState) {
             <table class="data-table">
                 <thead>
                     <tr>
-                        <th>工號</th>
-                        <th>姓名</th>
-                        <th>部門</th>
-                        <th>日期</th>
-                        <th>時間</th>
-                        <th>班別</th>
-                        <th>類型</th>
-                        <th>狀態</th>
-                        <th>請假區段</th>
-                        <th>請假時數</th>
-                        <th>來源</th>
+                        ${adminReportColumns().map(([key, label]) => {
+                            const direction = reportState.sort?.key === key ? reportState.sort.direction : "";
+                            return `<th scope="col"${direction ? ` aria-sort="${direction}"` : ""}><button type="button" class="report-sort" data-action="sort-admin-report" data-sort-key="${key}">${label}<span aria-hidden="true">${direction === "ascending" ? "▲" : direction === "descending" ? "▼" : "↕"}</span></button></th>`;
+                        }).join("")}
                     </tr>
                 </thead>
                 <tbody>
@@ -2091,7 +2215,7 @@ function renderAdminReportRows(reportState) {
                             ? `${record.leaveDurationHours} 小時`
                             : "-";
                         const flagLabels = { missing_in: "缺上班卡", missing_out: "缺下班卡", awaiting_out: "待下班卡" };
-                        const flags = (record.attendanceFlags || []).map(flag => flagLabels[flag]).filter(Boolean);
+                        const flags = (record.attendanceFlags || []).filter(flag => Object.hasOwn(flagLabels, flag));
                         return `
                             <tr>
                                 <td>${escapeHtml(record.employeeId || "-")}</td>
@@ -2101,7 +2225,7 @@ function renderAdminReportRows(reportState) {
                                 <td>${escapeHtml(record.timeText || "-")}</td>
                                 <td>${escapeHtml(record.shift || "-")}</td>
                                 <td>${escapeHtml(record.typeText || "-")}</td>
-                                <td>${escapeHtml(record.attendanceStatusText || "-")}${flags.length ? `<small class="report-attendance-flags">${escapeHtml(flags.join("、"))}</small>` : ""}</td>
+                                <td>${escapeHtml(record.attendanceStatusText || "-")}${flags.map(flag => `<small class="report-attendance-flag report-flag-${flag}">${flagLabels[flag]}</small>`).join("")}</td>
                                 <td>${escapeHtml(leaveWindow)}</td>
                                 <td>${escapeHtml(leaveHours)}</td>
                                 <td>${escapeHtml(record.sourceText || "-")}</td>
@@ -2154,7 +2278,7 @@ function renderAdminReportSection(datasets) {
                             </select>
                         </label>
                         <div class="field">
-                            <div class="report-date-heading"><label for="admin-report-start-date">開始日期</label><div class="report-month-buttons" role="group" aria-label="快速選擇月份">${[[0, "本月"], [-1, "上月"], [-2, "上上月"]].map(([offset, label]) => `<button type="button" class="mini-btn" data-action="admin-report-month" data-offset="${offset}">${label}</button>`).join("")}</div></div>
+                            <div class="report-date-heading"><label for="admin-report-start-date">開始日期</label><div class="report-month-buttons" role="group" aria-label="快速選擇月份">${adminReportMonthButtons()}</div></div>
                             <input id="admin-report-start-date" name="startDate" type="date" value="${escapeHtml(reportState.filters.startDate || "")}" required>
                         </div>
                         <label class="field">
@@ -3259,6 +3383,8 @@ function postRenderSetup() {
         if (!reportForm.elements.startDate.value) reportForm.elements.startDate.value = reportState.filters.startDate;
         if (!reportForm.elements.endDate.value) reportForm.elements.endDate.value = reportState.filters.endDate;
         if (!reportForm.elements.employeeId.value) reportForm.elements.employeeId.value = reportState.filters.employeeId;
+        const preference = adminReportSummaryPreference();
+        if (reportState.queried && !preference.data && !preference.error && !preference.loading) loadAdminReportSummaryOrder();
     }
     syncAutomationFormVisibility();
     updateThemePreviewFromForm();
@@ -3893,6 +4019,32 @@ async function handleDashboardClick(event) {
             if (note) note.textContent = renderAdminReportFilterNote(report);
             return;
         }
+        if (action === "sort-admin-report") {
+            const report = ensureAdminReportState(), key = actionTarget.dataset.sortKey;
+            const detail = document.getElementById("admin-report-detail");
+            if (!report.queried || !detail || !adminReportColumns().some(([column]) => column === key)) return;
+            const direction = report.sort?.key === key && report.sort.direction === "ascending" ? "descending" : "ascending";
+            report.sort = { key, direction };
+            const scroll = detail.querySelector(".data-table-wrap")?.scrollLeft || 0;
+            detail.innerHTML = renderAdminReportRows(report);
+            const wrapper = detail.querySelector(".data-table-wrap");
+            if (wrapper) wrapper.scrollLeft = scroll;
+            detail.querySelector(`[data-sort-key="${key}"]`)?.focus({ preventScroll: true });
+            scheduleDataTableColumnFit(detail);
+            return;
+        }
+        if (action === "move-admin-report-card") {
+            const direction = Number(actionTarget.dataset.direction);
+            const card = actionTarget.closest("[data-report-card]");
+            if (card && (direction === -1 || direction === 1)) await moveAdminReportCard(card.dataset.reportCard, direction, true);
+            return;
+        }
+        if (action === "reset-admin-report-cards") {
+            const defaults = adminReportSummaryPreference().data?.defaultOrder;
+            if (defaults) await saveAdminReportSummaryOrder(defaults, "all");
+            return;
+        }
+        if (action === "reload-admin-report-cards") return loadAdminReportSummaryOrder();
         if (action === "jump-leave-routes") {
             state.activeSections.admin = "supervisors";
             renderDashboard(state.dashboard);
@@ -13434,6 +13586,7 @@ function initialize() {
     ui.dashboardContent.addEventListener("click", handleDashboardClick);
     ui.dashboardContent.addEventListener("input", handleAdminReportEmployeeInput);
     ui.dashboardContent.addEventListener("change", handleAdminReportEmployeeInput);
+    for (const eventName of ["dragstart", "dragover", "drop", "dragend"]) ui.dashboardContent.addEventListener(eventName, handleAdminReportCardDrag);
     const rememberDashboardEdit = (event) => {
         if (state.dashboard?.role !== 'admin') return;
         const field = event.target;

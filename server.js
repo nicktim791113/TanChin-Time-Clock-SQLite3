@@ -17,6 +17,7 @@ const { punchHistoryWindow } = require('./employee-browser-settings');
 const { attachEmployeeAttendanceRoutes } = require('./employee-attendance');
 const { classifyAttendanceReport, DETAIL_CATEGORIES, DAY_MS: REPORT_DAY_MS } = require('./attendance-report');
 const { attachConditionalOvertimeRoutes, SETTINGS_PERMISSION: CONDITIONAL_OVERTIME_PERMISSION } = require('./overtime-conditional-routes');
+const { attachReportSummaryOrderRoutes } = require('./report-summary-order');
 const { attachRequestHistoryRoutes } = require('./request-history');
 const { attachLeaveEntitlementRoutes } = require('./leave-entitlement-routes');
 const { attachLeaveUsageRoutes } = require('./leave-usage');
@@ -8077,6 +8078,8 @@ function createServerApp() {
 
   attachExternalApiRoutes(server);
   attachBrowserRoutes(server);
+  attachReportSummaryOrderRoutes(server, { db: dbModule, requireSession: requireBrowserSession,
+    requirePermission: requireAdminPermission, auditEntry: buildBrowserAuditLogEntry });
   attachConditionalOvertimeRoutes(server, {
     db: dbModule, requireSession: requireBrowserSession, hasPermission: hasAdminPermission,
     auditEntry: buildBrowserAuditLogEntry, formatRecord: formatOvertimeRequestForDashboard,

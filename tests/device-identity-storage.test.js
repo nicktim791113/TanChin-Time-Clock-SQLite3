@@ -8,11 +8,11 @@ const createStore = require('../browser-client/device-identity');
 const ID = 'tanchin.browser.device.id', TOKENS = 'browserPortalAccountDeviceTokens';
 function fixture() {
     const local = new Map(), cookies = new Map(), writes = [];
-    let localBlocked = false, localReadOnly = false, cookieBlocked = false, cookieReadOnly = false, sequence = 0;
+    let localBlocked = false, localReadOnly = false, cookieBlocked = false, cookieReadOnly = false, sequence = 0, maxLocalValue = Infinity;
     const blockedLocalKeys = new Set(), blockedCookieKeys = new Set();
     const storage = {
         getItem(key) { if (localBlocked) throw new Error('blocked'); return local.get(key) || null; },
-        setItem(key, value) { if (localBlocked || localReadOnly || blockedLocalKeys.has(key)) throw new Error('blocked'); local.set(key, value); },
+        setItem(key, value) { if (localBlocked || localReadOnly || blockedLocalKeys.has(key) || value.length > maxLocalValue) throw new Error('blocked'); local.set(key, value); },
         removeItem(key) { if (localBlocked) throw new Error('blocked'); local.delete(key); }
     };
     const document = {
@@ -24,12 +24,20 @@ function fixture() {
         }
     };
     const options = { storage: () => storage, document, origin: 'http://tc-150:3000', protocol: 'http:', generateId: () => 'new-' + ++sequence, defaultName: () => 'Windows / Edge' };
-    return { local, cookies, writes, options, fresh: () => createStore(options),
+    return { local, cookies, writes, options, fresh: () => createStore(options), limitLocalValue(value) { maxLocalValue = value; },
         blockLocal(value = true) { localBlocked = value; }, readOnlyLocal(value = true) { localReadOnly = value; }, blockCookie(value = true) { cookieBlocked = value; },
         readOnlyCookie(value = true) { cookieReadOnly = value; }, blockedLocalKeys, blockedCookieKeys,
         cookieKey(key) { return 'tanchin_device_v1_' + encodeURIComponent(options.origin) + '_' + key; },
         accountCookie(id) { return JSON.parse(decodeURIComponent(cookies.get(this.cookieKey('account_' + encodeURIComponent(id))) || '%7B%7D')); } };
 }
+test('new account proof preflight checks the complete token map rather than a short probe', () => {
+    const f = fixture();
+    f.blockCookie();
+    f.local.set(TOKENS, JSON.stringify({ 'id:OTHER': 'a'.repeat(256) }));
+    f.limitLocalValue(320);
+    assert.throws(() => f.fresh().read('E001'), /P216/);
+    assert.equal(JSON.parse(f.local.get(TOKENS))['id:OTHER'], 'a'.repeat(256));
+});
 test('existing per-account identities survive reload/logout and restore from cookies when localStorage is cleared or denied', () => {
     const f = fixture(); f.local.set(ID, 'old-device'); f.local.set(TOKENS, JSON.stringify({ 'id:085': 'a'.repeat(64), 'id:088': 'b'.repeat(64) }));
     assert.equal(f.fresh().read('085').identitySource, 'local_storage');
