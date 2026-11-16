@@ -3,6 +3,67 @@ const assert = require('node:assert/strict');
 const Database = require('better-sqlite3');
 const { startFixture } = require('./fixtures/browser-server');
 
+test('custom and complete administrators have identical paper overtime cancellation scope', async t => {
+    const { db, url, close } = await startFixture();
+    t.after(close);
+    const permissions = ['admin.overtime.view', 'admin.overtime.paperCreate', 'admin.overtime.approvedCorrect'];
+    db.saveAccountAccessRecord({ employee_id: 'A002', allowed_roles: ['employee', 'admin'], admin_preset: 'custom', admin_permissions: permissions });
+    db.saveAccountAccessRecord({ employee_id: 'D001', allowed_roles: ['employee', 'admin', 'developer'], admin_preset: 'complete_admin', admin_permissions: [] });
+    const api = async (route, body, token) => {
+        const response = await fetch(url + '/api/browser' + route, {
+            method: body ? 'POST' : 'GET',
+            headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+            ...(body ? { body: JSON.stringify(body) } : {})
+        });
+        return { status: response.status, ...await response.json() };
+    };
+    const login = async id => {
+        const account = await api('/login', { employeeId: id, secret: id + '-test-password', role: 'account' });
+        assert.equal(account.status, 200);
+        const admin = await api('/workspace', { role: 'admin' }, account.token);
+        assert.equal(admin.status, 200);
+        assert.ok(permissions.every(code => admin.dashboard.permissions.admin.includes(code)));
+        return admin.token;
+    };
+    const custom = await login('A002'), complete = await login('D001');
+    const startAt = Date.parse('2035-01-02T18:00:00+08:00');
+    const fixtures = [
+        ['paper-shared', 'admin_paper_approved', 'A001', 0],
+        ['paper-equivalent', 'admin_paper_approved', 'A001', 1],
+        ['online-self', 'self_request', 'E001', 2],
+        ['online-proxy', 'supervisor_proxy_auto_approved', 'A001', 3]
+    ];
+    for (const [id, mode, applicant, day] of fixtures) {
+        const start = startAt + day * 86400000;
+        db.createOvertimeRequest({
+            id, employee_id: 'E001', applicant_id: applicant, approval_mode: mode,
+            applicant_role: mode === 'self_request' ? 'self' : mode === 'admin_paper_approved' ? 'admin_paper_proxy' : 'supervisor_proxy',
+            start_at: start, end_at: start + 7200000, duration_hours: 2, break_minutes: 0,
+            status: 'approved', supervisor_id: 'A001', supervisor_decision: 'approved',
+            reason: 'Permission comparison fixture', created_at: start, updated_at: start
+        });
+    }
+    const cancel = '/admin/overtime/paper-approved/cancel';
+    for (const token of [custom, complete]) {
+        const calendar = await api('/admin/overtime/calendar?month=2035-01&requestId=paper-shared', null, token);
+        assert.equal(calendar.status, 200);
+        assert.equal(calendar.calendar.request.approval_mode, 'admin_paper_approved');
+        assert.equal(calendar.calendar.request.status, 'approved');
+        const list = await api('/admin/overtime/requests/query', { startDate: '2035-01-01', endDate: '2035-01-31' }, token);
+        assert.equal(list.status, 200);
+        assert.ok(list.data.records.some(row => row.id === 'paper-shared' && row.status === 'approved'));
+        for (const id of ['online-self', 'online-proxy']) {
+            assert.equal((await api(cancel, { requestId: id }, token)).status, 403);
+            assert.equal(db.getOvertimeRequestById(id).status, 'approved');
+            assert.equal((await api('/admin/overtime/approved-correction?requestId=' + id, null, token)).correction.canCorrect, true);
+        }
+    }
+    for (const [token, id] of [[custom, 'paper-shared'], [complete, 'paper-equivalent']]) {
+        assert.equal((await api(cancel, { requestId: id }, token)).status, 200);
+        assert.equal(db.getOvertimeRequestById(id).status, 'cancelled');
+    }
+});
+
 test('approved online corrections require delegated authority, preserve approvals, CAS and immutable history, and roll back audit failures', async t => {
     const f = await startFixture(), sql = new Database(f.databasePath), {db}=f;
     t.after(async()=>{sql.close();await f.close();});

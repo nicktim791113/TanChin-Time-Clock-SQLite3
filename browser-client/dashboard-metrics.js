@@ -211,8 +211,16 @@ handleDashboardClick = async function metricDashboardClick(event) {
     if (action === 'dm-settings') { event.preventDefault(); dmOpenSettings(); return; }
     if (action === 'dm-insight') { event.preventDefault(); await dmLoadDetail(button.dataset.key); return; }
     if (action === 'dm-review') {
-        event.preventDefault(); requestCalendars.reviewKind = button.dataset.kind || 'leave'; state.employeeWorkspacePanel = 'supervisor-review';
-        renderDashboard(state.dashboard); document.getElementById(`rc-${requestCalendars.reviewKind}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return;
+        event.preventDefault();
+        const kind = button.dataset.kind || 'leave';
+        if (state.employeeWorkspacePanel !== 'supervisor-review' || requestCalendars.reviewKind !== kind) {
+            if (state.employeeWorkspacePanel === 'supervisor-review' && !rcConfirmDiscard(requestCalendars.reviewKind)) return;
+            requestCalendars.reviewKind = kind;
+            state.employeeWorkspacePanel = 'supervisor-review';
+            renderDashboard(state.dashboard);
+        }
+        const target = button.dataset.reviewQueue === 'saturday' ? 'conditional-overtime-inbox' : `rc-${requestCalendars.reviewKind}`;
+        document.getElementById(target)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return;
     }
     return dmPreviousClick(event);
 };
@@ -220,8 +228,13 @@ const dmPreviousEmployee = renderEmployeeDashboard;
 renderEmployeeDashboard = function employeeReviewNotice(dashboard) {
     const html = dmPreviousEmployee(dashboard), review = dashboard.supervisorReview;
     if (!review?.canUse) return html;
-    const waiting = dashboard.overtime?.additionalWaitingCount || 0;
-    const notice = `<section class="dm-review-notice ${review.count ? 'has-pending' : ''}" aria-label="待主管審核事件"><div><h3>待我審核 <strong>${review.count}</strong> 筆</h3><span>請假 ${review.leaveCount || 0} 筆 · 加班 ${review.overtimeCount || 0} 筆${waiting ? ` · ${waiting} 筆等候第一關` : ''}</span></div><div class="inline-actions"><button type="button" class="outline-btn" data-action="dm-review" data-kind="leave">請假 ${review.leaveCount || 0}</button><button type="button" class="outline-btn" data-action="dm-review" data-kind="overtime">加班 ${review.overtimeCount || 0}${waiting ? `（另 ${waiting} 筆等候第一關）` : ''}</button></div></section>`;
+    const counts = employeeReviewCounts(dashboard);
+    const button = (kind, label, count, saturday = false) => `<button type="button" class="outline-btn" data-action="dm-review" data-kind="${kind}"${saturday ? ' data-review-queue="saturday"' : ''}>${label} <b>${count}</b></button>`;
+    const notice = `<section class="dm-review-notice ${counts.actionable ? 'has-pending' : ''}" aria-label="主管審核與週六加班複核">
+        <h3>待我審核 <strong>${counts.actionable}</strong> 筆</h3>
+        <div class="dm-review-links" role="group" aria-label="可辦理案件">${button('leave', '請假待審', counts.leave)}${button('overtime', '加班待審', counts.regularOvertime)}${button('overtime', '週六可複核', counts.saturday, true)}</div>
+        <div class="dm-review-links dm-review-readonly" role="group" aria-label="唯讀案件">${button('overtime', '等候第一關（唯讀）', counts.waiting, true)}${button('overtime', '備援待命（唯讀）', counts.backup, true)}</div>
+    </section>`;
     return notice + html;
 };
 function renderRequestReviewProgress(row) {

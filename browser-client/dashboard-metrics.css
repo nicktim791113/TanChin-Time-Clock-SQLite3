@@ -120,10 +120,14 @@
 .dm-save-row { display: flex; justify-content: space-between; gap: 12px; margin-top: 18px; }
 .dm-save-row button, .dm-discard button { font-size: 12px; }
 .dm-discard { padding: 14px; margin-top: 12px; border-radius: 7px; background: #fff3e1; color: #875017; font-size: 13px; }
-.dm-review-notice { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; margin-bottom: 16px; border-left: 4px solid #5c8f88; background: #f1f7f5; }
+.dm-review-notice { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; padding: 10px 12px; margin-bottom: 16px; border-left: 4px solid #5c8f88; background: #f1f7f5; }
 .dm-review-notice.has-pending { border-color: #b45b28; background: #fff3e8; color: #5c331d; }
-.dm-review-notice h3 { font-size: 18px; margin: 0 0 6px; }
-.dm-review-notice strong { font-size: 24px; }
+.dm-review-notice h3 { font-size: 16px; margin: 0; }
+.dm-review-notice strong { font-size: 21px; }
+.dm-review-links { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; gap: 5px; }
+.dm-review-links .outline-btn { min-height: 34px; padding: 4px 8px; font-size: 12px; letter-spacing: normal; white-space: normal; }
+.dm-review-readonly .outline-btn { border-style: dashed; color: #36566d; }
+#employee-tab-supervisor-review small { white-space: normal; overflow-wrap: anywhere; }
 .dm-review-progress { margin-top: 8px; max-width: 320px; white-space: normal; }
 .dm-review-progress summary { cursor: pointer; }
 .dm-review-progress ul { padding-left: 18px; }

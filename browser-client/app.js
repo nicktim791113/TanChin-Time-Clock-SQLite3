@@ -11019,6 +11019,7 @@ function renderOvertimeEmployeeOptions(employees = [], selectedId = "") {
 }
 
 function renderOvertimeRequestRows(requests = [], { showEmployee = false, showApplicant = false, reviewMode = "", allowWithdraw = true, allowPaperManage = false } = {}) {
+    allowPaperManage = allowPaperManage && !state.dashboard?.impersonation?.active;
     if (!requests.length) return renderEmptyState("目前沒有加班申請資料。");
     return `
         <div class="data-table-wrap">

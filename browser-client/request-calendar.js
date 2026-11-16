@@ -62,6 +62,7 @@ function rcActions(kind, row) {
     if (actions.withdraw) return `<button type="button" class="mini-btn" data-action="${kind}-withdraw" ${attrs}>撤回</button>`;
     if (rcAdmin() && typeof renderApprovedCorrectionActions === 'function' && acEligible(kind,row)) return renderApprovedCorrectionActions(kind,row);
     if (rcAdmin() && hasCurrentAdminPermission(`admin.${kind}.paperCreate`) && row.approval_mode === 'admin_paper_approved'
+        && !(kind === 'overtime' && state.dashboard?.impersonation?.active)
         && (row.status === 'approved' || (kind === 'overtime' && row.status === 'pending_additional'))) {
         return `<div class="table-actions">${row.status === 'approved' ? `<button type="button" class="mini-btn" data-action="paper-${kind}-correct" ${attrs}>修正</button>` : ''}<button type="button" class="mini-btn danger-text" data-action="paper-${kind}-cancel" ${attrs}>作廢</button></div>`;
     }
@@ -228,11 +229,25 @@ renderDashboard = function renderDashboardWithRequestCalendars(dashboard) {
 };
 renderEmployeeLeaveRecordsPanel = () => rcRender('leave');
 renderEmployeeOvertimeRecordsPanel = () => rcRender('overtime');
+function employeeReviewCounts(dashboard) {
+    const review = dashboard.supervisorReview || {};
+    const overtime = dashboard.overtime || {};
+    const leave = review.leaveCount || 0, saturday = overtime.additionalQueueCount || 0;
+    const regularOvertime = Math.max(0, (review.overtimeCount || 0) - saturday);
+    return { leave, regularOvertime, saturday, waiting: overtime.additionalWaitingCount || 0, backup: overtime.additionalBackupCount || 0,
+        actionable: leave + regularOvertime + saturday };
+}
 const rcPreviousEmployeeItems = renderEmployeeWorkspaceItems;
 renderEmployeeWorkspaceItems = function renderEmployeeItemsWithCalendars(dashboard) {
     const items = rcPreviousEmployeeItems(dashboard).map((item) => ['leave-history', 'overtime-history'].includes(item.id) ? { ...item, meta: '日曆／列表' } : item);
-    const waiting = dashboard.overtime?.additionalWaitingCount || 0;
-    if (dashboard.supervisorReview?.canUse) items.push({ id: 'supervisor-review', label: '主管審核', meta: `${dashboard.supervisorReview.count} 筆待審${waiting ? ` · ${waiting} 筆等候第一關` : ''}`,
+    const counts = employeeReviewCounts(dashboard);
+    const meta = [
+        `${counts.actionable} 筆待審`,
+        counts.saturday && `週六可複核 ${counts.saturday}`,
+        counts.waiting && `等候第一關 ${counts.waiting}`,
+        counts.backup && `備援待命（唯讀）${counts.backup}`
+    ].filter(Boolean).join(' · ');
+    if (dashboard.supervisorReview?.canUse) items.push({ id: 'supervisor-review', label: '主管審核', meta,
         html: `<section aria-label="主管審核"><h3>主管審核</h3><div class="meal-tabs" role="tablist" aria-label="審核項目">${['leave', 'overtime'].map((kind) => `<button type="button" role="tab" data-action="rc-review-kind" data-kind="${kind}" aria-selected="${requestCalendars.reviewKind === kind}">${requestCalendarLabels[kind]}</button>`).join('')}</div>${requestCalendars.reviewKind === 'overtime' && typeof cotRenderInbox === 'function' ? cotRenderInbox() : ''}${rcRender(requestCalendars.reviewKind)}</section>` });
     return items;
 };

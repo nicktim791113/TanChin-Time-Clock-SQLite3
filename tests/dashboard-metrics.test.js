@@ -214,6 +214,8 @@ test('metric rendering has eight cards, escapes reviewer data, exposes jump cont
         escapeHtml: (v) => String(v).replaceAll('<', '&lt;').replaceAll('"', '&quot;'), getScopedAttendanceSummary: () => ({ normalEmployees: [], abnormalRecords: [], failureLogs: [] }),
         renderAdminEmployeeInsight() {}, renderAdminTodayNormalInsight() {}, renderAdminAbnormalInsight() {}, getAdminInsightTitle() {}, renderAdminDashboardInsightContent() {},
         handleDashboardClick() {}, renderEmployeeDashboard: () => '<main></main>', renderDashboard() {}, handleRealtimeSyncMessage() {}, handleLogout() {} });
+    const calendarSource = fs.readFileSync(path.join(__dirname, '../browser-client/request-calendar.js'), 'utf8');
+    vm.runInContext(calendarSource.slice(calendarSource.indexOf('function employeeReviewCounts('), calendarSource.indexOf('const rcPreviousEmployeeItems')), context);
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../browser-client/dashboard-metrics.js'), 'utf8'), context);
     context.dashboard = { dashboardMetrics: { today: '2026-10-17', cardKeys: DEFAULT_CARDS, groups: METRIC_GROUPS, catalog: METRIC_GROUPS.flatMap((group) => group.items.map((key, i) => ({ key, label: `<unsafe${i}>`, available: true, value: i, date: key.includes('Day:') ? `2026-10-${14 + i}` : null }))) } };
     const html = vm.runInContext('renderDashboardMetricStrip(dashboard)', context);
@@ -222,6 +224,23 @@ test('metric rendering has eight cards, escapes reviewer data, exposes jump cont
     assert.equal((html.match(/data-key="leavePending/g) || []).length, 2);
     const notice = vm.runInContext("renderEmployeeDashboard({supervisorReview:{canUse:true,count:240,leaveCount:120,overtimeCount:120}})", context);
     assert.match(notice, /待我審核/); assert.match(notice, /data-kind="overtime"/);
+    const split = vm.runInContext("renderEmployeeDashboard({supervisorReview:{canUse:true,count:10,leaveCount:2,overtimeCount:8},overtime:{additionalQueueCount:3,additionalWaitingCount:4,additionalBackupCount:5}})", context);
+    assert.match(split, /待我審核 <strong>10<\/strong>/);
+    assert.match(split, /請假待審 <b>2<\/b>.*加班待審 <b>5<\/b>.*週六可複核 <b>3<\/b>/);
+    assert.match(split, /唯讀案件.*等候第一關（唯讀） <b>4<\/b>.*備援待命（唯讀） <b>5<\/b>/);
+    const backupOnly = vm.runInContext("renderEmployeeDashboard({supervisorReview:{canUse:true,count:0},overtime:{additionalBackupCount:7}})", context);
+    assert.match(backupOnly, /待我審核 <strong>0<\/strong>/);
+    assert.match(backupOnly, /備援待命（唯讀） <b>7<\/b>/);
+    const scrollTargets = [];
+    context.state.dashboard = { role: 'employee', user: { id: 'E001' } };
+    context.document.getElementById = id => id === 'conditional-overtime-inbox' ? { scrollIntoView() { scrollTargets.push(id); } } : null;
+    context.requestCalendars = { reviewKind: 'leave' };
+    context.event = { preventDefault() {}, target: { closest: () => ({ dataset: { action: 'dm-review', kind: 'overtime', reviewQueue: 'saturday' } }) } };
+    await vm.runInContext('handleDashboardClick(event)', context);
+    assert.equal(context.state.employeeWorkspacePanel, 'supervisor-review');
+    assert.equal(context.requestCalendars.reviewKind, 'overtime');
+    assert.deepEqual(scrollTargets, ['conditional-overtime-inbox']);
+    context.document.getElementById = () => null;
     const progress = vm.runInContext("renderRequestReviewProgress({status:'pending_supervisor',reviewPolicy:{mode:'required',reviewers:[{id:'A',name:'<script>',required:1,decision:'approved',comment:'<evil>'}]}})", context);
     assert.match(progress, /必審 1\/1/); assert.ok(!progress.includes('<script>')); assert.ok(!progress.includes('<evil>'));
     context.state.dashboard = context.dashboard;

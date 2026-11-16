@@ -367,6 +367,17 @@ test('calendar action rendering retains paper permissions, escapes text and reje
     permitted = true;
     assert.match(vm.runInContext("rcActions('leave', row)", context), /paper-leave-correct/);
     assert.match(vm.runInContext("rcActions('overtime', row)", context), /paper-overtime-cancel/);
+    state.dashboard.impersonation = { active: true };
+    assert.equal(vm.runInContext("rcActions('overtime', row)", context), '');
+    const appSource = fs.readFileSync(path.join(__dirname, '../browser-client/app.js'), 'utf8');
+    const rendererStart = appSource.indexOf('function renderOvertimeRequestRows(');
+    const rendererEnd = appSource.indexOf('\nfunction ', rendererStart + 1);
+    assert.ok(rendererStart >= 0 && rendererEnd > rendererStart);
+    context.getOvertimeStatusBadge = () => '';
+    vm.runInContext(appSource.slice(rendererStart, rendererEnd), context);
+    assert.doesNotMatch(vm.runInContext('renderOvertimeRequestRows([row], { allowPaperManage: true })', context), /paper-overtime-(cancel|correct)/);
+    delete state.dashboard.impersonation;
+    assert.match(vm.runInContext('renderOvertimeRequestRows([row], { allowPaperManage: true })', context), /paper-overtime-cancel/);
     row.status = 'cancelled';
     assert.equal(vm.runInContext("rcActions('leave', row)", context), '');
     const html = vm.runInContext("rcEntries('leave', { records: [row] })", context);
