@@ -13,6 +13,7 @@ const { createReviewSupervisorStore } = require('./review-supervisors');
 const { createLeaveEntitlementStore } = require('./leave-entitlements');
 const { createAnnualLeaveStore } = require('./annual-leave-store');
 const { createApprovedCorrectionStore } = require('./approved-request-corrections');
+const { createApprovedRequestVoidStore } = require('./approved-request-voids');
 const { createAttendanceCalendarStore } = require('./employee-attendance');
 const { createConditionalOvertimeStore } = require('./overtime-conditional-review');
 const { createReviewWorkflow } = require('./review-workflow');
@@ -32,6 +33,7 @@ let reviewSupervisors = null;
 let leaveEntitlements = null;
 let annualLeave = null;
 let approvedCorrections = null;
+let approvedRequestVoids = null;
 let attendanceCalendar = null;
 let conditionalOvertimeReview = null;
 let reviewWorkflow = null;
@@ -557,10 +559,15 @@ function init(dbFilePath) {
     getRecord: (kind, id) => kind === 'leave' ? getLeaveRequestById(id) : getOvertimeRequestById(id),
     normalizeLeave: (next, original) => assignLeaveSegmentIds({ ...next, ...normalizeLeaveDateSelection(next) }, original),
     replaceSegments: replaceLeaveSegments, entitlements: () => leaveEntitlements, annual: () => annualLeave, audit: addAuditLog,
+    wasVoided: (kind, id) => Boolean(approvedRequestVoids?.summary(kind, id)),
     recheckConditional: (kind, row, original, auditEntry) => {
       if (kind === 'overtime') conditionalOvertimeReview.refreshRequest(row.id, auditEntry);
       else conditionalOvertimeReview.refreshAll(auditEntry, [original.employee_id, row.employee_id]);
     }
+  });
+  approvedRequestVoids = createApprovedRequestVoidStore(db, {
+    getRecord: id => getOvertimeRequestById(id), corrections: () => approvedCorrections,
+    conditional: () => conditionalOvertimeReview, addAuditLog
   });
   dashboardMetrics = createDashboardMetricStore(db, (entry) => addAuditLog(entry));
   salaryAdvances = createSalaryAdvanceStore(db, (entry) => addAuditLog(entry));
@@ -580,6 +587,7 @@ function close() {
   leaveEntitlements = null;
   annualLeave = null;
   approvedCorrections = null;
+  approvedRequestVoids = null;
   attendanceCalendar = null;
   conditionalOvertimeReview = null;
   reviewWorkflow = null;
@@ -2495,6 +2503,7 @@ module.exports = {
   getLeaveEntitlements: () => leaveEntitlements,
   getAnnualLeave: () => annualLeave,
   getApprovedCorrections: () => approvedCorrections,
+  getApprovedRequestVoids: () => approvedRequestVoids,
   getAttendanceCalendar: () => attendanceCalendar,
   getConditionalOvertimeReview: () => conditionalOvertimeReview,
   queryEmployeeAttendancePunches: (employeeId, startAt, endAt) => all(

@@ -83,6 +83,7 @@ const ADMIN_PERMISSION_DEFINITIONS = [
   { code: 'admin.overtime.view', category: '加班管理', label: '查看加班申請、警示與匯出', section: 'overtime' },
   { code: 'admin.overtime.paperCreate', category: '加班管理', label: '紙本加班補登', section: 'overtime', highRisk: true },
   { code: 'admin.overtime.approvedCorrect', category: '加班管理', label: '修正已核准線上加班', section: 'overtime', highRisk: true, delegatedOnly: true },
+  { code: 'admin.overtime.approvedVoid', category: '加班管理', label: '作廢已核准線上加班', section: 'overtime', highRisk: true, delegatedOnly: true },
   { code: CONDITIONAL_OVERTIME_PERMISSION, category: '主管指定', label: '管理週六加班條件複核與改派', section: 'supervisors', highRisk: true, delegatedOnly: true },
   { code: 'admin.meals.view', category: '午餐團膳', label: '查看團膳名單、餐數與匯出', section: 'meals' },
   { code: 'admin.meals.manage', category: '午餐團膳', label: '參加資格與代登用餐', section: 'meals' },
@@ -2424,6 +2425,7 @@ function formatOvertimeRequestForDashboard(request, lookup = buildOvertimeLookup
     additionalReview: request.additionalReview ? { ...request.additionalReview,
       reviewers: request.additionalReview.reviewerIds.map(id => ({ id, name: lookup.employeeMap.get(id)?.name || '已移除員工' })) } : null,
     correctionSummary: dbModule.getApprovedCorrections().summary('overtime', request.id),
+    voidSummary: request.status === 'cancelled' ? dbModule.getApprovedRequestVoids().summary('overtime', request.id) : null,
     breakMinutes: request.break_minutes == null ? null : Number(request.break_minutes),
     employeeId: request.employee_id,
     employeeName: employee.name || '',
@@ -2759,7 +2761,7 @@ function formatLeaveRequestForExternal(request, lookup = buildLeaveLookup()) {
 }
 
 function formatOvertimeRequestForExternal(request, lookup = buildOvertimeLookup()) {
-  const { break_source, additionalReview, ...formatted } = formatOvertimeRequestForDashboard(request, lookup);
+  const { break_source, additionalReview, voidSummary, ...formatted } = formatOvertimeRequestForDashboard(request, lookup);
   return {
     ...formatted,
     ...(additionalReview ? { additionalReviewStatus: additionalReview.status, reconciliationRequired: Boolean(additionalReview.reconciliationRequired) } : {}),
@@ -8153,11 +8155,11 @@ function createServerApp() {
   for (const kind of ['leave', 'overtime']) {
     const permission = requireAdminPermission(`admin.${kind}.approvedCorrect`);
     const view = requireAdminPermission(kind === 'leave' ? 'admin.leave.review' : 'admin.overtime.view');
-    const correctionResult = (value, session) => ({ ...value, canCorrect: !session.impersonation?.active && hasAdminPermission(session, `admin.${kind}.approvedCorrect`), record: kind === 'leave' ? formatLeaveRequestForDashboard(value.record) : formatOvertimeRequestForDashboard(value.record) });
+    const correctionResult = (value, session) => ({ ...value, canCorrect: value.record.status === 'approved' && !session.impersonation?.active && hasAdminPermission(session, `admin.${kind}.approvedCorrect`), record: kind === 'leave' ? formatLeaveRequestForDashboard(value.record) : formatOvertimeRequestForDashboard(value.record) });
     server.get(`/api/browser/admin/${kind}/approved-correction`, requireBrowserSession, view, (request, response) => {
       try {
         response.set('Cache-Control', 'no-store');
-        response.json({ success: true, correction: correctionResult(dbModule.getApprovedCorrections().state(kind, String(request.query.requestId || '')), request.browserSession) });
+        response.json({ success: true, correction: correctionResult(dbModule.getApprovedCorrections().state(kind, String(request.query.requestId || ''), false, true), request.browserSession) });
       } catch (error) { response.status(error.statusCode || error.status || 500).json({ success: false, error: error.message }); }
     });
     server.post(`/api/browser/admin/${kind}/approved-correction`, requireBrowserSession, view, permission, (request, response) => {
@@ -8197,6 +8199,39 @@ function createServerApp() {
       } catch (error) { response.status(error.statusCode || error.status || 500).json({success:false,error:error.message}); }
     });
   }
+  const approvedOvertimeVoidPath = '/api/browser/admin/overtime/approved-void';
+  const voidOvertimeView = requireAdminPermission('admin.overtime.view');
+  const voidOvertimePermission = requireAdminPermission('admin.overtime.approvedVoid');
+  const overtimeVoidResult = (value, session) => ({
+    revision: value.revision,
+    record: formatOvertimeRequestForDashboard(value.record),
+    history: value.history,
+    canVoid: value.record.status === 'approved' && !session.impersonation?.active && hasAdminPermission(session, 'admin.overtime.approvedVoid')
+  });
+  server.get(approvedOvertimeVoidPath, requireBrowserSession, voidOvertimeView, (request, response) => {
+    try {
+      const value = dbModule.getApprovedRequestVoids().state('overtime', request.query.requestId);
+      response.json({ success: true, voiding: overtimeVoidResult(value, request.browserSession) });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ success: false, error: error.statusCode ? error.message : '無法讀取加班作廢資料。' });
+    }
+  });
+  server.post(approvedOvertimeVoidPath, requireBrowserSession, voidOvertimeView, voidOvertimePermission, (request, response) => {
+    try {
+      if (request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能作廢已核准線上加班。', 403);
+      const body = request.body;
+      if (!body || Array.isArray(body) || typeof body !== 'object' || Object.keys(body).some(key => !['requestId','revision','reason','confirm'].includes(key))) {
+        throw createHttpError('作廢資料格式不正確。', 400);
+      }
+      const value = dbModule.getApprovedRequestVoids().voidRequest('overtime', body, request.browserSession.employeeId,
+        entry => buildBrowserAuditLogEntry(request, entry));
+      notifyDesktop('overtimeRequests', getBrowserSyncMeta(request));
+      notifyDesktop('auditLogs', getBrowserSyncMeta(request));
+      response.json({ success: true, voiding: overtimeVoidResult(value, request.browserSession) });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ success: false, error: error.statusCode ? error.message : '無法完成加班作廢。' });
+    }
+  });
   attachRequestCalendarRoutes(server, {
     db: dbModule, requireSession: requireBrowserSession, requireRole: requireBrowserRole,
     requirePermission: requireAdminPermission,

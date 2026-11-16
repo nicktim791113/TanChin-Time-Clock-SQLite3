@@ -1,0 +1,7 @@
+.approved-void-dialog [data-approved-void-content] { display: grid; gap: .75rem; overflow-wrap: anywhere; }
+.approved-void-dialog [data-approved-void-error]:empty { display: none; }
+.approved-void-dialog [data-approved-void-reload][hidden] { display: none; }
+.approved-void-dialog textarea { min-width: 0; width: 100%; }
+.approved-void-impact { padding: .65rem; border-radius: .4rem; background: #fff3e8; color: #713917; }
+.approved-void-confirm { display: flex; align-items: start; gap: .5rem; }
+.approved-void-confirm input { flex: none; width: auto; }

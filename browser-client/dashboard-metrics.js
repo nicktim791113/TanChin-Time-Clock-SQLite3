@@ -232,8 +232,8 @@ renderEmployeeDashboard = function employeeReviewNotice(dashboard) {
     const button = (kind, label, count, saturday = false) => `<button type="button" class="outline-btn" data-action="dm-review" data-kind="${kind}"${saturday ? ' data-review-queue="saturday"' : ''}>${label} <b>${count}</b></button>`;
     const notice = `<section class="dm-review-notice ${counts.actionable ? 'has-pending' : ''}" aria-label="主管審核與週六加班複核">
         <h3>待我審核 <strong>${counts.actionable}</strong> 筆</h3>
-        <div class="dm-review-links" role="group" aria-label="可辦理案件">${button('leave', '請假待審', counts.leave)}${button('overtime', '加班待審', counts.regularOvertime)}${button('overtime', '週六可複核', counts.saturday, true)}</div>
-        <div class="dm-review-links dm-review-readonly" role="group" aria-label="唯讀案件">${button('overtime', '等候第一關（唯讀）', counts.waiting, true)}${button('overtime', '備援待命（唯讀）', counts.backup, true)}</div>
+        <div class="dm-review-links" role="group" aria-label="可辦理案件">${button('leave', '請假待審', counts.leave)}${button('overtime', '加班待審', counts.regularOvertime)}${button('overtime', '週六待我複核', counts.saturday, true)}</div>
+        <div class="dm-review-links dm-review-readonly" role="group" aria-label="唯讀案件">${button('overtime', '待原主管審核（僅查看）', counts.waiting, true)}${button('overtime', '備援複核（尚未輪到）', counts.backup, true)}</div>
     </section>`;
     return notice + html;
 };

@@ -226,11 +226,11 @@ test('metric rendering has eight cards, escapes reviewer data, exposes jump cont
     assert.match(notice, /待我審核/); assert.match(notice, /data-kind="overtime"/);
     const split = vm.runInContext("renderEmployeeDashboard({supervisorReview:{canUse:true,count:10,leaveCount:2,overtimeCount:8},overtime:{additionalQueueCount:3,additionalWaitingCount:4,additionalBackupCount:5}})", context);
     assert.match(split, /待我審核 <strong>10<\/strong>/);
-    assert.match(split, /請假待審 <b>2<\/b>.*加班待審 <b>5<\/b>.*週六可複核 <b>3<\/b>/);
-    assert.match(split, /唯讀案件.*等候第一關（唯讀） <b>4<\/b>.*備援待命（唯讀） <b>5<\/b>/);
+    assert.match(split, /請假待審 <b>2<\/b>.*加班待審 <b>5<\/b>.*週六待我複核 <b>3<\/b>/);
+    assert.match(split, /唯讀案件.*待原主管審核（僅查看） <b>4<\/b>.*備援複核（尚未輪到） <b>5<\/b>/);
     const backupOnly = vm.runInContext("renderEmployeeDashboard({supervisorReview:{canUse:true,count:0},overtime:{additionalBackupCount:7}})", context);
     assert.match(backupOnly, /待我審核 <strong>0<\/strong>/);
-    assert.match(backupOnly, /備援待命（唯讀） <b>7<\/b>/);
+    assert.match(backupOnly, /備援複核（尚未輪到） <b>7<\/b>/);
     const scrollTargets = [];
     context.state.dashboard = { role: 'employee', user: { id: 'E001' } };
     context.document.getElementById = id => id === 'conditional-overtime-inbox' ? { scrollIntoView() { scrollTargets.push(id); } } : null;

@@ -4,7 +4,7 @@ const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).
 const fail = (message, statusCode = 400) => { throw Object.assign(new Error(message), { statusCode }); };
 
 function createApprovedCorrectionStore(sql, dependencies) {
-    const { getRecord, normalizeLeave, replaceSegments, entitlements, annual, audit, recheckConditional = () => {} } = dependencies;
+    const { getRecord, normalizeLeave, replaceSegments, entitlements, annual, audit, recheckConditional = () => {}, wasVoided = () => false } = dependencies;
     sql.exec(`CREATE TABLE IF NOT EXISTS approved_request_corrections (
       id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, request_id TEXT NOT NULL,
       actor_id TEXT NOT NULL, corrected_at INTEGER NOT NULL, reason TEXT NOT NULL,
@@ -14,17 +14,18 @@ function createApprovedCorrectionStore(sql, dependencies) {
       CREATE TRIGGER IF NOT EXISTS approved_correction_immutable_delete BEFORE DELETE ON approved_request_corrections BEGIN SELECT RAISE(ABORT,'Correction history is immutable'); END;`);
     const history = (kind, id) => sql.prepare('SELECT * FROM approved_request_corrections WHERE kind=? AND request_id=? ORDER BY id').all(kind, id)
         .map(row => ({ id: row.id, actorId: row.actor_id, correctedAt: row.corrected_at, reason: row.reason, before: JSON.parse(row.before_json), after: JSON.parse(row.after_json) }));
-    const record = (kind, id, allowPendingAdditional = false) => {
+    const record = (kind, id, allowPendingAdditional = false, allowVoided = false) => {
         if (!['leave', 'overtime'].includes(kind)) fail('無效的申請類別。');
         const row = getRecord(kind, id);
         if (!row) fail('找不到申請。', 404);
         const onlineModes = kind === 'leave' ? ['employee_request','supervisor_proxy'] : ['self_request','supervisor_proxy','supervisor_proxy_auto_approved'];
-        if (!(row.status === 'approved' || allowPendingAdditional && kind === 'overtime' && row.status === 'pending_additional') ||
+        if (!(row.status === 'approved' || allowPendingAdditional && kind === 'overtime' && row.status === 'pending_additional' ||
+            allowVoided && row.status === 'cancelled' && wasVoided(kind, id)) ||
             !onlineModes.includes(row.approval_mode)) fail('只能修正已核准的線上申請。', 403);
         return row;
     };
-    const state = (kind, id, allowPendingAdditional = false) => {
-        const row = record(kind, id, allowPendingAdditional), entries = history(kind, id);
+    const state = (kind, id, allowPendingAdditional = false, allowVoided = false) => {
+        const row = record(kind, id, allowPendingAdditional, allowVoided), entries = history(kind, id);
         const charges = kind === 'leave' ? entitlements().charges(id) : [];
         const steps = sql.prepare(`SELECT * FROM ${kind}_approval_steps WHERE request_id=? ORDER BY id`).all(id);
         const policy = sql.prepare('SELECT * FROM request_review_policies WHERE kind=? AND request_id=?').all(kind,id);

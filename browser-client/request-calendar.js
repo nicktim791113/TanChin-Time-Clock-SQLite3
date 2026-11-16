@@ -60,7 +60,11 @@ function rcActions(kind, row) {
     const decision = (value, label) => `<button type="button" class="mini-btn" data-action="${kind}-${actions.review}-decision" ${attrs} data-decision="${value}">${label}</button>`;
     if (actions.review) return `<div class="review-action-stack"><label class="field"><span>審核備註</span><input class="review-comment-input" type="text" data-${kind}-review-comment></label><div class="table-actions">${decision('approved', actions.review === 'admin' ? '終審核准' : '核准')}${decision('rejected', '駁回')}</div></div>`;
     if (actions.withdraw) return `<button type="button" class="mini-btn" data-action="${kind}-withdraw" ${attrs}>撤回</button>`;
-    if (rcAdmin() && typeof renderApprovedCorrectionActions === 'function' && acEligible(kind,row)) return renderApprovedCorrectionActions(kind,row);
+    if (rcAdmin()) {
+        const correction = typeof renderApprovedCorrectionActions === 'function' ? renderApprovedCorrectionActions(kind, row) : '';
+        const voidAction = typeof renderApprovedVoidAction === 'function' ? renderApprovedVoidAction(kind, row) : '';
+        if (correction || voidAction) return `<div class="table-actions">${correction}${voidAction}</div>`;
+    }
     if (rcAdmin() && hasCurrentAdminPermission(`admin.${kind}.paperCreate`) && row.approval_mode === 'admin_paper_approved'
         && !(kind === 'overtime' && state.dashboard?.impersonation?.active)
         && (row.status === 'approved' || (kind === 'overtime' && row.status === 'pending_additional'))) {
@@ -68,10 +72,14 @@ function rcActions(kind, row) {
     }
     return '';
 }
+function rcRecordStatusText(row) {
+    return typeof approvedVoidStatusText === 'function' ? approvedVoidStatusText(row) : row.statusText;
+}
+
 function rcExpandedEntries(kind, detail) {
     if (!detail?.records.length) return '<p class="rc-empty">沒有符合條件的紀錄。</p>';
     return `<div class="rc-entries">${detail.records.map((row) => `<article class="rc-entry" data-no-collapsible="true" data-request-entry="${rcEscape(row.id)}">
-        <div class="rc-entry-heading"><h4>${rcEscape(row.employeeId)} ${rcEscape(row.employeeName)}${kind === 'leave' ? ` · ${rcEscape(row.leaveTypeName)}` : ''}</h4><span class="rc-status rc-status-${rcEscape(row.status)}">${rcEscape(row.statusText)}</span></div>
+        <div class="rc-entry-heading"><h4>${rcEscape(row.employeeId)} ${rcEscape(row.employeeName)}${kind === 'leave' ? ` · ${rcEscape(row.leaveTypeName)}` : ''}</h4><span class="rc-status rc-status-${rcEscape(row.status)}">${rcEscape(rcRecordStatusText(row))}</span></div>
         <dl class="rc-entry-meta"><div><dt>開始</dt><dd>${rcEscape(row.startText)}</dd></div><div><dt>結束</dt><dd>${rcEscape(row.endText)}</dd></div><div><dt>整筆時數</dt><dd>${rcEscape(row.duration_hours)} 小時</dd></div><div><dt>流程</dt><dd>${rcEscape(row.approvalModeText)}</dd></div>
         ${kind === 'overtime' ? `<div><dt>休息</dt><dd>${rcEscape((row.breakMinutes ?? row.break_minutes) == null ? '未記錄' : (row.breakMinutes ?? row.break_minutes) + ' 分鐘')}</dd></div><div><dt>申請人</dt><dd>${rcEscape(row.applicantId)} ${rcEscape(row.applicantName)}</dd></div>` : ''}<div><dt>部門</dt><dd>${rcEscape(row.employeeDepartment || '-')}</dd></div></dl>
         <p class="rc-reason">${rcEscape(row.reason || '未填原因')}</p><p class="rc-record-context">單號：${rcEscape(row.id)} · 申請人：${rcEscape(row.applicantId || '未記錄')} ${rcEscape(row.applicantName || '')} · 申請時間：${rcEscape(row.createdText || '未記錄')}</p>${row.proxyReason || row.proxy_reason ? `<p class="rc-reason">代辦原因：${rcEscape(row.proxyReason || row.proxy_reason)}</p>` : ''}
@@ -88,7 +96,7 @@ function rcEntries(kind, detail) {
     return '<div class="rc-table-scroll" role="region" tabindex="0" aria-label="' + requestCalendarLabels[kind] + '紀錄，可左右捲動"><table class="rc-compact-table"><thead><tr>' + headers.map((label) => '<th scope="col">' + label + '</th>').join('') + '</tr></thead><tbody>' + detail.records.map((row, index) => {
         const expandedId = 'rc-' + kind + '-expanded-' + index;
         const rest = row.breakMinutes ?? row.break_minutes;
-        return '<tr class="rc-request-row"><td>' + rcEscape(row.employeeId) + '<br>' + rcEscape(row.employeeName) + '</td><td>' + rcEscape(kind === 'leave' ? row.leaveTypeName : '加班') + '</td><td>' + rcEscape(row.startText) + '</td><td>' + rcEscape(row.endText) + '</td><td>' + rcEscape(row.duration_hours) + '</td>' + (kind === 'overtime' ? '<td>' + rcEscape(rest == null ? '未記錄' : rest + ' 分鐘') + '</td>' : '') + '<td class="rc-status-' + rcEscape(row.status) + '">' + rcEscape(row.statusText) + '</td><td><button type="button" class="outline-btn" data-action="rc-expand" data-kind="' + kind + '" data-expanded-id="' + expandedId + '" aria-controls="' + expandedId + '" aria-expanded="false">展開詳情／操作</button></td></tr><tr id="' + expandedId + '" class="rc-expanded-row" hidden><td colspan="' + headers.length + '">' + rcExpandedEntries(kind, {records:[row]}) + '</td></tr>';
+        return '<tr class="rc-request-row"><td>' + rcEscape(row.employeeId) + '<br>' + rcEscape(row.employeeName) + '</td><td>' + rcEscape(kind === 'leave' ? row.leaveTypeName : '加班') + '</td><td>' + rcEscape(row.startText) + '</td><td>' + rcEscape(row.endText) + '</td><td>' + rcEscape(row.duration_hours) + '</td>' + (kind === 'overtime' ? '<td>' + rcEscape(rest == null ? '未記錄' : rest + ' 分鐘') + '</td>' : '') + '<td class="rc-status-' + rcEscape(row.status) + '">' + rcEscape(rcRecordStatusText(row)) + '</td><td><button type="button" class="outline-btn" data-action="rc-expand" data-kind="' + kind + '" data-expanded-id="' + expandedId + '" aria-controls="' + expandedId + '" aria-expanded="false">展開詳情／操作</button></td></tr><tr id="' + expandedId + '" class="rc-expanded-row" hidden><td colspan="' + headers.length + '">' + rcExpandedEntries(kind, {records:[row]}) + '</td></tr>';
     }).join('') + '</tbody></table></div>';
 }
 function rcRangeControls(kind, current) {
@@ -243,9 +251,9 @@ renderEmployeeWorkspaceItems = function renderEmployeeItemsWithCalendars(dashboa
     const counts = employeeReviewCounts(dashboard);
     const meta = [
         `${counts.actionable} 筆待審`,
-        counts.saturday && `週六可複核 ${counts.saturday}`,
-        counts.waiting && `等候第一關 ${counts.waiting}`,
-        counts.backup && `備援待命（唯讀）${counts.backup}`
+        counts.saturday && `週六待我複核 ${counts.saturday}`,
+        counts.waiting && `待原主管審核（僅查看）${counts.waiting}`,
+        counts.backup && `備援複核（尚未輪到）${counts.backup}`
     ].filter(Boolean).join(' · ');
     if (dashboard.supervisorReview?.canUse) items.push({ id: 'supervisor-review', label: '主管審核', meta,
         html: `<section aria-label="主管審核"><h3>主管審核</h3><div class="meal-tabs" role="tablist" aria-label="審核項目">${['leave', 'overtime'].map((kind) => `<button type="button" role="tab" data-action="rc-review-kind" data-kind="${kind}" aria-selected="${requestCalendars.reviewKind === kind}">${requestCalendarLabels[kind]}</button>`).join('')}</div>${requestCalendars.reviewKind === 'overtime' && typeof cotRenderInbox === 'function' ? cotRenderInbox() : ''}${rcRender(requestCalendars.reviewKind)}</section>` });

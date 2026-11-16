@@ -86,7 +86,8 @@ document.addEventListener('input', cotOnFormInput);
 document.addEventListener('change', cotOnFormInput);
 
 const cotLabels = { waiting_supervisor: '原主管審核中', pending: '待額外複核', approved: '複核通過', rejected: '已駁回', withdrawn: '已撤回', cancelled: '已作廢' };
-const cotWaitingLabel = '待主管審核，尚未輪到複核';
+const cotWaitingLabel = '待原主管審核（僅查看）';
+const cotBackupLabel = '備援複核（尚未輪到）';
 function cotReviewProgress(row, options = {}) {
     const review = row?.additionalReview;
     if (!review?.required) return '';
@@ -207,7 +208,7 @@ function cotRenderInbox() {
     return `<section id="conditional-overtime-inbox" class="cot-inbox"><h3>週六加班待額外複核</h3>${error ? `<p role="alert">${cotEscape(error)}</p>` : ''}
         ${groups ? cotInboxTable(groups.active) : loading ? '<p role="status">讀取複核案件…</p>' : ''}
         ${groups?.waiting.length ? `<h4>${cotWaitingLabel}</h4>${cotInboxTable(groups.waiting, true)}` : ''}
-        ${groups?.backup.length ? `<h4>備援待命（唯讀）</h4>${cotInboxTable(groups.backup, false, true)}` : ''}
+        ${groups?.backup.length ? `<h4>${cotBackupLabel}</h4>${cotInboxTable(groups.backup, false, true)}` : ''}
         <button type="button" class="outline-btn" data-cot-inbox-refresh ${loading ? 'disabled' : ''}>重新載入複核案件</button></section>`;
 }
 function cotInboxGroups(records) {
@@ -221,7 +222,7 @@ function cotInboxTable(rows, waiting = false, backup = false) {
     const pages = cotInboxPageCount(rows);
     const group = backup ? 'backup' : waiting ? 'waiting' : 'active';
     const page = Math.min((backup ? cotInbox.backupPage : waiting ? cotInbox.waitingPage : cotInbox.page) || 1, pages);
-    const label = backup ? '備援待命（唯讀）' : waiting ? cotWaitingLabel : '待額外複核';
+    const label = backup ? cotBackupLabel : waiting ? cotWaitingLabel : '待額外複核';
     const offset = (page - 1) * cotPageSize;
     const items = rows.slice(offset, offset + cotPageSize).map(row => {
         const review = row.additionalReview || {};
@@ -232,7 +233,7 @@ function cotInboxTable(rows, waiting = false, backup = false) {
             <td>${cotEscape(row.startText)}<small>至 ${cotEscape(row.endText)} · ${cotEscape(row.duration_hours)} 小時</small></td>
             <td>${cotEscape(saturdays.join('、') || '—')}</td>
             <td>${cotEscape(cotPeople(people) || '待管理者指派')}</td>
-            <td>${cotEscape(waiting ? cotWaitingLabel : cotLabels[review.status] || row.statusText || '待額外複核')}${review.reconciliationRequired ? '<small class="cot-warning">原已核准，待補複核</small>' : ''}</td>
+            <td>${cotEscape(backup || waiting ? label : cotLabels[review.status] || row.statusText || '待額外複核')}${review.reconciliationRequired ? '<small class="cot-warning">原已核准，待補複核</small>' : ''}</td>
             <td><button type="button" class="outline-btn" data-cot-open="${cotEscape(row.id)}">${waiting ? '查看詳情' : review.canReview ? '辦理複核' : '查看複核'}</button></td></tr>`;
     }).join('');
     return `<div class="cot-table-scroll" role="region" aria-label="${label}清單" tabindex="0"><table class="cot-table">

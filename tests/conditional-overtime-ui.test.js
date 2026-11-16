@@ -148,10 +148,10 @@ test('waiting reviewers have a separate read-only queue while first-stage review
     const progress = ui.run('cotReviewProgress(row)');
     assert.match(progress, /該位員工同週平日有適用請假，請確實查核加班工作內容[\s\S]*2026-11-21[\s\S]*<details/);
     const waitingOnly = ui.run('cotInbox.records = [row]; cotRenderInbox()');
-    assert.match(waitingOnly, /目前沒有待額外複核[\s\S]*待主管審核，尚未輪到複核/);
+    assert.match(waitingOnly, /目前沒有待額外複核[\s\S]*待原主管審核（僅查看）/);
     assert.match(waitingOnly, /data-cot-open="waiting">查看詳情/);
     assert.doesNotMatch(waitingOnly, /辦理複核/);
     const advanced = ui.run("row.status='pending_additional'; row.additionalReview.status='pending'; row.additionalReview.canReview=true; cotRenderInbox()");
     assert.match(advanced, /data-cot-open="waiting">辦理複核/);
-    assert.doesNotMatch(advanced, /尚未輪到複核/);
+    assert.doesNotMatch(advanced, /待原主管審核（僅查看）/);
 });

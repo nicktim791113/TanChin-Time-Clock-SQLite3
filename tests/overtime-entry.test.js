@@ -151,11 +151,11 @@ test('employee review calendar and personal history keep separate state, control
     state.dashboard.supervisorReview = { canUse: true, count: 7, leaveCount: 1, overtimeCount: 6 };
     state.dashboard.overtime = { additionalQueueCount: 2, additionalWaitingCount: 3, additionalBackupCount: 4 };
     assert.equal(vm.runInContext('renderEmployeeWorkspaceItems(state.dashboard)[0].meta', context),
-        '7 筆待審 · 週六可複核 2 · 等候第一關 3 · 備援待命（唯讀）4');
+        '7 筆待審 · 週六待我複核 2 · 待原主管審核（僅查看）3 · 備援複核（尚未輪到）4');
     state.dashboard.supervisorReview = { canUse: true, count: 0 };
     state.dashboard.overtime = { additionalBackupCount: 4 };
     assert.equal(vm.runInContext('renderEmployeeWorkspaceItems(state.dashboard)[0].meta', context),
-        '0 筆待審 · 備援待命（唯讀）4');
+        '0 筆待審 · 備援複核（尚未輪到）4');
     state.employeeWorkspacePanel = 'overtime-history';
     assert.equal(vm.runInContext("rcState('overtime').month", context), '2026-07');
     assert.equal(vm.runInContext("rcState('overtime').scope", context), 'mine');

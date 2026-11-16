@@ -4,11 +4,12 @@ const acEscape = (value) => escapeHtml(String(value ?? ''));
 const acIdentity = () => `${state.token || ''}/${state.dashboard?.role || ''}/${state.dashboard?.user?.id || ''}`;
 function acEligible(kind, row) {
     const modes = kind === 'leave' ? ['employee_request','supervisor_proxy'] : ['self_request','supervisor_proxy','supervisor_proxy_auto_approved'];
-    return ['leave','overtime'].includes(kind) && row.status === 'approved' && modes.includes(row.approval_mode);
+    return ['leave','overtime'].includes(kind) && modes.includes(row.approval_mode) &&
+        (row.status === 'approved' || (kind === 'overtime' && row.status === 'cancelled' && row.voidSummary?.id && row.correctionSummary?.count > 0));
 }
 function renderApprovedCorrectionActions(kind, row) {
     if (state.dashboard?.role !== 'admin' || !acEligible(kind,row)) return '';
-    const canEdit = hasCurrentAdminPermission(`admin.${kind}.approvedCorrect`) && !state.dashboard?.impersonation?.active;
+    const canEdit = row.status === 'approved' && hasCurrentAdminPermission(`admin.${kind}.approvedCorrect`) && !state.dashboard?.impersonation?.active;
     const count = row.correctionSummary?.count || 0;
     return `<button type="button" class="mini-btn" data-ac-open="${kind}" data-id="${acEscape(row.id)}">${canEdit ? '更正已核准申請' : '查看更正歷程'}${count ? `（${count}）` : ''}</button>`;
 }
