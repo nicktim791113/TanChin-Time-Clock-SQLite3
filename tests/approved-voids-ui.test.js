@@ -7,7 +7,7 @@ function ui() {
     const calls = [], pending = [], handlers = {}, nodes = new Map();
     const content = { innerHTML: '', querySelector: () => null };
     const dialog = {
-        isConnected: false, setAttribute() {}, showModal() { this.open = true; }, close() { this.open = false; }, remove() { this.isConnected = false; },
+        isConnected: false, dataset: {}, setAttribute() {}, showModal() { this.open = true; }, close() { this.open = false; }, remove() { this.isConnected = false; },
         querySelector(selector) {
             if (selector === '[data-approved-void-content]') return content;
             if (!nodes.has(selector)) nodes.set(selector, {});
@@ -19,7 +19,7 @@ function ui() {
     const context = vm.createContext({ state, document: { addEventListener() {}, createElement: () => dialog, body: { append() { dialog.isConnected = true; } } },
         hasCurrentAdminPermission: code => state.dashboard.permissions.admin.includes(code),
         escapeHtml: s => s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;'),
-        acSnapshot: () => 'Original snapshot', renderRequestReviewProgress: () => 'Original approval', acTime: String, acActor: String,
+        acSnapshot: (_row, kind) => `Original snapshot ${kind}`, renderRequestReviewProgress: () => 'Original approval', acTime: String, acActor: String,
         renderDashboard(dashboard) { state.dashboard = dashboard; }, handleLogout() {}, reloadDashboard() {},
         requestJson(url, options) { calls.push({ url, options }); return new Promise((resolve, reject) => pending.push({ resolve, reject })); }
     });
@@ -50,7 +50,7 @@ test('online overtime has a distinct mutation permission and view-only history, 
 
 test('void posts only after reason and confirmation, locks duplicate submission, and shows stored history', async () => {
     const f = ui();
-    const opened = f.run("avOpen('OT-1')");
+    const opened = f.run("avOpen('overtime','OT-1')");
     assert.match(f.calls[0].url, /approved-void\?requestId=OT-1/);
     f.pending[0].resolve(getBody()); await opened;
     assert.match(f.content.innerHTML, /Original snapshot[\s\S]*Original approval[\s\S]*作廢影響/);
@@ -76,12 +76,12 @@ test('void posts only after reason and confirmation, locks duplicate submission,
 
 test('closing or switching accounts while the original is loading prevents stale data from rendering', async () => {
     const f = ui();
-    const cancelling = f.run("avOpen('OT-1')");
+    const cancelling = f.run("avOpen('overtime','OT-1')");
     f.handlers.cancel({ preventDefault() {} });
     f.pending[0].resolve(getBody()); await cancelling;
     assert.equal(f.dialog.isConnected, false);
     assert.equal(f.content.innerHTML, '');
-    const switching = f.run("avOpen('OT-2')");
+    const switching = f.run("avOpen('overtime','OT-2')");
     f.state.token = 'admin-b';
     f.run("renderDashboard({...state.dashboard,user:{id:'B2'}})");
     f.pending[1].resolve(getBody()); await switching;
@@ -92,7 +92,7 @@ test('closing or switching accounts while the original is loading prevents stale
 
 test('a stale revision requires reloading the record before another confirmation', async () => {
     const f = ui();
-    const opening = f.run("avOpen('OT-1')");
+    const opening = f.run("avOpen('overtime','OT-1')");
     f.pending[0].resolve(getBody()); await opening;
     const reason = { value:'Please void the incorrect entry' }, confirm = { checked:true };
     f.content.querySelector = () => reason;
@@ -115,4 +115,32 @@ test('a stale revision requires reloading the record before another confirmation
     assert.equal(f.calls[3].options.body.revision, 'rev-2');
     f.pending[3].resolve(getBody(cancelled, [], false));
     await second;
+});
+
+test('leave void uses the leave-only permissions and route and presents the leave-specific effects', async () => {
+    const f = ui();
+    const record = { id:'LV-1', status:'approved', approval_mode:'supervisor_proxy' };
+    f.context.record = record;
+    f.state.dashboard.permissions.admin = ['admin.leave.review','admin.overtime.approvedVoid'];
+    assert.equal(f.run("renderApprovedVoidAction('leave',record)"), '');
+    f.state.dashboard.permissions.admin.push('admin.leave.approvedVoid');
+    assert.match(f.run("renderApprovedVoidAction('leave',record)"), /data-kind="leave">作廢已核准請假/);
+    assert.equal(f.run("renderApprovedVoidAction('leave',{...record,approval_mode:'admin_paper_approved'})"), '');
+    const opening = f.run("avOpen('leave','LV-1')");
+    assert.match(f.dialog.innerHTML, /已核准線上請假作廢/);
+    assert.equal(f.calls[0].url, '/api/browser/admin/leave/approved-void?requestId=LV-1');
+    f.pending[0].resolve(getBody(record)); await opening;
+    assert.match(f.content.innerHTML, /Original snapshot leave[\s\S]*額度會回補[\s\S]*已結算特休[\s\S]*午餐不會自動恢復[\s\S]*週六加班複核紀錄仍會保留/);
+    const submitted = f.handlers.submit({ preventDefault() {}, target: { matches: () => true, reportValidity: () => true, querySelector: () => ({}),
+        elements:{ reason:{value:'作廢原請假'}, confirm:{checked:true} } } });
+    assert.equal(f.calls[1].url, '/api/browser/admin/leave/approved-void');
+    assert.equal(f.calls[1].options.body.requestId, 'LV-1');
+    const cancelledLeave = { ...record, status:'cancelled', voidSummary:{id:'leave-void'} };
+    f.pending[1].resolve(getBody(cancelledLeave, [{ actorId:'A1', voidedAt:10, reason:'作廢原請假' }], false));
+    await submitted;
+    assert.match(f.content.innerHTML, /單號 LV-1 · 已作廢/);
+    assert.doesNotMatch(f.content.innerHTML, /data-approved-void-form/);
+    f.state.dashboard.permissions.admin = ['admin.leave.review'];
+    f.context.cancelledLeave = cancelledLeave;
+    assert.match(f.run("renderApprovedVoidAction('leave',cancelledLeave)"), /查看作廢歷程/);
 });

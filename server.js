@@ -75,6 +75,7 @@ const ADMIN_PERMISSION_DEFINITIONS = [
   { code: 'admin.leave.paperCreate', category: '請假管理', label: '紙本請假補登', section: 'leave', highRisk: true },
   { code: 'admin.leave.approvedCorrect', category: '請假管理', label: '修正已核准線上請假', section: 'leave', highRisk: true, delegatedOnly: true },
   { code: 'admin.leave.settings', category: '主管與請假設定', label: '假別與請假／加班共用審核路徑設定', section: 'supervisors' },
+  { code: 'admin.leave.approvedVoid', category: '請假管理', label: '作廢已核准線上請假', section: 'leave', highRisk: true, delegatedOnly: true },
   { code: 'admin.leave.balances.view', category: '請假管理', label: '查看與匯出員工假別額度', section: 'leave' },
   { code: 'admin.leave.balances.manage', category: '請假管理', label: '設定、匯入與調整員工假別額度', section: 'leave', highRisk: true },
   { code: ANNUAL_LEAVE_PERMISSIONS.policyManage, category: '特休制度', label: '管理特休制度與年資認列', section: 'leave', highRisk: true, delegatedOnly: true },
@@ -2113,6 +2114,7 @@ function formatLeaveRequestForDashboard(request, lookup = buildLeaveLookup()) {
     ...request,
     reviewPolicy: formatRequestReviewPolicy('leave', request, lookup),
     correctionSummary: dbModule.getApprovedCorrections().summary('leave', request.id),
+    ...(request.status === 'cancelled' ? { voidSummary: dbModule.getApprovedRequestVoids().summary('leave', request.id) } : {}),
     employeeId: request.employee_id,
     employeeName: employee.name || '',
     employeeDepartment: employee.department || '',
@@ -2742,7 +2744,7 @@ function formatLeaveTypeForExternal(type) {
 }
 
 function formatLeaveRequestForExternal(request, lookup = buildLeaveLookup()) {
-  const formatted = formatLeaveRequestForDashboard(request, lookup);
+  const { voidSummary, ...formatted } = formatLeaveRequestForDashboard(request, lookup);
   return {
     ...formatted,
     externalId: request.id,
@@ -8199,39 +8201,43 @@ function createServerApp() {
       } catch (error) { response.status(error.statusCode || error.status || 500).json({success:false,error:error.message}); }
     });
   }
-  const approvedOvertimeVoidPath = '/api/browser/admin/overtime/approved-void';
-  const voidOvertimeView = requireAdminPermission('admin.overtime.view');
-  const voidOvertimePermission = requireAdminPermission('admin.overtime.approvedVoid');
-  const overtimeVoidResult = (value, session) => ({
-    revision: value.revision,
-    record: formatOvertimeRequestForDashboard(value.record),
-    history: value.history,
-    canVoid: value.record.status === 'approved' && !session.impersonation?.active && hasAdminPermission(session, 'admin.overtime.approvedVoid')
-  });
-  server.get(approvedOvertimeVoidPath, requireBrowserSession, voidOvertimeView, (request, response) => {
-    try {
-      const value = dbModule.getApprovedRequestVoids().state('overtime', request.query.requestId);
-      response.json({ success: true, voiding: overtimeVoidResult(value, request.browserSession) });
-    } catch (error) {
-      response.status(error.statusCode || 500).json({ success: false, error: error.statusCode ? error.message : '無法讀取加班作廢資料。' });
-    }
-  });
-  server.post(approvedOvertimeVoidPath, requireBrowserSession, voidOvertimeView, voidOvertimePermission, (request, response) => {
-    try {
-      if (request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能作廢已核准線上加班。', 403);
-      const body = request.body;
-      if (!body || Array.isArray(body) || typeof body !== 'object' || Object.keys(body).some(key => !['requestId','revision','reason','confirm'].includes(key))) {
-        throw createHttpError('作廢資料格式不正確。', 400);
+  for (const kind of ['leave', 'overtime']) {
+    const path = '/api/browser/admin/' + kind + '/approved-void';
+    const label = kind === 'leave' ? '請假' : '加班';
+    const permission = 'admin.' + kind + '.approvedVoid';
+    const voidView = requireAdminPermission(kind === 'leave' ? 'admin.leave.review' : 'admin.overtime.view');
+    const voidPermission = requireAdminPermission(permission);
+    const voidResult = (value, session) => ({
+      revision: value.revision,
+      record: kind === 'leave' ? formatLeaveRequestForDashboard(value.record) : formatOvertimeRequestForDashboard(value.record),
+      history: value.history,
+      canVoid: value.record.status === 'approved' && !session.impersonation?.active && hasAdminPermission(session, permission)
+    });
+    server.get(path, requireBrowserSession, voidView, (request, response) => {
+      try {
+        const value = dbModule.getApprovedRequestVoids().state(kind, request.query.requestId);
+        response.json({ success: true, voiding: voidResult(value, request.browserSession) });
+      } catch (error) {
+        response.status(error.statusCode || 500).json({ success: false, error: error.statusCode ? error.message : '無法讀取' + label + '作廢資料。' });
       }
-      const value = dbModule.getApprovedRequestVoids().voidRequest('overtime', body, request.browserSession.employeeId,
-        entry => buildBrowserAuditLogEntry(request, entry));
-      notifyDesktop('overtimeRequests', getBrowserSyncMeta(request));
-      notifyDesktop('auditLogs', getBrowserSyncMeta(request));
-      response.json({ success: true, voiding: overtimeVoidResult(value, request.browserSession) });
-    } catch (error) {
-      response.status(error.statusCode || 500).json({ success: false, error: error.statusCode ? error.message : '無法完成加班作廢。' });
-    }
-  });
+    });
+    server.post(path, requireBrowserSession, voidView, voidPermission, (request, response) => {
+      try {
+        if (request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能作廢已核准線上' + label + '。', 403);
+        const body = request.body;
+        if (!body || Array.isArray(body) || typeof body !== 'object' || Object.keys(body).some(key => !['requestId','revision','reason','confirm'].includes(key))) {
+          throw createHttpError('作廢資料格式不正確。', 400);
+        }
+        const value = dbModule.getApprovedRequestVoids().voidRequest(kind, body, request.browserSession.employeeId,
+          entry => buildBrowserAuditLogEntry(request, entry));
+        notifyDesktop(kind === 'leave' ? 'leaveRequests' : 'overtimeRequests', getBrowserSyncMeta(request));
+        notifyDesktop('auditLogs', getBrowserSyncMeta(request));
+        response.json({ success: true, voiding: voidResult(value, request.browserSession) });
+      } catch (error) {
+        response.status(error.statusCode || 500).json({ success: false, error: error.statusCode ? error.message : '無法完成' + label + '作廢。' });
+      }
+    });
+  }
   attachRequestCalendarRoutes(server, {
     db: dbModule, requireSession: requireBrowserSession, requireRole: requireBrowserRole,
     requirePermission: requireAdminPermission,

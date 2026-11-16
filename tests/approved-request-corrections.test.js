@@ -197,4 +197,26 @@ test('annual corrections reconcile precise source usage atomically and refuse ch
     try {assert.throws(()=>store.correct('leave',{...nextBody,revision:store.state('leave','annual-next-year').revision},{duration_hours:1,explicit_duration_hours:1,daily_hours:[{date:'2026-05-20',hours:1}]},'fixture',audit),/已有結算/);} finally {sql.exec('DROP TRIGGER fixture_indirect_closed_mapping');}
     assert.deepEqual(db.getLeaveRequestById('annual-next-year'),indirectBefore);assert.deepEqual(store.history('leave','annual-next-year'),indirectHistory);assert.deepEqual(sql.prepare("SELECT data_json FROM annual_leave_charge_state WHERE request_id='annual-online'").get(),historicalState);
     store.correct('leave',{...body,revision:store.state('leave','annual-online').revision},{reason:'Note after closure'},'fixture',audit);
+
+    const voids = db.getApprovedRequestVoids();
+    const voidBody = requestId => ({
+        requestId, revision: voids.state('leave', requestId).revision, reason: 'Fixture void', confirm: true
+    });
+    const beforeClosedVoid = db.getLeaveRequestById('annual-online');
+    const auditBeforeVoid = sql.prepare('SELECT COUNT(*) n FROM audit_logs').get().n;
+    assert.throws(() => voids.voidRequest('leave', voidBody('annual-online'), 'fixture', audit),
+        error => error.statusCode === 409 && /已有結算/.test(error.message));
+    assert.deepEqual(db.getLeaveRequestById('annual-online'), beforeClosedVoid);
+    assert.deepEqual(voids.history('leave', 'annual-online'), []);
+    assert.deepEqual(sql.prepare("SELECT data_json FROM annual_leave_charge_state WHERE request_id='annual-online'").get(), historicalState);
+    assert.equal(sql.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, auditBeforeVoid);
+
+    const openCharges = db.getLeaveEntitlements().charges('annual-next-year');
+    const saved = voids.voidRequest('leave', voidBody('annual-next-year'), 'fixture', audit);
+    assert.equal(saved.record.status, 'cancelled');
+    assert.deepEqual(saved.history[0].before.accountingDailyHours, openCharges);
+    assert.deepEqual(saved.history[0].after.accountingDailyHours, openCharges);
+    assert.deepEqual(db.getLeaveEntitlements().charges('annual-next-year'), openCharges);
+    assert.equal(compare(annual.balances(['E001'],2026)[0].exact.usedHours,'0'),0);
+    assert.deepEqual(sql.prepare("SELECT data_json FROM annual_leave_charge_state WHERE request_id='annual-online'").get(), historicalState);
 });

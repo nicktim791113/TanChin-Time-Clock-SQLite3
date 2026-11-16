@@ -1,11 +1,15 @@
 'use strict';
 
 const { createHash } = require('node:crypto');
-const ONLINE_OVERTIME = new Set(['self_request', 'supervisor_proxy', 'supervisor_proxy_auto_approved']);
+const ONLINE_MODES = {
+    leave: new Set(['employee_request', 'supervisor_proxy']),
+    overtime: new Set(['self_request', 'supervisor_proxy', 'supervisor_proxy_auto_approved'])
+};
+const LABELS = { leave: '請假', overtime: '加班' };
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fail = (message, statusCode) => { throw Object.assign(new Error(message), { statusCode }); };
 
-function createApprovedRequestVoidStore(sql, { getRecord, corrections, conditional, addAuditLog }) {
+function createApprovedRequestVoidStore(sql, { getRecord, corrections, conditional, entitlements, annual, addAuditLog }) {
     sql.exec(`CREATE TABLE IF NOT EXISTS approved_request_voids (
       id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, request_id TEXT NOT NULL, actor_id TEXT NOT NULL,
       voided_at INTEGER NOT NULL, reason TEXT NOT NULL, before_json TEXT NOT NULL, after_json TEXT NOT NULL,
@@ -20,41 +24,52 @@ function createApprovedRequestVoidStore(sql, { getRecord, corrections, condition
             before: JSON.parse(row.before_json), after: JSON.parse(row.after_json) }] : [];
     }
     function state(kind, id) {
-        if (kind !== 'overtime') fail('不支援此類申請。', 400);
+        if (!Object.hasOwn(ONLINE_MODES, kind)) fail('不支援此類申請。', 400);
         if (typeof id !== 'string' || !id.trim() || id.length > 200) fail('請提供有效的申請單號。', 400);
-        const row = getRecord(id);
-        if (!row) fail('找不到指定的加班申請。', 404);
+        const row = getRecord(kind, id);
+        if (!row) fail(`找不到指定的${LABELS[kind]}申請。`, 404);
         const entries = history(kind, id);
-        if (!ONLINE_OVERTIME.has(row.approval_mode) || !(row.status === 'approved' || row.status === 'cancelled' && entries.length)) {
-            fail('只有已核准的本人或主管代辦線上加班可以作廢。', 403);
+        if (!ONLINE_MODES[kind].has(row.approval_mode) || !(row.status === 'approved' || row.status === 'cancelled' && entries.length)) {
+            fail(`只有已核准的本人或主管代辦線上${LABELS[kind]}可以作廢。`, 403);
         }
-        const steps = sql.prepare('SELECT * FROM overtime_approval_steps WHERE request_id=? ORDER BY id').all(id);
-        const policy = sql.prepare("SELECT * FROM request_review_policies WHERE kind='overtime' AND request_id=?").all(id);
-        const votes = sql.prepare("SELECT * FROM request_review_votes WHERE kind='overtime' AND request_id=? ORDER BY reviewer_id").all(id);
+        const steps = sql.prepare(`SELECT * FROM ${kind}_approval_steps WHERE request_id=? ORDER BY id`).all(id);
+        const policy = sql.prepare('SELECT * FROM request_review_policies WHERE kind=? AND request_id=?').all(kind, id);
+        const votes = sql.prepare('SELECT * FROM request_review_votes WHERE kind=? AND request_id=? ORDER BY reviewer_id').all(kind, id);
         const approvals = { steps, policy, votes };
-        return { record: row, history: entries, approvals, revision: hash({ row, entries, approvals, corrections: corrections().history(kind, id) }) };
+        const record = kind === 'leave' ? { ...row, accountingDailyHours: entitlements().charges(id) } : row;
+        const closedUsage = kind === 'leave' && row.status === 'approved' ?
+            corrections().closedUsage(row.employee_id, row.leave_type_id, row.leave_type_id) : [];
+        return { record, history: entries, approvals, closedUsage, revision: hash({ record, entries, approvals, closedUsage, corrections: corrections().history(kind, id) }) };
     }
     function voidRequest(kind, body, actorId, auditEntry) {
         return sql.transaction(() => {
             const current = state(kind, body?.requestId);
             if (current.record.status !== 'approved' || body.revision !== current.revision) {
-                fail('加班申請已變更，請重新讀取後確認。', 409);
+                fail(`${LABELS[kind]}申請已變更，請重新讀取後確認。`, 409);
             }
             const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
             if (body.confirm !== true || !reason || reason.length > 500) fail('請確認作廢並填寫原因（最多 500 字）。', 400);
             const now = Date.now();
             const id = current.record.id;
-            const result = sql.prepare("UPDATE overtime_requests SET status='cancelled',cancelled_at=?,updated_at=? WHERE id=? AND status='approved'")
+            const result = sql.prepare(`UPDATE ${kind}_requests SET status='cancelled',cancelled_at=?,updated_at=? WHERE id=? AND status='approved'`)
                 .run(now, now, id);
-            if (result.changes !== 1) fail('加班申請已變更，請重新讀取。', 409);
-            conditional().refreshRequest(id, auditEntry, { actorId });
+            if (result.changes !== 1) fail(`${LABELS[kind]}申請已變更，請重新讀取。`, 409);
+            if (kind === 'leave') {
+                const { employee_id: employeeId, leave_type_id: typeId } = current.record;
+                annual().reconcile();
+                if (hash(current.closedUsage) !== hash(corrections().closedUsage(employeeId, typeId, typeId))) {
+                    fail('作廢會改變已有結算來源的扣抵，請先核對結算資料。', 409);
+                }
+                conditional().refreshAll(auditEntry, [employeeId]);
+            } else conditional().refreshRequest(id, auditEntry, { actorId });
             const before = { ...current.record, approvals: current.approvals };
-            const after = { ...getRecord(id), approvals: current.approvals };
+            const after = { ...getRecord(kind, id), approvals: current.approvals };
+            if (kind === 'leave') after.accountingDailyHours = entitlements().charges(id);
             sql.prepare('INSERT INTO approved_request_voids(kind,request_id,actor_id,voided_at,reason,before_json,after_json) VALUES(?,?,?,?,?,?,?)')
                 .run(kind, id, actorId, now, reason, JSON.stringify(before), JSON.stringify(after));
             addAuditLog(auditEntry({
-                action: 'approved_void', target_type: 'overtime_request', target_id: id,
-                summary: '作廢已核准線上加班：' + reason, before_data: before, after_data: after
+                action: 'approved_void', target_type: kind + '_request', target_id: id,
+                summary: `作廢已核准線上${LABELS[kind]}：` + reason, before_data: before, after_data: after
             }));
             return state(kind, id);
         })();

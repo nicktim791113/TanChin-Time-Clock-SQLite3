@@ -5,7 +5,7 @@ const acIdentity = () => `${state.token || ''}/${state.dashboard?.role || ''}/${
 function acEligible(kind, row) {
     const modes = kind === 'leave' ? ['employee_request','supervisor_proxy'] : ['self_request','supervisor_proxy','supervisor_proxy_auto_approved'];
     return ['leave','overtime'].includes(kind) && modes.includes(row.approval_mode) &&
-        (row.status === 'approved' || (kind === 'overtime' && row.status === 'cancelled' && row.voidSummary?.id && row.correctionSummary?.count > 0));
+        (row.status === 'approved' || (row.status === 'cancelled' && row.voidSummary?.id && row.correctionSummary?.count > 0));
 }
 function renderApprovedCorrectionActions(kind, row) {
     if (state.dashboard?.role !== 'admin' || !acEligible(kind,row)) return '';

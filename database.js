@@ -566,8 +566,9 @@ function init(dbFilePath) {
     }
   });
   approvedRequestVoids = createApprovedRequestVoidStore(db, {
-    getRecord: id => getOvertimeRequestById(id), corrections: () => approvedCorrections,
-    conditional: () => conditionalOvertimeReview, addAuditLog
+    getRecord: (kind, id) => kind === 'leave' ? getLeaveRequestById(id) : getOvertimeRequestById(id),
+    corrections: () => approvedCorrections, conditional: () => conditionalOvertimeReview,
+    entitlements: () => leaveEntitlements, annual: () => annualLeave, addAuditLog
   });
   dashboardMetrics = createDashboardMetricStore(db, (entry) => addAuditLog(entry));
   salaryAdvances = createSalaryAdvanceStore(db, (entry) => addAuditLog(entry));

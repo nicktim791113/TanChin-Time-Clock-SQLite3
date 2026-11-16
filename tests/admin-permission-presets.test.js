@@ -21,11 +21,11 @@ test('complete management is explicitly assigned while legacy presets and develo
     const catalog = system.dashboard.permissionCatalog;
     const allCodes = catalog.adminPermissions.map((item) => item.code);
     const explicitCodes = catalog.adminPermissions.filter((item) => item.delegatedOnly).map((item) => item.code);
-    assert.equal(explicitCodes.length, 14);
+    assert.equal(explicitCodes.length, 15);
     const legacy = catalog.adminPresets.find((preset) => preset.id === 'full_admin');
     const complete = catalog.adminPresets.find((preset) => preset.id === 'complete_admin');
     const hr = catalog.adminPresets.find((preset) => preset.id === 'hr_admin');
-    for (const code of ['admin.leave.approvedCorrect', 'admin.overtime.approvedCorrect', 'admin.overtime.conditionalSettings', 'admin.overtime.approvedVoid']) {
+    for (const code of ['admin.leave.approvedCorrect', 'admin.overtime.approvedCorrect', 'admin.overtime.conditionalSettings', 'admin.overtime.approvedVoid', 'admin.leave.approvedVoid']) {
         const permission = catalog.adminPermissions.find(item => item.code === code);
         assert.equal(permission.delegatedOnly, true);
         assert.equal(permission.highRisk, true);

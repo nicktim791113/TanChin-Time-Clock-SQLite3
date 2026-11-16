@@ -89,6 +89,6 @@ function createApprovedCorrectionStore(sql, dependencies) {
           FROM approved_request_corrections WHERE kind=? AND request_id=? ORDER BY id DESC LIMIT 1`).get(kind,id,kind,id);
         return row ? {count:row.count,lastAt:row.corrected_at,lastActorId:row.actor_id,lastReason:row.reason} : {count:0,lastAt:null,lastActorId:null,lastReason:null};
     };
-    return { state, correct, history, summary };
+    return { state, correct, history, summary, closedUsage };
 }
 module.exports = { createApprovedCorrectionStore };

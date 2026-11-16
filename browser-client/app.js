@@ -9334,7 +9334,8 @@ const leaveStatusBadgeTypes = {
 };
 
 function getLeaveStatusBadge(request) {
-    return renderBadge(request.statusText || request.status || "-", leaveStatusBadgeTypes[request.status] || "");
+    const statusText = typeof approvedVoidStatusText === 'function' ? approvedVoidStatusText(request) : request.statusText;
+    return renderBadge(statusText || request.status || "-", leaveStatusBadgeTypes[request.status] || "");
 }
 
 function renderLeaveTypeOptions(leaveTypes = [], selectedId = "") {
@@ -9391,6 +9392,7 @@ function renderEmployeeLeaveRequestRows(requests = [], { showEmployee = false, r
                                         <button class="mini-btn" type="button" data-action="leave-withdraw" data-id="${escapeHtml(request.id)}">撤回</button>
                                     ` : ""}
                                     ${typeof renderApprovedCorrectionActions === 'function' ? renderApprovedCorrectionActions('leave', request) : ''}
+                                    ${typeof renderApprovedVoidAction === 'function' ? renderApprovedVoidAction('leave', request) : ''}
                                     ${!reviewMode && allowPaperManage && request.approval_mode === "admin_paper_approved" && request.status === "approved" ? `
                                         <button class="mini-btn" type="button" data-action="paper-leave-correct" data-id="${escapeHtml(request.id)}">修正</button>
                                         <button class="mini-btn danger-text" type="button" data-action="paper-leave-cancel" data-id="${escapeHtml(request.id)}">作廢</button>
