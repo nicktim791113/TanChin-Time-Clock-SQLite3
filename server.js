@@ -1968,6 +1968,8 @@ function buildAdminAttendanceReport(input = {}, options = {}) {
       abnormalCount: count('abnormal'),
       rawAbnormalCount: count('raw_abnormal'),
       missingPunchDayCount: count('missing_punch'),
+      missingInDayCount: count('missing_in'),
+      missingOutDayCount: count('missing_out'),
       pendingPunchDayCount: count('pending_punch'),
       leaveCount: records.filter((record) => record.recordKind === 'leave' || record.attendanceStatusText === LEAVE_ATTENDANCE_STATUS_TEXT).length,
       overtimeCount: records.filter((record) => record.recordKind === 'overtime' || record.attendanceStatusText === OVERTIME_ATTENDANCE_STATUS_TEXT).length,
@@ -2791,6 +2793,8 @@ function getEmployeeOvertimeState(employee) {
     supervisorQueueCount: dbModule.countOvertimeRequests({ supervisorId: employee.id, status: 'pending_supervisor' }) + dbModule.countOvertimeRequests({ additionalReviewerId: employee.id, status: 'pending_additional' }),
     additionalQueueCount: dbModule.countOvertimeRequests({ additionalReviewerId: employee.id, status: 'pending_additional' }),
     additionalWaitingCount: dbModule.countOvertimeRequests({ additionalReviewerId: employee.id, includeWaitingSupervisor: true, status: 'pending_supervisor' }),
+    additionalBackupCount: dbModule.countOvertimeRequests({ additionalReviewerId: employee.id, includeWaitingSupervisor: true, includeBackupReviewers: true }) -
+      dbModule.countOvertimeRequests({ additionalReviewerId: employee.id, includeWaitingSupervisor: true }),
     myRequests: dbModule.queryOvertimeRequests({ employeeOrApplicantId: employee.id, ...dbModule.getRequestHistory().filters('overtime', historyNow), limit: 80 })
       .map((request) => formatOvertimeRequestForDashboard(request, lookup)),
     supervisorQueue: dbModule.queryOvertimeRequests({
@@ -3412,7 +3416,7 @@ function buildEmployeeDashboard(employee, session = null) {
     leave,
     overtime,
     supervisorReview: { count: reviewCount, leaveCount: leave.supervisorQueueCount, overtimeCount: overtime.supervisorQueueCount,
-      canUse: reviewCount > 0 || overtime.additionalWaitingCount > 0 || dbModule.getReviewSupervisors().rows().some((row) => row.supervisor_id === employee.id) || dbModule.getConditionalOvertimeReview().state().reviewerIds.includes(employee.id) },
+      canUse: reviewCount > 0 || overtime.additionalWaitingCount > 0 || overtime.additionalBackupCount > 0 || dbModule.getReviewSupervisors().rows().some((row) => row.supervisor_id === employee.id) || dbModule.getConditionalOvertimeReview().state().reviewerIds.includes(employee.id) },
     meals: dbModule.getMeals().calendar({ employeeId: employee.id }),
     supervisorProxy: { count: dbModule.getSupervisors().assignedEmployees(employee.id).length,
       canView: dbModule.getSupervisors().assignedEmployees(employee.id).length > 0 && (isSupervisorSimulation(session) ||

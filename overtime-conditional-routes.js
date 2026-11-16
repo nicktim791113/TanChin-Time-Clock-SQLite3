@@ -18,7 +18,8 @@ function attachConditionalOvertimeRoutes(server, { db, requireSession, hasPermis
         const ownVisible = (row.employee_id === actor || row.applicant_id === actor) && (cutoff == null || row.end_at > cutoff);
         return ownVisible || db.getSupervisors().isAssigned(actor, row.employee_id) ||
             db.getReviewWorkflow().state('overtime', row.id)?.reviewers.some(r => r.id === actor && !r.revoked) ||
-            (store().detail(row.id)?.eligibleReviewerIds || []).includes(actor);
+            (row.additionalReview?.eligibleReviewerIds || []).includes(actor) ||
+            (['pending_supervisor', 'pending_additional'].includes(row.status) && (row.additionalReview?.readableReviewerIds || []).includes(actor));
     };
     const rowFor = request => {
         const row = db.getOvertimeRequestById(request.params.id);
@@ -28,7 +29,9 @@ function attachConditionalOvertimeRoutes(server, { db, requireSession, hasPermis
     const formatted = (row, session) => {
         const record = formatRecord(row), extra = row.additionalReview;
         return { ...record, additionalReview: extra ? { ...extra, reviewers: reviewers(extra.reviewerIds),
-            canReview: session.role === 'employee' && !session.impersonation?.active && store().canReview(row, session.employeeId), canReassign: manage(session) && !session.impersonation?.active } : null };
+            canReview: session.role === 'employee' && !session.impersonation?.active && store().canReview(row, session.employeeId),
+            isBackupViewer: session.role === 'employee' && extra.readableReviewerIds.includes(session.employeeId) && !extra.eligibleReviewerIds.includes(session.employeeId),
+            canReassign: manage(session) && !session.impersonation?.active } : null };
     };
     const handle = fn => (request, response) => {
         try { response.json({ success: true, ...fn(request) }); }
@@ -63,11 +66,12 @@ function attachConditionalOvertimeRoutes(server, { db, requireSession, hasPermis
         const session = request.browserSession;
         if (session.role !== 'employee' && !adminView(session)) fail('沒有條件複核查閱權限。', 403);
         const filters = session.role === 'employee' ?
-            { additionalReviewerId: session.employeeId, includeWaitingSupervisor: true } : { status: 'pending_additional' };
+            { additionalReviewerId: session.employeeId, includeWaitingSupervisor: true, includeBackupReviewers: true } : { status: 'pending_additional' };
         const records = db.queryOvertimeRequests({ ...filters, limit: null }).map(row => formatted(row, session));
         return {
             records,
-            waitingSupervisorCount: records.filter(row => row.additionalReview?.status === 'waiting_supervisor').length,
+            waitingSupervisorCount: records.filter(row => row.additionalReview?.status === 'waiting_supervisor' && !row.additionalReview.isBackupViewer).length,
+            backupViewerCount: records.filter(row => row.additionalReview?.isBackupViewer).length,
             actionableCount: records.filter(row => row.additionalReview?.canReview).length
         };
     }));

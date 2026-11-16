@@ -102,11 +102,33 @@ function rcValidateRange(values) {
     return values.endDate < values.startDate ? '結束日期不可早於開始日期。' : '';
 }
 function rcReviewQueue(kind) {
-    if (rcAdmin() || rcState(kind).scope !== 'review') return '';
-    const rows = state.dashboard?.[kind]?.supervisorQueue || [];
-    if (!rows.length) return '';
+    const current = rcState(kind);
+    if (rcAdmin() || current.scope !== 'review') return '';
+    const queue = current.reviewQueue;
+    const rows = queue?.records || [];
     const table = kind === 'leave' ? renderEmployeeLeaveRequestRows(rows, { showEmployee: true, reviewMode: 'supervisor' }) : renderOvertimeRequestRows(rows, { showEmployee: true, showApplicant: true, reviewMode: 'supervisor' });
-    return `<section class="rc-detail rc-global-review" aria-label="跨月份待我審核"><div class="rc-toolbar"><h3>跨月份待我審核 <small>最近 ${rows.length} 筆</small></h3></div>${table}</section>`;
+    return `<section class="rc-detail rc-global-review" aria-label="待我審核（全部日期）"><div class="rc-toolbar"><h3>待我審核（全部日期） ${queue ? `<small>${queue.totalCount} 筆</small>` : ''}</h3></div><p>此清單不限日曆所選月份。</p>${current.queueError ? `<p role="alert">${rcEscape(current.queueError)}</p>${rcButton(kind, 'queue-page', '重試', `data-page="${current.queuePage || 1}"`)}` : current.queueLoading || !queue ? '<p role="status">讀取待審案件…</p>' : `${table}${queue.totalPages > 1 ? `<nav class="rc-toolbar" aria-label="全日期待審分頁">${rcButton(kind, 'queue-page', '上一頁', `data-page="${queue.page - 1}" ${queue.page === 1 ? 'disabled' : ''}`)}<span>第 ${queue.page} / ${queue.totalPages} 頁</span>${rcButton(kind, 'queue-page', '下一頁', `data-page="${queue.page + 1}" ${queue.page === queue.totalPages ? 'disabled' : ''}`)}</nav>` : ''}`}</section>`;
+}
+async function rcLoadReviewQueue(kind, page = 1) {
+    const current = rcState(kind), identity = requestCalendars.identity, token = state.token;
+    if (current.scope !== 'review') return;
+    const sequence = current.queueSequence = (current.queueSequence || 0) + 1;
+    current.queueLoading = true; current.queuePage = page; current.queueError = '';
+    const live = () => identity === requestCalendars.identity && token === state.token && sequence === current.queueSequence;
+    try {
+        const result = await requestJson(`/api/browser/employee/${kind}/review-queue?page=${page}`, { auth: true });
+        if (live()) { current.reviewQueue = result.queue; current.queuePage = result.queue.page; }
+    } catch (error) {
+        if (live()) { current.reviewQueue = null; current.queueError = error.message; }
+    } finally {
+        if (live()) {
+            current.queueLoading = false;
+            const root = document.getElementById(`rc-${kind}`);
+            if (current === rcState(kind) && root) root.querySelector('.rc-global-review')?.replaceWith(
+                document.createRange().createContextualFragment(rcReviewQueue(kind))
+            );
+        }
+    }
 }
 function rcGrid(kind, current) {
     const [year, month] = current.month.split('-').map(Number);
@@ -197,6 +219,7 @@ renderDashboard = function renderDashboardWithRequestCalendars(dashboard) {
     else if (requestCalendars.dashboard !== dashboard) {
         for (const [, current] of rcAllStates()) {
             current.sequence += 1; current.data = null; current.employees = []; current.cache.clear(); current.loading = false;
+            current.queueSequence = (current.queueSequence || 0) + 1; current.reviewQueue = null; current.queueLoading = false; current.queueError = '';
         }
         for (const kind of ['leave', 'overtime']) rcResetHistory(kind);
     }
@@ -232,6 +255,7 @@ postRenderSetup = function postRenderWithRequestCalendars() {
     for (const kind of ['leave', 'overtime']) {
         const current = rcState(kind);
         if (document.getElementById(`rc-${kind}`) && current.view !== 'advanced' && !current.data && !current.loading && !current.error) rcLoad(kind);
+        if (document.getElementById(`rc-${kind}`) && current.scope === 'review' && !current.reviewQueue && !current.queueLoading && !current.queueError) rcLoadReviewQueue(kind, current.queuePage);
     }
 };
 function rcConfirmDiscard(kind) {
@@ -251,6 +275,10 @@ handleDashboardClick = async function handleRequestCalendarClick(event) {
         requestCalendars.reviewKind = target.dataset.kind; renderDashboard(state.dashboard); return;
     }
     const kind = target.dataset.kind, current = rcState(kind), action = target.dataset.action;
+    if (action === 'rc-queue-page') {
+        if (rcReviewer() && !current.queueLoading && rcConfirmDiscard(kind)) await rcLoadReviewQueue(kind, Number(target.dataset.page));
+        return;
+    }
     if (action === 'rc-expand') {
         const row = document.getElementById(target.dataset.expandedId); if (!row) return;
         row.hidden = !row.hidden; target.setAttribute('aria-expanded', String(!row.hidden)); target.textContent = row.hidden ? '展開詳情／操作' : '收合詳情'; return;

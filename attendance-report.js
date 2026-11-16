@@ -7,7 +7,7 @@ const rowKey = row => JSON.stringify([row.employeeId, row.timestamp]);
 
 const DETAIL_CATEGORIES = new Set([
     'valid', 'abnormal', 'leave', 'overtime', 'duplicate', 'in', 'out',
-    'missing_punch', 'pending_punch', 'raw_abnormal'
+    'missing_punch', 'missing_in', 'missing_out', 'pending_punch', 'raw_abnormal'
 ]);
 
 function findUnpairedDays(punches, now, expectedEnd) {
@@ -80,7 +80,7 @@ function classifyAttendanceReport(records, contextPunches, now = Date.now(), exp
                 const rawAbnormal = record.attendanceStatusText !== '正常';
                 const missing = flag === 'missing_in' || flag === 'missing_out';
                 if (rawAbnormal) reportCategories.push('raw_abnormal');
-                if (missing) reportCategories.push('missing_punch');
+                if (missing) reportCategories.push('missing_punch', flag);
                 if (flag === 'awaiting_out') reportCategories.push('pending_punch');
                 if (rawAbnormal || missing) reportCategories.push('abnormal');
                 else if (!flag) reportCategories.push('valid');

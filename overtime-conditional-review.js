@@ -64,6 +64,7 @@ function createConditionalOvertimeStore(sql, { queryLeave, calendar, addAuditLog
         const { assignedAt, editId, matchFingerprint, periodFingerprint, criteriaFingerprint, ...publicFields } = snapshot;
         return {
             ...publicFields,
+            readableReviewerIds: eligibleCandidates(row, snapshot),
             supervisorNotice: '該位員工同週平日有適用請假，請確實查核加班工作內容',
             triggerDates: [...new Set(snapshot.evidence.map(item => item.leaveDate))].sort(),
             reviewerVotes: snapshot.reviewerVotes.map(({ reviewerId, decision, decidedAt }) => ({ reviewerId, decision, decidedAt })),

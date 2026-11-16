@@ -28,17 +28,17 @@ test('report summary order is validated, account-scoped and unavailable for simu
     assert.equal(initial.status, 200);
     const { defaultOrder, revision } = initial.preferences;
     assert.equal(initial.preferences.canEdit, true);
-    assert.equal(defaultOrder.length, 11);
+    assert.deepEqual(defaultOrder, ['scope', 'punch', 'check', 'missing', 'other']);
     assert.deepEqual(initial.preferences.order, defaultOrder);
     assert.equal((await request(path, null)).status, 401);
     assert.equal((await request(path, limited)).status, 403);
-    assert.equal((await request(path, limited, { order: ['out'], revision })).status, 403);
-    for (const invalid of [{ order: ['bad'], revision }, { order: [null], revision }, { order: ['out'], revision, employeeId: 'D001' }]) {
+    assert.equal((await request(path, limited, { order: ['punch'], revision })).status, 403);
+    for (const invalid of [{ order: ['bad'], revision }, { order: [null], revision }, { order: ['punch'], revision, employeeId: 'D001' }]) {
         assert.equal((await request(path, admin, invalid)).status, 400);
     }
-    const saved = await request(path, admin, { order: ['out', 'out', 'in'], revision });
+    const saved = await request(path, admin, { order: ['punch', 'punch', 'check'], revision });
     assert.equal(saved.status, 200);
-    const savedOrder = ['out', 'in', ...defaultOrder.filter(key => !['out', 'in'].includes(key))];
+    const savedOrder = ['punch', 'check', 'scope', 'missing', 'other'];
     assert.deepEqual(saved.preferences.order, savedOrder);
     assert.deepEqual((await request(path, await login('A001', 'admin'))).preferences.order, savedOrder);
     assert.deepEqual((await request(path, other)).preferences.order, defaultOrder);
@@ -54,4 +54,12 @@ test('report summary order is validated, account-scoped and unavailable for simu
     assert.deepEqual(simulated.preferences.order, defaultOrder);
     assert.equal((await request(path, developer, { order: defaultOrder, revision: simulated.preferences.revision })).status, 403);
     assert.deepEqual((await request(path, admin)).preferences.order, savedOrder);
+
+    db.saveWorkspaceNavOrderRecord({ role: 'admin', nav_type: 'report-summary', scope: 'personal', employee_id: 'A001',
+        order: ['out', 'employees', 'raw_abnormal', 'valid', 'duplicate', 'in', 'missing_punch', 'all'], updated_by: 'A001' });
+    const migrated = (await request(path, admin)).preferences;
+    assert.deepEqual(migrated.order, ['punch', 'scope', 'check', 'other', 'missing']);
+    const reset = await request(path, admin, { order: migrated.defaultOrder, revision: migrated.revision });
+    assert.equal(reset.status, 200);
+    assert.deepEqual((await request(path, admin)).preferences.order, defaultOrder);
 });

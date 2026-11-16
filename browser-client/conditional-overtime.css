@@ -26,6 +26,7 @@
 .cot-notice :is(h4, p, ul), .cot-inbox :is(h3, h4, p) { margin-block: 0; }
 .cot-settings fieldset { display: grid; gap: .65rem; min-width: 0; border: 0; padding: 0; margin: 0; }
 .cot-settings-grid { display: grid; gap: .65rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); }
+.cot-reviewer-pair { grid-column: 1 / -1; display: grid; gap: .65rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); }
 .cot-type-list, .cot-settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem .9rem; }
 .cot-settings-actions > button { flex: 0 1 auto; width: auto; }
 .cot-type-list .cot-check { margin-block: 0; }
@@ -33,6 +34,9 @@
 .cot-check input { flex: 0 0 auto; width: auto; margin-top: .2em; }
 .cot-dialog { width: min(42rem, calc(100vw - 1.5rem)); max-height: calc(100dvh - 1.5rem); overflow: auto; border: 1px solid #b0c7dc; border-radius: 14px; color: #183549; background: #fff; padding: 1rem; }
 .cot-dialog::backdrop { background: rgb(15 34 49 / 55%); }
+.cot-dialog-toolbar { position: sticky; top: -1rem; z-index: 1; display: flex; justify-content: space-between; gap: .5rem; align-items: center; flex-wrap: wrap; background: #fff; margin: -1rem -1rem .75rem; padding: .75rem 1rem; border-bottom: 1px solid #b0c7dc; }
+.cot-dialog-toolbar h3 { margin: 0; }
+.cot-dialog-actions { display: flex; flex-wrap: wrap; gap: .35rem; margin-inline-start: auto; }
 .cot-dialog form { margin-block: 1rem; }
 .cot-dialog [role="alert"] { color: #a42628; }
 .cot-warning { color: #854508; font-weight: 650; }

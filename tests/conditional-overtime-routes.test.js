@@ -79,8 +79,13 @@ test('conditional overtime HTTP enforces independent review, scopes, preview ack
     assert.equal(preReviewDashboard.overtime.additionalWaitingCount,1);
     assert.equal(preReviewDashboard.overtime.additionalQueueCount,0);
     assert.equal((await api(base+'/'+id+'/history',extra)).canReview,false);
-    for (const token of [employee,backup,manager]) assert.deepEqual((await api(base+'/inbox',token)).records,[]);
-    assert.equal((await api(base+'/'+id+'/history',backup)).status,404);
+    for (const token of [employee,manager]) assert.deepEqual((await api(base+'/inbox',token)).records,[]);
+    const backupWaiting = await api(base+'/inbox',backup);
+    assert.equal(backupWaiting.backupViewerCount,1);
+    assert.equal(backupWaiting.waitingSupervisorCount,0);
+    assert.equal(backupWaiting.actionableCount,0);
+    assert.equal(backupWaiting.records[0].additionalReview.isBackupViewer,true);
+    assert.equal((await api(base+'/'+id+'/history',backup)).canReview,false);
     const firstReview = (await api('/dashboard',manager)).dashboard.overtime.supervisorQueue.find(row=>row.id===id);
     assert.match(firstReview.additionalReview.supervisorNotice,/同週平日有適用請假，請確實查核加班工作內容/);
     assert.deepEqual(firstReview.additionalReview.triggerDates,['2026-11-09']);
@@ -92,7 +97,7 @@ test('conditional overtime HTTP enforces independent review, scopes, preview ack
     assert.equal(ready.records[0].additionalReview.canReview,true);
     assert.equal(ready.waitingSupervisorCount,0);
     assert.equal(ready.actionableCount,1);
-    assert.equal((await api(base+'/inbox',backup)).records.length,0);
+    assert.equal((await api(base+'/inbox',backup)).records[0].additionalReview.canReview,false);
     const dash = (await api('/dashboard',extra)).dashboard;
     assert.equal(dash.supervisorReview.canUse,true);assert.equal(dash.overtime.additionalQueueCount,1);
     detail = db.getConditionalOvertimeReview().detail(id);
@@ -243,7 +248,9 @@ test('conditional overtime HTTP enforces independent review, scopes, preview ack
         const primaryWaiting = await inboxRecord(extra);
         assert.equal(primaryWaiting.status, 'pending_supervisor');
         assert.equal(primaryWaiting.additionalReview.canReview, false);
-        assert.equal(await inboxRecord(backup), undefined);
+        const backupStandby = await inboxRecord(backup);
+        assert.equal(backupStandby.additionalReview.isBackupViewer,true);
+        assert.equal(backupStandby.additionalReview.canReview,false);
         assert.equal((await decide(extra, primaryWaiting)).status, 403);
         assert.equal((await vote(extra)).status, 200);
 
@@ -262,5 +269,30 @@ test('conditional overtime HTTP enforces independent review, scopes, preview ack
         assert.equal((await decide(extra, backupReady)).status, 403);
         assert.equal((await decide(backup, backupReady)).status, 200);
         assert.equal(db.getOvertimeRequestById(row.id).status, 'approved');
+    });
+    await t.test('all-date supervisor queue pages past the former hundred-record limit without exposing other assignments', async () => {
+        const october = at('2026-10-04', '18:00');
+        const december = at('2026-12-06', '18:00');
+        for (let index = 0; index < 107; index++) {
+            const start = (index % 2 ? october : december) + index * 1000;
+            db.createOvertimeRequest({
+                id: 'full-review-queue-' + index, employee_id: 'E001', applicant_id: 'E001', applicant_role: 'self',
+                supervisor_id: index === 106 ? 'A002' : 'A001', approval_mode: 'self_request', status: 'pending_supervisor',
+                start_at: start, end_at: start + 3600000, duration_hours: 1, reason: 'Queue fixture',
+                created_at: start, updated_at: start
+            });
+        }
+        const route = '/employee/overtime/review-queue';
+        const firstPage = await api(route, manager);
+        assert.equal(firstPage.status, 200);
+        assert.equal(firstPage.queue.totalCount, 106);
+        assert.equal(firstPage.queue.records.length, 15);
+        const lastPage = await api(route + '?page=8', manager);
+        assert.equal(lastPage.queue.totalPages, 8);
+        assert.equal(lastPage.queue.records.length, 1);
+        assert.ok(lastPage.queue.records[0].start_at < december);
+        assert.equal((await api(route, employee)).queue.totalCount, 0);
+        assert.equal((await api(route, extra)).queue.totalCount, 1);
+        assert.equal((await api(route, admin)).status, 403);
     });
 });

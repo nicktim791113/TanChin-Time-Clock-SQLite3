@@ -1,13 +1,17 @@
 const { createHash } = require('node:crypto');
 
-const DEFAULT_ORDER = Object.freeze([
-    'all', 'valid', 'leave', 'abnormal', 'raw_abnormal', 'missing_punch', 'pending_punch', 'duplicate', 'in', 'out', 'employees'
-]);
+const DEFAULT_ORDER = Object.freeze(['scope', 'punch', 'check', 'missing', 'other']);
 const KEYS = new Set(DEFAULT_ORDER);
+const LEGACY_GROUP = new Map([
+    ['all', 'scope'], ['employees', 'scope'], ['in', 'punch'], ['out', 'punch'],
+    ['valid', 'check'], ['abnormal', 'check'], ['raw_abnormal', 'check'],
+    ['missing_punch', 'missing'], ['pending_punch', 'missing'], ['duplicate', 'other'], ['leave', 'other']
+]);
 const NAV_TYPE = 'report-summary';
 
 function normalizeOrder(order) {
-    return [...new Set([...(Array.isArray(order) ? order.filter(key => KEYS.has(key)) : []), ...DEFAULT_ORDER])];
+    const groups = Array.isArray(order) ? order.map(key => KEYS.has(key) ? key : LEGACY_GROUP.get(key)).filter(Boolean) : [];
+    return [...new Set([...groups, ...DEFAULT_ORDER])];
 }
 
 function fail(status, message) {

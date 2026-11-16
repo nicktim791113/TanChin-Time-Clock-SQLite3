@@ -54,6 +54,8 @@ test('attendance query filters exact employee and category, keeps source status,
     assert.equal(full.data.summary.recordCount,4);
     assert.equal(full.data.summary.abnormalCount,2);
     assert.equal(full.data.summary.missingPunchDayCount,2);
+    assert.equal(full.data.summary.missingInDayCount,1);
+    assert.equal(full.data.summary.missingOutDayCount,1);
     assert.equal(full.data.summary.rawAbnormalCount,0);
     assert.equal(full.data.records.find(row=>row.employeeId==='A002').attendanceFlags.length,0);
     const selected=await api('/admin/reports/query',admin,{...range,employeeId:'E001',category:'abnormal'});
@@ -68,6 +70,13 @@ test('attendance query filters exact employee and category, keeps source status,
     const csv=exported.data.csvContent;
     assert.ok(csv.includes('E001') && csv.includes('A001'));
     assert.ok(!csv.includes('A002') && !csv.includes('missing_out'));
+    for (const [category, include, exclude] of [['missing_in', 'A001', 'E001'], ['missing_out', 'E001', 'A001']]) {
+        const filtered = await api('/admin/reports/query',admin,{...range,category});
+        assert.deepEqual(filtered.data.records.map(row => row.employeeId), [include]);
+        const exported = await api('/admin/reports/export',admin,{...range,category,templateId:'payroll'});
+        assert.equal(exported.status, 200);
+        assert.ok(exported.data.csvContent.includes(include) && !exported.data.csvContent.includes(exclude));
+    }
     assert.equal((await api('/admin/reports/export',admin,{...range,category:'overtime',templateId:'payroll'})).status,400);
     const today='2026-11-12';
     db.saveShifts([{name:'Day shift',start:'08:20',end:'17:00'}]);

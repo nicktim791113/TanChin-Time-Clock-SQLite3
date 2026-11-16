@@ -68,6 +68,21 @@ function attachRequestCalendarRoutes(server, context) {
     const { db, requireSession, requireRole, requirePermission, buildLookup, formatRecord } = context;
     const timeText = (timestamp) => new Date(Number(timestamp)).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false });
     for (const kind of ['leave', 'overtime']) {
+        server.get(`/api/browser/employee/${kind}/review-queue`, requireSession, requireRole('employee'), (request, response) => {
+            const page = Number(request.query.page ?? 1);
+            if (!Number.isSafeInteger(page) || page < 1) return response.status(400).json({ success: false, error: '無效的頁碼。' });
+            const filters = { supervisorId: request.browserSession.employeeId, status: 'pending_supervisor' };
+            const count = kind === 'leave' ? db.countLeaveRequests : db.countOvertimeRequests;
+            const query = kind === 'leave' ? db.queryLeaveRequests : db.queryOvertimeRequests;
+            const totalCount = count(filters);
+            const pageSize = 15;
+            const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+            const current = Math.min(page, totalPages);
+            const lookup = buildLookup(kind);
+            const records = query({ ...filters, limit: pageSize, offset: (current - 1) * pageSize })
+                .map(row => formatRecord(kind, row, lookup));
+            response.json({ success: true, queue: { records, totalCount, page: current, totalPages } });
+        });
         for (const role of ['employee', 'admin']) {
             server.get(`/api/browser/${role}/${kind}/calendar`, requireSession,
                 role === 'employee' ? requireRole('employee') : requirePermission(kind === 'leave' ? 'admin.leave.review' : 'admin.overtime.view'),

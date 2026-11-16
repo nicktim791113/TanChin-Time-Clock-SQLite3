@@ -1589,7 +1589,7 @@ const buildOvertimeRequestWhere = (filters = {}) => {
         const stages = filters.includeWaitingSupervisor ?
           "(overtime_requests.status='pending_additional' AND json_extract(r.data_json,'$.status')='pending' OR overtime_requests.status='pending_supervisor' AND json_extract(r.data_json,'$.status')='waiting_supervisor')" :
           "(overtime_requests.status='pending_additional' AND json_extract(r.data_json,'$.status')='pending')";
-        clauses.push(`? = (
+        const candidates = `
           SELECT reviewers.value FROM overtime_additional_reviews r, json_each(r.data_json,'$.reviewerIds') reviewers
           WHERE r.request_id=overtime_requests.id AND ${stages}
             AND reviewers.value<>overtime_requests.employee_id AND reviewers.value<>COALESCE(overtime_requests.applicant_id,'')
@@ -1601,7 +1601,8 @@ const buildOvertimeRequestWhere = (filters = {}) => {
               OR reviewers.value<>COALESCE(overtime_requests.supervisor_id,'')
               OR EXISTS (SELECT 1 FROM request_review_votes v WHERE v.kind='overtime' AND v.request_id=overtime_requests.id AND v.decision='approved')
               OR EXISTS (SELECT 1 FROM overtime_approval_steps s WHERE s.request_id=overtime_requests.id AND s.reviewer_role='supervisor' AND s.status='approved'))
-          ORDER BY CAST(reviewers.key AS INTEGER) LIMIT 1)`);
+          ORDER BY CAST(reviewers.key AS INTEGER)`;
+        clauses.push(filters.includeBackupReviewers ? `? IN (${candidates})` : `? = (${candidates} LIMIT 1)`);
         params.push(actor);
     }
     if (filters.status) {

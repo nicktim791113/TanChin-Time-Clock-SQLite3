@@ -7,6 +7,7 @@ const erToday = () => new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 
 const erMobile = () => Boolean(window.matchMedia?.('(max-width: 720px)').matches);
 const erIdentity = (dashboard = state.dashboard) => `${state.token || ''}/${dashboard?.role || ''}/${dashboard?.user?.id || ''}`;
 function erReset(identity = '') {
+    if (typeof cancelPendingPastRequestTiming === 'function') cancelPendingPastRequestTiming();
     for (const kind of ['leave', 'overtime']) document.getElementById(`er-${kind}-dialog`)?.remove();
     Object.assign(employeeRequests, { identity, dashboard: null, leave: null, overtime: null, balances: null, balanceError: '', balanceLoading: false, balancesOpen: false, balanceSequence: employeeRequests.balanceSequence + 1 });
 }
@@ -341,6 +342,20 @@ async function erSend(kind) {
         const fingerprints = preview?.key === cotPreviewKey(body, [body.employeeId]) ? cotPreviewFingerprints(preview) : null;
         if (!fingerprints) { draft.error = '請重新確認條件複核預覽。'; draft.confirming = false; erPaint(kind); return; }
         body.conditionalReviewFingerprints = fingerprints;
+    }
+    if (typeof confirmPastRequestTiming === 'function') {
+        const confirmation = confirmPastRequestTiming(kind, body, draft);
+        if (confirmation !== true) {
+            if (!await confirmation) {
+                if (erLive(identity, current, kind) && current.draft === draft) {
+                    draft.confirming = false;
+                    erPaint(kind);
+                }
+                return;
+            }
+            if (!erLive(identity, current, kind) || current.draft !== draft || !draft.confirming || current.busy) return;
+            return erSend(kind);
+        }
     }
     current.busy = true; draft.error = ''; erPaint(kind);
     try {

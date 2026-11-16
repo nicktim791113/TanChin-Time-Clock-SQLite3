@@ -1996,12 +1996,16 @@ function renderShiftRows(shifts) {
 }
 
 function adminReportCategories() {
+    return adminReportSummaryGroups().flatMap(([, , stats]) => stats).filter(([category]) => category !== null);
+}
+
+function adminReportSummaryGroups() {
     return [
-        ["", "查詢筆數", "recordCount"], ["valid", "正常筆數", "validCount"],
-        ["leave", "請假筆數", "leaveCount"],
-        ["abnormal", "異常筆數", "abnormalCount"], ["raw_abnormal", "原始異常", "rawAbnormalCount"],
-        ["missing_punch", "缺上／下班卡日數", "missingPunchDayCount"], ["pending_punch", "待下班卡日數", "pendingPunchDayCount"],
-        ["duplicate", "重複筆數", "duplicateCount"], ["in", "上班打卡", "inCount"], ["out", "下班打卡", "outCount"]
+        ["scope", "查詢範圍", [["", "全部筆數", "recordCount"], [null, "涵蓋員工數", "employeeCount"]]],
+        ["punch", "打卡", [["in", "上班打卡", "inCount"], ["out", "下班打卡", "outCount"]]],
+        ["check", "查核", [["valid", "正常打卡", "validCount"], ["abnormal", "異常打卡", "abnormalCount"], ["raw_abnormal", "打卡狀態異常", "rawAbnormalCount"]]],
+        ["missing", "缺卡查核", [["missing_in", "缺上班卡", "missingInDayCount"], ["missing_out", "缺下班卡", "missingOutDayCount"], ["pending_punch", "待下班卡", "pendingPunchDayCount"]]],
+        ["other", "其他紀錄", [["duplicate", "重複打卡", "duplicateCount"], ["leave", "請假", "leaveCount"]]]
     ];
 }
 
@@ -2019,9 +2023,9 @@ function adminReportMonthRange(offset, now = Date.now()) {
 }
 
 function adminReportMonthButtons(now = Date.now()) {
-    return [[0, "本月"], [-1, "上月"], [-2, "上上月"]].map(([offset, label]) => {
+    return [0, -1, -2].map(offset => {
         const [year, month] = adminReportMonthRange(offset, now).startDate.split("-");
-        return `<button type="button" class="mini-btn" data-action="admin-report-month" data-offset="${offset}" aria-label="${label} ${year} 年 ${Number(month)} 月">${label} ${year}/${month}</button>`;
+        return `<button type="button" class="mini-btn" data-action="admin-report-month" data-offset="${offset}" aria-label="${year} 年 ${Number(month)} 月">${year}/${month}</button>`;
     }).join("");
 }
 
@@ -2063,7 +2067,7 @@ function adminReportSummaryPreference() {
 }
 
 function adminReportSummaryOrder() {
-    const defaults = [...adminReportCategories().map(([category]) => category || "all"), "employees"];
+    const defaults = adminReportSummaryGroups().map(([group]) => group);
     const saved = adminReportSummaryPreference().data?.order;
     const valid = Array.isArray(saved) ? [...new Set(saved.filter(value => defaults.includes(value)))] : [];
     return [...valid, ...defaults.filter(value => !valid.includes(value))];
@@ -2072,18 +2076,20 @@ function adminReportSummaryOrder() {
 function renderAdminReportStats(reportState) {
     const preference = adminReportSummaryPreference();
     const editable = Boolean(preference.data?.canEdit && !state.dashboard?.impersonation?.active && !preference.saving && !preference.loading);
-    const labels = new Map([...adminReportCategories().map(([category, label, key]) => [category || "all", [label, key]]), ["employees", ["涵蓋員工數", "employeeCount"]]]);
+    const groups = new Map(adminReportSummaryGroups().map(([id, label, stats]) => [id, { label, stats }]));
     const order = adminReportSummaryOrder();
     return `<div data-report-summary-order><div class="report-summary-order-tools"><span role="status">${escapeHtml(preference.error || (preference.saving ? "正在儲存摘要順序…" : preference.loading ? "正在讀取摘要順序…" : ""))}</span>
         ${editable ? '<button type="button" class="outline-btn" data-action="reset-admin-report-cards">還原摘要順序</button>' : ''}
         ${preference.error ? '<button type="button" class="outline-btn" data-action="reload-admin-report-cards">重新讀取摘要順序</button>' : ''}</div>
-        <div class="stats-grid report-filter-stats">${order.map((card, index) => {
-        const [label, key] = labels.get(card), category = card === "all" ? "" : card;
-        const contents = `<span class="stat-label">${label}${category === "" ? "（全部）" : ""}</span><strong class="stat-value">${escapeHtml(reportState.summary?.[key] ?? 0)}</strong>`;
-        return `<div class="stat-card report-summary-card" data-report-card="${card}" ${editable ? 'draggable="true"' : ""}>
-            ${category === "employees" ? `<div class="report-stat-display">${contents}</div>` : `<button type="button" class="report-stat-select" data-action="filter-admin-report" data-category="${category}" aria-pressed="${(reportState.category || "") === category}" aria-controls="admin-report-detail">${contents}</button>`}
-            ${editable ? `<div class="report-stat-moves"><button type="button" class="mini-btn" data-action="move-admin-report-card" data-direction="-1" aria-label="上移 ${label}" ${index === 0 ? "disabled" : ""}>上移</button><button type="button" class="mini-btn" data-action="move-admin-report-card" data-direction="1" aria-label="下移 ${label}" ${index === order.length - 1 ? "disabled" : ""}>下移</button></div>` : ""}</div>`;
-    }).join("")}</div></div>`;
+        <div class="stats-grid report-filter-stats">${order.map(card => {
+        const { label, stats } = groups.get(card);
+        return `<div class="stat-card report-summary-card" data-report-card="${card}">
+            <div class="report-summary-heading"><strong>${label}</strong>${editable ? `<button type="button" class="report-card-handle" data-report-card-handle aria-label="移動${label}群組，可拖曳或按方向鍵" title="拖曳排序，或按方向鍵">⠿</button>` : ""}</div>
+            <div class="report-summary-items">${stats.map(([category, caption, key]) => {
+                const contents = `<span class="stat-label">${caption}</span><strong class="stat-value">${escapeHtml(reportState.summary?.[key] ?? 0)}</strong>`;
+                return category === null ? `<div class="report-stat-display">${contents}</div>` : `<button type="button" class="report-stat-select" data-action="filter-admin-report" data-category="${category}" aria-pressed="${(reportState.category || "") === category}" aria-controls="admin-report-detail">${contents}</button>`;
+            }).join("")}</div></div>`;
+    }).join("")}</div><p class="helper-text">異常打卡包含打卡狀態異常與已判定缺卡，同一筆只計一次。待下班卡仍在等待判定；打卡狀態異常的筆數已包含於異常打卡。</p></div>`;
 }
 
 function moveAdminReportCard(category, destination, relative = false) {
@@ -2091,16 +2097,17 @@ function moveAdminReportCard(category, destination, relative = false) {
     const from = order.indexOf(category), to = relative ? from + destination : order.indexOf(destination);
     if (from < 0 || to < 0 || to >= order.length || from === to) return;
     order.splice(to, 0, ...order.splice(from, 1));
-    return saveAdminReportSummaryOrder(order, category, relative ? destination : undefined);
+    return saveAdminReportSummaryOrder(order, category);
 }
 
-function paintAdminReportSummaryOrder(focusCategory, direction) {
+function paintAdminReportSummaryOrder(focusCategory) {
     const grid = document.querySelector("[data-report-summary-order]");
     if (!grid) return;
+    delete adminReportSummaryPreference().drag;
     grid.outerHTML = renderAdminReportStats(ensureAdminReportState());
     if (focusCategory !== undefined) {
         const card = [...document.querySelectorAll("[data-report-card]")].find(item => item.dataset.reportCard === focusCategory);
-        (card?.querySelector(`[data-direction="${direction}"]:not([disabled])`) || card?.querySelector("button:not([disabled])"))?.focus({ preventScroll: true });
+        card?.querySelector("[data-report-card-handle]")?.focus({ preventScroll: true });
     }
 }
 
@@ -2119,7 +2126,7 @@ async function loadAdminReportSummaryOrder() {
     }
 }
 
-async function saveAdminReportSummaryOrder(order, focusCategory, direction) {
+async function saveAdminReportSummaryOrder(order, focusCategory) {
     const preference = adminReportSummaryPreference();
     if (!preference.identity || !preference.data?.canEdit || state.dashboard?.impersonation?.active || preference.saving || preference.loading) return;
     preference.saving = true; preference.error = ""; paintAdminReportSummaryOrder();
@@ -2129,26 +2136,42 @@ async function saveAdminReportSummaryOrder(order, focusCategory, direction) {
     } catch (error) {
         if (preference === adminReportSummaryPreference()) preference.error = error.message;
     } finally {
-        if (preference === adminReportSummaryPreference()) { preference.saving = false; paintAdminReportSummaryOrder(focusCategory, direction); }
+        if (preference === adminReportSummaryPreference()) { preference.saving = false; paintAdminReportSummaryOrder(focusCategory); }
     }
 }
 
 function handleAdminReportCardDrag(event) {
-    const card = event.target.closest("[data-report-card]");
+    const handle = event.target.closest("[data-report-card-handle]");
+    if (!handle && !state.adminReportSummaryPreference?.drag) return;
     const preference = adminReportSummaryPreference();
-    if (!card || !preference.data?.canEdit || preference.saving || preference.loading || state.dashboard?.impersonation?.active) return;
-    if (event.type === "dragstart") {
-        preference.draggedCard = card.dataset.reportCard;
-        event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData("application/x-tanchin-report-card", card.dataset.reportCard);
-    } else if (event.type === "dragend") {
-        delete preference.draggedCard;
-    } else if (event.dataTransfer.types.includes("application/x-tanchin-report-card")) {
+    if (!preference.data?.canEdit || preference.saving || preference.loading || state.dashboard?.impersonation?.active) return;
+    if (event.type === "keydown") {
+        const offset = { ArrowUp: -1, ArrowLeft: -1, ArrowRight: 1, ArrowDown: 1 }[event.key];
+        if (!handle || !offset) return;
         event.preventDefault();
-        if (event.type !== "drop") return;
-        const source = event.dataTransfer.getData("application/x-tanchin-report-card");
-        if (source === preference.draggedCard) moveAdminReportCard(source, card.dataset.reportCard);
-        delete preference.draggedCard;
+        return moveAdminReportCard(handle.closest("[data-report-card]").dataset.reportCard, offset, true);
+    }
+    if (event.type === "pointerdown") {
+        if (!handle || event.button !== 0 || preference.drag?.source.isConnected) return;
+        const source = handle.closest("[data-report-card]");
+        preference.drag = { pointerId: event.pointerId, source, target: null };
+        handle.setPointerCapture(event.pointerId);
+        source.classList.add("is-report-dragging");
+        return;
+    }
+    const drag = preference.drag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-report-card]");
+    drag.target?.classList.remove("is-report-drop-target");
+    if (event.type === "pointermove") {
+        drag.target = target !== drag.source ? target : null;
+        drag.target?.classList.add("is-report-drop-target");
+        return;
+    }
+    delete preference.drag;
+    drag.source.classList.remove("is-report-dragging");
+    if (event.type === "pointerup" && target && target !== drag.source && drag.source.isConnected) {
+        return moveAdminReportCard(drag.source.dataset.reportCard, target.dataset.reportCard);
     }
 }
 
@@ -2191,7 +2214,7 @@ function renderAdminReportRows(reportState) {
     }
     const records = adminReportSortedRows(adminReportFilteredRows(reportState), reportState.sort);
     if (!records.length) {
-        if (reportState.category) return renderEmptyState("此摘要篩選沒有符合的考勤明細。按已選項目或「查詢筆數（全部）」清除。");
+        if (reportState.category) return renderEmptyState("此摘要篩選沒有符合的考勤明細。按已選項目或「全部筆數」清除。");
         return renderEmptyState("此條件下沒有查到任何出勤紀錄。");
     }
 
@@ -4033,15 +4056,9 @@ async function handleDashboardClick(event) {
             scheduleDataTableColumnFit(detail);
             return;
         }
-        if (action === "move-admin-report-card") {
-            const direction = Number(actionTarget.dataset.direction);
-            const card = actionTarget.closest("[data-report-card]");
-            if (card && (direction === -1 || direction === 1)) await moveAdminReportCard(card.dataset.reportCard, direction, true);
-            return;
-        }
         if (action === "reset-admin-report-cards") {
             const defaults = adminReportSummaryPreference().data?.defaultOrder;
-            if (defaults) await saveAdminReportSummaryOrder(defaults, "all");
+            if (defaults) await saveAdminReportSummaryOrder(defaults, "scope");
             return;
         }
         if (action === "reload-admin-report-cards") return loadAdminReportSummaryOrder();
@@ -13594,7 +13611,7 @@ function initialize() {
     ui.dashboardContent.addEventListener("click", handleDashboardClick);
     ui.dashboardContent.addEventListener("input", handleAdminReportEmployeeInput);
     ui.dashboardContent.addEventListener("change", handleAdminReportEmployeeInput);
-    for (const eventName of ["dragstart", "dragover", "drop", "dragend"]) ui.dashboardContent.addEventListener(eventName, handleAdminReportCardDrag);
+    for (const eventName of ["pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture", "keydown"]) ui.dashboardContent.addEventListener(eventName, handleAdminReportCardDrag);
     const rememberDashboardEdit = (event) => {
         if (state.dashboard?.role !== 'admin') return;
         const field = event.target;

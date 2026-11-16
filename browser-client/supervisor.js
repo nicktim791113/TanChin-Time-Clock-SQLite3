@@ -482,6 +482,19 @@ handleDashboardSubmit = async function handleSupervisorSubmit(event) {
             requireLeaveMealOptionsReady(form, body);
             body.mealOptOuts = collectLeaveMealChoices(form, body);
         }
+        if ((operation === 'leave' || operation === 'overtime') && typeof confirmPastRequestTiming === 'function') {
+            if (!form.isConnected || supervisorState.busy) return;
+            const identity = supervisorState.identity;
+            const token = state.token;
+            const confirmation = confirmPastRequestTiming(operation, body, form);
+            if (confirmation !== true) {
+                if (!await confirmation || !form.isConnected || state.token !== token || supervisorState.identity !== identity || supervisorState.busy || !spCanWrite()) return;
+                const current = new FormData(form);
+                const latest = operation === 'leave' ? collectLeaveDays(form) : Object.fromEntries(current);
+                if (JSON.stringify(requestTimingPeriods(operation, latest)) !== JSON.stringify(requestTimingPeriods(operation, body)) ||
+                    JSON.stringify(current.getAll('employeeIds')) !== JSON.stringify(body.employeeIds)) throw new Error('代辦對象或時段已變更，請重新確認後送出。');
+            }
+        }
         await spSave(operation === 'meals' ? 'meals/choice' : operation, body);
     } catch (error) { if (operation === 'overtime' && typeof cotResetForm === 'function') cotResetForm(form); spMessage(error.message); if (operation === 'leave') spLoadLeaveMeals(form, true).catch(() => {}); }
 };

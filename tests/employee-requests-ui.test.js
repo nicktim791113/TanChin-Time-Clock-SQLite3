@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function loadUi({ conditionalOvertime = false } = {}) {
+function loadUi({ conditionalOvertime = false, timingWarning = false } = {}) {
     const state = { token: 'session-E001', employeeWorkspacePanel: 'leave', dashboard: { role: 'employee', user: { id: 'E001', name: 'Employee' }, leave: { leaveTypes: [{ id: 'annual', name: '特休' }], historyWindow: { earliestMonth: '2026-01' } }, overtime: { historyWindow: { earliestMonth: '2026-01' } } } };
     const requests = [], pending = [], listeners = {}, confirmations = [], messages = [];
     const document = { activeElement: null, getElementById() { return null; }, querySelectorAll() { return []; }, addEventListener(type, handler) { (listeners[type] ||= []).push(handler); } };
@@ -18,6 +18,7 @@ function loadUi({ conditionalOvertime = false } = {}) {
     vm.runInContext(app.slice(app.indexOf('function validateOnlineRequestReason('), app.indexOf('function renderEmployeeOvertimeApplicationPanel(')), context);
     for (const file of ['overtime-defaults.js', 'leave-days.js', 'employee-requests.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../browser-client', file), 'utf8'), context);
     if (conditionalOvertime) vm.runInContext(fs.readFileSync(path.join(__dirname, '../browser-client/conditional-overtime.js'), 'utf8'), context);
+    if (timingWarning) vm.runInContext(fs.readFileSync(require.resolve('../browser-client/request-timing-warning.js'), 'utf8'), context);
     const run = (expression) => vm.runInContext(expression, context);
     run('renderDashboard(state.dashboard)');
     return { run, state, requests, pending, confirmations, messages, context, listeners };
@@ -300,6 +301,39 @@ test('late submit response after account change cannot overwrite the new dashboa
     ui.run("state.token='new-session'; renderDashboard({...state.dashboard,user:{id:'E002'}}); erState('overtime').draft=erNewDraft('overtime'); erState('overtime').draft.reason='new secret'");
     ui.pending[0].resolve({ data: { dashboard: oldDashboard } }); await submit;
     assert.equal(ui.state.dashboard.user.id, 'E002'); assert.equal(ui.run("erState('overtime').draft.reason"), 'new secret'); assert.equal(ui.messages.length, 0);
+});
+
+test('account change and silent logout cancel the pending timing dialog without sending either draft', async () => {
+    const ui = loadUi({ timingWarning: true });
+    const opened = [], closeEvents = [];
+    ui.context.document.body = { append(dialog) { opened.push(dialog); } };
+    ui.context.document.createElement = () => ({
+        open: false, removed: false, buttons: {},
+        setAttribute() {}, showModal() { this.open = true; },
+        querySelector(key) { return this.buttons[key] ||= {}; },
+        addEventListener(type, handler) { if (type === 'close') this.onClose = handler; },
+        close(value = '') { this.open = false; this.returnValue = value; closeEvents.push(this.onClose); },
+        remove() { this.removed = true; }
+    });
+    const prepare = () => ui.run("erState('overtime').draft={startDate:'2000-01-01',startTime:'17:30',endDate:'2000-01-01',endTime:'19:30',breakMinutes:'0',reason:'Valid timing reason',confirming:true}; erState('overtime').draft");
+    const oldDraft = prepare();
+    const oldSend = ui.run("erSend('overtime')");
+    opened[0].buttons['[data-past-request-confirm]'].onclick();
+    ui.run("state.token='new-session'; renderDashboard({...state.dashboard,user:{id:'E002'}})");
+    await oldSend;
+    assert.equal(opened[0].removed, true);
+    closeEvents.shift()();
+    assert.equal(oldDraft.pastTimingConfirmed, null);
+    const newDraft = prepare();
+    const newSend = ui.run("erSend('overtime')");
+    assert.equal(opened[1].open, true);
+    ui.run('handleLogout(true)');
+    await newSend;
+    assert.equal(opened[1].open, false);
+    assert.equal(opened[1].removed, true);
+    closeEvents.shift()();
+    assert.equal(newDraft.pastTimingConfirmed, null);
+    assert.equal(ui.requests.length, 0);
 });
 
 test('server conflict keeps the exact leave draft and inline discard or apply requires explicit confirmation', async () => {
