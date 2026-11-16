@@ -61,13 +61,12 @@ function erDraftSummary(kind, draft) {
 function erBuildPayload(kind, draft) {
     if (kind === 'leave') {
         if (!(state.dashboard?.leave?.leaveTypes || []).some((type) => type.id === draft.leaveTypeId)) throw new Error('請選擇目前可用的假別。');
-        const body = { leaveTypeId: draft.leaveTypeId, ...collectLeaveSegments(draft.rows), reason: draft.reason.trim() };
-        if (!body.reason) throw new Error('請填寫請假事由。');
+        const body = { leaveTypeId: draft.leaveTypeId, ...collectLeaveSegments(draft.rows), reason: validateOnlineRequestReason(kind, draft.reason) };
         return { ...body, mealOptOuts: collectLeaveMealChoices(draft, { ...body, employeeIds: [state.dashboard.user.id] }) };
     }
     draft.durationHours = erOvertimeNetHours(draft, true);
     const breakMinutes = Number(draft.breakMinutes), source = overtimeBreakProvenance(draft.breakManual, breakMinutes);
-    return { employeeId: state.dashboard.user.id, startDate: draft.startDate, startTime: draft.startTime, endDate: draft.endDate, endTime: draft.endTime, breakMinutes, ...(source && { breakSource: source }), durationHours: Number(draft.durationHours), reason: draft.reason.trim() };
+    return { employeeId: state.dashboard.user.id, startDate: draft.startDate, startTime: draft.startTime, endDate: draft.endDate, endTime: draft.endTime, breakMinutes, ...(source && { breakSource: source }), durationHours: Number(draft.durationHours), reason: validateOnlineRequestReason(kind, draft.reason) };
 }
 function erButton(kind, action, label, attributes = '', primary = false) {
     return `<button type="button" class="er-button${primary ? ' er-primary' : ''}" data-action="er-${action}" data-kind="${kind}" ${attributes}>${label}</button>`;
@@ -171,7 +170,7 @@ function erEditor(kind) {
                 ${erButton(kind, 'add-row', '＋ 新增日期／時段')}<p class="er-note">已選 ${dates.size} 日。完整涵蓋 12:20–13:00 時預帶休息 40 分鐘，其他時段預帶 0 分鐘，可自行調整。修改休息會重新計算淨時數；手動休息或淨時數不會被時間變更覆蓋，可按「恢復自動休息與時數」重新帶入。最多 740 段，日期範圍最多 370 日。</p>`
                 : `<p class="er-note">本人：${erEscape(state.dashboard?.user?.id)} ${erEscape(state.dashboard?.user?.name)}</p><h4>1　連續加班區間</h4><div class="er-input-grid er-overtime-period">${erInput(kind, 'startDate', '開始日期', draft.startDate, 'date', 'required')}${erInput(kind, 'startTime', '開始時間', draft.startTime, 'time', 'required')}${erInput(kind, 'endDate', '結束日期', draft.endDate, 'date', 'required')}${erInput(kind, 'endTime', '結束時間', draft.endTime, 'time', 'required')}${erInput(kind, 'breakMinutes', '休息（分鐘）', draft.breakMinutes, 'number', 'min="0" step="1" required')}${erInput(kind, 'durationHours', '扣除休息後時數（小時）', draft.durationHours, 'number', 'readonly aria-readonly="true" min="0.01" step="0.01"')}</div><div class="er-inline-actions">${erButton(kind, 'same-day', '結束在當日')}${erButton(kind, 'next-day', '結束在隔日')}${erButton(kind, 'auto-break', '恢復自動休息')}</div><p class="er-note">每完整涵蓋一天的 12:20–13:00，預帶休息 40 分鐘，可修改。跨夜請核對結束日期，不連續日期請分筆申請。</p>`}
             ${kind === 'leave' ? `<div data-er-leave-meals>${renderLeaveMealOptions(draft)}</div>` : ''}
-            <label class="er-field er-reason-field"><span>${kind === 'leave' ? '3' : '2'}　${label}事由${kind === 'leave' ? '（必填）' : ''}</span><textarea data-er-field="reason" data-er-focus="reason" data-kind="${kind}" rows="3" ${kind === 'leave' ? 'required' : ''} placeholder="請簡述${label}原因">${erEscape(draft.reason)}</textarea></label>
+            <label class="er-field er-reason-field"><span>${kind === 'leave' ? '3' : '2'}　${label}事由（必填，至少 5 字元，空白不計）</span><textarea data-er-field="reason" data-er-focus="reason" data-kind="${kind}" rows="3" minlength="5" required placeholder="請簡述${label}事由">${erEscape(draft.reason)}</textarea></label>
             <p class="er-note">${kind === 'leave' ? '同一假別的所有時段一起送出，依既有指定主管與管理部終審規則處理。' : '指定主管依既有規則審核；核准不會直接修改打卡或出勤時間。'}</p></div>`}
         </fieldset><div class="er-form-error" data-er-form-error role="alert">${erEscape(draft.error)}</div>
         <footer class="er-editor-footer">${current.confirmation && current.confirmation.type !== 'withdraw' ? erActionConfirmation(kind) : ''}<div class="er-total">${erSummary(kind, draft)}</div><div class="er-footer-actions">${erButton(kind, draft.confirming ? 'edit-again' : 'discard', draft.confirming ? '返回修改' : '放棄草稿', current.busy || current.confirmation ? 'disabled' : '')}${draft.confirming ? erButton(kind, 'send', current.busy ? '送出中…' : `確認送出${label}`, current.busy || current.confirmation ? 'disabled' : '', true) : `<button type="submit" class="er-button er-primary" ${current.busy || current.confirmation || (kind === 'leave' && !draft.rows.length) ? 'disabled' : ''}>下一步確認</button>`}</div></footer></form></div>`;

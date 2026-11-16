@@ -26,7 +26,7 @@ function attachConditionalOvertimeRoutes(server, { db, requireSession, hasPermis
         return row;
     };
     const formatted = (row, session) => {
-        const record = formatRecord(row), extra = store().detail(row.id);
+        const record = formatRecord(row), extra = row.additionalReview;
         return { ...record, additionalReview: extra ? { ...extra, reviewers: reviewers(extra.reviewerIds),
             canReview: session.role === 'employee' && !session.impersonation?.active && store().canReview(row, session.employeeId), canReassign: manage(session) && !session.impersonation?.active } : null };
     };
@@ -62,8 +62,14 @@ function attachConditionalOvertimeRoutes(server, { db, requireSession, hasPermis
     server.get(base + '/inbox', requireSession, handle(request => {
         const session = request.browserSession;
         if (session.role !== 'employee' && !adminView(session)) fail('沒有條件複核查閱權限。', 403);
-        const filters = session.role === 'employee' ? { additionalReviewerId: session.employeeId } : {};
-        return { records: db.queryOvertimeRequests({ ...filters, status: 'pending_additional', limit: null }).map(row => formatted(row, session)) };
+        const filters = session.role === 'employee' ?
+            { additionalReviewerId: session.employeeId, includeWaitingSupervisor: true } : { status: 'pending_additional' };
+        const records = db.queryOvertimeRequests({ ...filters, limit: null }).map(row => formatted(row, session));
+        return {
+            records,
+            waitingSupervisorCount: records.filter(row => row.additionalReview?.status === 'waiting_supervisor').length,
+            actionableCount: records.filter(row => row.additionalReview?.canReview).length
+        };
     }));
     server.get(base + '/:id/history', requireSession, handle(request => {
         const row = rowFor(request);

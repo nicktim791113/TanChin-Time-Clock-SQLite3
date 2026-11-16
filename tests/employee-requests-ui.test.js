@@ -14,6 +14,8 @@ function loadUi({ conditionalOvertime = false } = {}) {
         handleLogout() { state.token = ''; state.dashboard = null; }, handleRealtimeSyncMessage() {}, renderRequestReviewProgress() {},
         ui: { dashboardMessage: {} }, setMessage(_node, message) { messages.push(message); },
         requestJson(route, options) { requests.push({ route, options }); return new Promise((resolve, reject) => pending.push({ resolve, reject })); } });
+    const app = fs.readFileSync(require.resolve('../browser-client/app.js'), 'utf8');
+    vm.runInContext(app.slice(app.indexOf('function validateOnlineRequestReason('), app.indexOf('function renderEmployeeOvertimeApplicationPanel(')), context);
     for (const file of ['overtime-defaults.js', 'leave-days.js', 'employee-requests.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../browser-client', file), 'utf8'), context);
     if (conditionalOvertime) vm.runInContext(fs.readFileSync(path.join(__dirname, '../browser-client/conditional-overtime.js'), 'utf8'), context);
     const run = (expression) => vm.runInContext(expression, context);
@@ -35,9 +37,24 @@ function input(ui, expression, field, value, row = null) {
     ui.run('erUpdateDraftInput(target)');
 }
 
+test('both personal forms reject fewer than five non-whitespace Unicode characters and preserve the draft', () => {
+    const ui = loadUi();
+    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.leaveTypeId='annual'; erState('leave').draft.rows=[erNewRow(erState('leave').draft,'2026-10-26')]; erState('overtime').draft=erNewDraft('overtime')");
+    for (const kind of ['leave', 'overtime']) {
+        const label = kind === 'leave' ? '請假事由' : '加班事由';
+        const draft = ui.run(`erState('${kind}').draft`);
+        draft.reason = '　甲 乙 😀 丁　';
+        assert.throws(() => ui.run(`erBuildPayload('${kind}',erState('${kind}').draft)`), new RegExp(`${label}至少需要 5`));
+        assert.equal(draft.reason, '　甲 乙 😀 丁　');
+        assert.match(ui.run(`erEditor('${kind}')`), new RegExp(`${label}（必填，至少 5 字元`));
+        draft.reason = '　甲 乙 😀 丁 戊　';
+        assert.equal(ui.run(`erBuildPayload('${kind}',erState('${kind}').draft).reason`), '甲 乙 😀 丁 戊');
+    }
+});
+
 test('personal overtime previews weekend lunch, preserves manual zero, and restores the default', async () => {
     const ui = loadUi();
-    ui.run("erState('overtime').draft=erNewDraft('overtime')");
+    ui.run("erState('overtime').draft=erNewDraft('overtime'); erState('overtime').draft.reason='Valid reason'");
     for (const [key, value] of Object.entries({startDate:'2026-11-07',endDate:'2026-11-07',startTime:'08:20',endTime:'17:00'})) input(ui, 'overtime', key, value);
     const draft = ui.run("erState('overtime').draft");
     assert.equal(draft.breakMinutes, '40');
@@ -84,7 +101,7 @@ test('leave reason is mandatory and lunch options are scoped, default checked, e
 
 test('lunch eligibility ignores stale dates and accounts and preserves an explicit unchecked choice', async () => {
     const ui = loadUi();
-    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.leaveTypeId='annual'; erState('leave').draft.reason='Care'; erState('leave').draft.rows=[erNewRow(erState('leave').draft,'2035-01-02')]");
+    ui.run("erState('leave').draft=erNewDraft('leave'); erState('leave').draft.leaveTypeId='annual'; erState('leave').draft.reason='Family care'; erState('leave').draft.rows=[erNewRow(erState('leave').draft,'2035-01-02')]");
     const first = ui.run('erLoadMealOptions()');
     ui.run("erState('leave').draft.rows[0].date='2035-01-03'"); const second = ui.run('erLoadMealOptions()');
     ui.pending[1].resolve({ options: [{ employeeId: 'E001', date: '2035-01-03', participates: true, serving: true, canChange: true, eating: true }] }); await second;
@@ -182,7 +199,7 @@ test('common break settings copy into new days and invalid or excessive rest can
 
 test('overtime keeps full continuous end date and deducts rest automatically, including more than one midnight', () => {
     const ui = loadUi();
-    ui.run("erState('overtime').draft=erNewDraft('overtime')");
+    ui.run("erState('overtime').draft=erNewDraft('overtime'); erState('overtime').draft.reason='Valid reason'");
     input(ui, 'overtime', 'startDate', '2026-12-31'); input(ui, 'overtime', 'startTime', '22:00'); input(ui, 'overtime', 'endDate', '2027-01-02'); input(ui, 'overtime', 'endTime', '02:00');
     assert.equal(ui.run("erState('overtime').draft.breakMinutes"), '40');
     assert.equal(ui.run("erState('overtime').draft.durationHours"), '27.33');
@@ -358,7 +375,7 @@ test('leaving withdrawal confirmation for a new or existing draft does not leave
     }
 });
 test('overtime rest is explicit, integral, bounded and net hours cannot be manually overridden', () => {
-    const ui=loadUi(); ui.run("erState('overtime').draft=erNewDraft('overtime')");
+    const ui=loadUi(); ui.run("erState('overtime').draft=erNewDraft('overtime'); erState('overtime').draft.reason='Valid reason'");
     assert.equal(ui.run("erState('overtime').draft.breakMinutes"),'0');
     input(ui,'overtime','breakMinutes','30');
     assert.equal(ui.run("erState('overtime').draft.durationHours"),'1.5');

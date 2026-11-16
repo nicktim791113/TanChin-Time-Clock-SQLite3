@@ -3,6 +3,7 @@ const { monthRange, buildCalendar } = require('./request-calendar');
 const { proxyReason, requirePersonalSupervisor, isSupervisorSimulation } = require('./supervisor-management');
 const { normalizeLeaveDateSelection, leaveOverlapsRange, getLeaveDateSegments } = require('./leave-date-selection');
 const { calculateOvertimePeriod, resolveOvertimeBreakSource } = require('./overtime-duration');
+const { normalizeRequestReason } = require('./request-reason');
 
 function fail(message, status = 400) { throw Object.assign(new Error(message), { status }); }
 function requestPeriod(body, kind) {
@@ -156,7 +157,7 @@ function attachSupervisorRoutes(server, context) {
             const body = request.body || {};
             const targets = targetsFor(request, body);
             const reason = proxyReason(body.proxyReason);
-            if (kind === 'leave' && (typeof body.reason !== 'string' || !body.reason.trim())) fail('請填寫請假事由。');
+            const requestReason = normalizeRequestReason(kind, body.reason, { maxLength: 2000 });
             if (body.confirmApproval !== true) fail('請確認主管代申請並核准。');
             const period = requestPeriod(body, kind);
             const type = kind === 'leave' ? db.loadLeaveTypes().find((row) => row.id === body.leaveTypeId && row.enabled) : null;
@@ -167,7 +168,7 @@ function attachSupervisorRoutes(server, context) {
             const records = targets.map((target) => ({ id: `${kind}_${now}_${crypto.randomBytes(8).toString('hex')}`, employee_id: target.id,
                 applicant_id: actorId, applicant_role: 'supervisor_proxy', proxy_reason: reason, ...period,
                 ...(kind === 'overtime' ? { conditional_review_fingerprint: body.conditionalReviewFingerprints?.[target.id] } : {}),
-                reason: typeof body.reason === 'string' ? body.reason.trim().slice(0, 2000) : '',
+                reason: requestReason,
                 status: kind === 'leave' ? 'pending_admin' : 'approved', supervisor_id: actorId,
                 supervisor_decision: 'approved', supervisor_comment: `指定主管代申請並核准：${reason}`, supervisor_decided_at: now,
                 approval_mode: kind === 'leave' ? 'supervisor_proxy' : 'supervisor_proxy_auto_approved', created_at: now, updated_at: now,

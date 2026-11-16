@@ -220,7 +220,8 @@ const dmPreviousEmployee = renderEmployeeDashboard;
 renderEmployeeDashboard = function employeeReviewNotice(dashboard) {
     const html = dmPreviousEmployee(dashboard), review = dashboard.supervisorReview;
     if (!review?.canUse) return html;
-    const notice = `<section class="dm-review-notice ${review.count ? 'has-pending' : ''}" aria-label="待主管審核事件"><div><h3>待我審核 <strong>${review.count}</strong> 筆</h3><span>請假 ${review.leaveCount || 0} 筆 · 加班 ${review.overtimeCount || 0} 筆</span></div><div class="inline-actions"><button type="button" class="outline-btn" data-action="dm-review" data-kind="leave">請假 ${review.leaveCount || 0}</button><button type="button" class="outline-btn" data-action="dm-review" data-kind="overtime">加班 ${review.overtimeCount || 0}</button></div></section>`;
+    const waiting = dashboard.overtime?.additionalWaitingCount || 0;
+    const notice = `<section class="dm-review-notice ${review.count ? 'has-pending' : ''}" aria-label="待主管審核事件"><div><h3>待我審核 <strong>${review.count}</strong> 筆</h3><span>請假 ${review.leaveCount || 0} 筆 · 加班 ${review.overtimeCount || 0} 筆${waiting ? ` · ${waiting} 筆等候第一關` : ''}</span></div><div class="inline-actions"><button type="button" class="outline-btn" data-action="dm-review" data-kind="leave">請假 ${review.leaveCount || 0}</button><button type="button" class="outline-btn" data-action="dm-review" data-kind="overtime">加班 ${review.overtimeCount || 0}${waiting ? `（另 ${waiting} 筆等候第一關）` : ''}</button></div></section>`;
     return notice + html;
 };
 function renderRequestReviewProgress(row) {

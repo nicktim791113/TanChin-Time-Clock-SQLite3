@@ -140,3 +140,18 @@ test('admin-view inbox uses the complete scoped endpoint and displays at most 15
     assert.equal((host.outerHTML.match(/data-cot-open=/g) || []).length, 7);
     assert.match(host.outerHTML, /data-cot-open="OT-52"/);
 });
+
+test('waiting reviewers have a separate read-only queue while first-stage reviewers see the warning and trigger date', () => {
+    const ui = loadUi();
+    ui.context.row = { id: 'waiting', status: 'pending_supervisor', calendarActions: { review: 'supervisor' },
+        additionalReview: { required: true, status: 'waiting_supervisor', canReview: false, triggerDates: ['2026-11-21'] } };
+    const progress = ui.run('cotReviewProgress(row)');
+    assert.match(progress, /該位員工同週平日有適用請假，請確實查核加班工作內容[\s\S]*2026-11-21[\s\S]*<details/);
+    const waitingOnly = ui.run('cotInbox.records = [row]; cotRenderInbox()');
+    assert.match(waitingOnly, /目前沒有待額外複核[\s\S]*待主管審核，尚未輪到複核/);
+    assert.match(waitingOnly, /data-cot-open="waiting">查看詳情/);
+    assert.doesNotMatch(waitingOnly, /辦理複核/);
+    const advanced = ui.run("row.status='pending_additional'; row.additionalReview.status='pending'; row.additionalReview.canReview=true; cotRenderInbox()");
+    assert.match(advanced, /data-cot-open="waiting">辦理複核/);
+    assert.doesNotMatch(advanced, /尚未輪到複核/);
+});

@@ -66,10 +66,32 @@ test('conditional overtime HTTP enforces independent review, scopes, preview ack
     const id = db.queryOvertimeRequests({employeeId:'E001',limit:null})[0].id;
     assert.equal(db.getOvertimeRequestById(id).status,'pending_supervisor');
     let detail = db.getConditionalOvertimeReview().detail(id);
+    const waiting = await api(base+'/inbox',extra);
+    assert.equal(waiting.status,200);
+    assert.deepEqual(waiting.records.map(row=>row.id),[id]);
+    assert.equal(waiting.waitingSupervisorCount,1);
+    assert.equal(waiting.actionableCount,0);
+    assert.equal(waiting.records[0].additionalReview.canReview,false);
+    assert.deepEqual(waiting.records[0].additionalReview.triggerDates,['2026-11-09']);
+    assert.ok(!JSON.stringify(waiting).includes('PRIVATE medical'));
+    const preReviewDashboard = (await api('/dashboard',extra)).dashboard;
+    assert.equal(preReviewDashboard.supervisorReview.canUse,true);
+    assert.equal(preReviewDashboard.overtime.additionalWaitingCount,1);
+    assert.equal(preReviewDashboard.overtime.additionalQueueCount,0);
+    assert.equal((await api(base+'/'+id+'/history',extra)).canReview,false);
+    for (const token of [employee,backup,manager]) assert.deepEqual((await api(base+'/inbox',token)).records,[]);
+    assert.equal((await api(base+'/'+id+'/history',backup)).status,404);
+    const firstReview = (await api('/dashboard',manager)).dashboard.overtime.supervisorQueue.find(row=>row.id===id);
+    assert.match(firstReview.additionalReview.supervisorNotice,/同週平日有適用請假，請確實查核加班工作內容/);
+    assert.deepEqual(firstReview.additionalReview.triggerDates,['2026-11-09']);
     assert.equal((await api(base+'/'+id+'/decision',extra,{revision:detail.revision,decision:'approved',comment:'Too early',confirm:true})).status,403);
     assert.equal((await api('/employee/overtime/supervisor-decision',manager,{requestId:id,decision:'approved',comment:'First review'})).status,200);
     assert.equal(db.getOvertimeRequestById(id).status,'pending_additional');
-    assert.equal((await api(base+'/inbox',extra)).records.length,1);
+    const ready = await api(base+'/inbox',extra);
+    assert.equal(ready.records.length,1);
+    assert.equal(ready.records[0].additionalReview.canReview,true);
+    assert.equal(ready.waitingSupervisorCount,0);
+    assert.equal(ready.actionableCount,1);
     assert.equal((await api(base+'/inbox',backup)).records.length,0);
     const dash = (await api('/dashboard',extra)).dashboard;
     assert.equal(dash.supervisorReview.canUse,true);assert.equal(dash.overtime.additionalQueueCount,1);
@@ -193,5 +215,52 @@ test('conditional overtime HTTP enforces independent review, scopes, preview ack
         await stop();
         assert.equal((await api('/admin/leave/final-decision',admin,{requestId:pending.id,decision:'approved'})).status,200);
         assert.equal(db.getLeaveRequestById(pending.id).status,'approved');
+    });
+    await t.test('a dual-role primary recuses after voting and the backup waits for the remaining first-stage vote', async () => {
+        const supervisors = db.getReviewSupervisors();
+        supervisors.saveBatch({
+            employeeIds: ['E001'], supervisorIds: ['A001', 'A002'],
+            mode: 'required', requiredSupervisorIds: ['A001', 'A002'],
+            confirmReview: true, reason: 'Fixture requires two first-stage votes',
+            revisions: { E001: supervisors.state().employees.find(row => row.id === 'E001').revision }
+        }, audit);
+        leave('dual-role-leave', '2027-01-18');
+        const saturday = period('2027-01-23');
+        const checked = await api(base + '/preview', employee, saturday);
+        assert.equal(checked.previews[0].required, true);
+        const { employeeIds, ...own } = saturday;
+        const submitted = await api('/employee/overtime/request', employee, {
+            ...own, conditionalReviewFingerprints: { [employeeIds[0]]: checked.previews[0].fingerprint }
+        });
+        assert.equal(submitted.status, 200, JSON.stringify(submitted));
+        const row = db.queryOvertimeRequests({ employeeId: 'E001', limit: null }).find(item => item.start_at === at('2027-01-23', '08:20'));
+        const inboxRecord = async token => (await api(base + '/inbox', token)).records.find(item => item.id === row.id);
+        const vote = token => api('/employee/overtime/supervisor-decision', token, { requestId: row.id, decision: 'approved', comment: 'Fixture verified work' });
+        const decide = (token, record) => api(base + '/' + row.id + '/decision', token, {
+            revision: record.additionalReview.revision, decision: 'approved', comment: 'Fixture independent review', confirm: true
+        });
+
+        const primaryWaiting = await inboxRecord(extra);
+        assert.equal(primaryWaiting.status, 'pending_supervisor');
+        assert.equal(primaryWaiting.additionalReview.canReview, false);
+        assert.equal(await inboxRecord(backup), undefined);
+        assert.equal((await decide(extra, primaryWaiting)).status, 403);
+        assert.equal((await vote(extra)).status, 200);
+
+        assert.equal(await inboxRecord(extra), undefined);
+        const backupWaiting = await inboxRecord(backup);
+        assert.equal(backupWaiting.status, 'pending_supervisor');
+        assert.equal(backupWaiting.additionalReview.canReview, false);
+        assert.deepEqual(backupWaiting.additionalReview.eligibleReviewerIds, ['D001']);
+        assert.equal((await decide(backup, backupWaiting)).status, 403);
+        assert.equal((await vote(manager)).status, 200);
+
+        assert.equal(await inboxRecord(extra), undefined);
+        const backupReady = await inboxRecord(backup);
+        assert.equal(backupReady.status, 'pending_additional');
+        assert.equal(backupReady.additionalReview.canReview, true);
+        assert.equal((await decide(extra, backupReady)).status, 403);
+        assert.equal((await decide(backup, backupReady)).status, 200);
+        assert.equal(db.getOvertimeRequestById(row.id).status, 'approved');
     });
 });

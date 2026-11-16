@@ -137,7 +137,7 @@ function spRequestForm() {
         ${leave ? renderLeaveDaysAddTools({ autoHours: true, categoryKeywords: true, supervisorLayout: true }) : ''}</div>
         ${!leave ? `<div class="inline-actions">${spButton('auto-overtime-break', '恢復自動休息')}</div><p class="sp-step-note">每完整涵蓋一天的 12:20–13:00，預帶休息 40 分鐘，可修改。跨夜請核對結束日期。</p>` : ''}
         ${leave ? `${renderLeaveDaysEditor({ batch: true, autoHours: true, externalTools: true, categoryKeywords: true, supervisorSteps: true })}<div data-sp-leave-meals></div>` : ''}
-        ${spField('申請事由', 'reason', 'text', '', 'maxlength="2000"')}${spReasonField('proxyReason')}
+        ${spField(`${spCategoryLabel(kind)}事由（必填，至少 5 字元，空白不計）`, 'reason', 'text', '', 'minlength="5" maxlength="2000"')}${spReasonField('proxyReason')}
         ${!leave && typeof cotFormPreviewHost === 'function' ? cotFormPreviewHost() : ''}
         <label class="sp-confirm"><input type="checkbox" name="confirmApproval" required>確認替所有勾選員工代申請相同內容；多主管設定依各人審核規則送審，原單主管代辦流程保留</label>
         <div class="inline-actions"><button class="primary-btn" type="submit" ${supervisorState.busy || !spCanWrite() ? 'disabled' : ''}>代送出${spCategoryLabel(kind)}申請</button>${spButton('reset-form', '重設表單')}</div>
@@ -458,6 +458,7 @@ handleDashboardSubmit = async function handleSupervisorSubmit(event) {
         else body.confirmApproval = fields.has('confirmApproval');
     }
     try {
+        if (operation === 'leave' || operation === 'overtime') body.reason = validateOnlineRequestReason(operation, body.reason, 2000);
         if (operation === 'overtime') {
             spSyncOvertime(form);
             body.durationHours = form.elements.durationHours.value;
@@ -473,7 +474,6 @@ handleDashboardSubmit = async function handleSupervisorSubmit(event) {
         }
         if (operation === 'leave') {
             if (!body.leaveTypeId) throw new Error('請選擇假別。');
-            if (!String(body.reason || '').trim()) throw new Error('請填寫請假事由。');
             Object.assign(body, collectLeaveDays(form));
             await spLoadLeaveMeals(form);
             if (!form.isConnected) return;

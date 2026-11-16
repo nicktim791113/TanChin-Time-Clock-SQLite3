@@ -18,6 +18,7 @@ const { attachEmployeeAttendanceRoutes } = require('./employee-attendance');
 const { classifyAttendanceReport, DETAIL_CATEGORIES, DAY_MS: REPORT_DAY_MS } = require('./attendance-report');
 const { attachConditionalOvertimeRoutes, SETTINGS_PERMISSION: CONDITIONAL_OVERTIME_PERMISSION } = require('./overtime-conditional-routes');
 const { attachReportSummaryOrderRoutes } = require('./report-summary-order');
+const { normalizeRequestReason } = require('./request-reason');
 const { attachRequestHistoryRoutes } = require('./request-history');
 const { attachLeaveEntitlementRoutes } = require('./leave-entitlement-routes');
 const { attachLeaveUsageRoutes } = require('./leave-usage');
@@ -2789,6 +2790,7 @@ function getEmployeeOvertimeState(employee) {
     historyWindow: dbModule.getRequestHistory().window('overtime', historyNow),
     supervisorQueueCount: dbModule.countOvertimeRequests({ supervisorId: employee.id, status: 'pending_supervisor' }) + dbModule.countOvertimeRequests({ additionalReviewerId: employee.id, status: 'pending_additional' }),
     additionalQueueCount: dbModule.countOvertimeRequests({ additionalReviewerId: employee.id, status: 'pending_additional' }),
+    additionalWaitingCount: dbModule.countOvertimeRequests({ additionalReviewerId: employee.id, includeWaitingSupervisor: true, status: 'pending_supervisor' }),
     myRequests: dbModule.queryOvertimeRequests({ employeeOrApplicantId: employee.id, ...dbModule.getRequestHistory().filters('overtime', historyNow), limit: 80 })
       .map((request) => formatOvertimeRequestForDashboard(request, lookup)),
     supervisorQueue: dbModule.queryOvertimeRequests({
@@ -3410,7 +3412,7 @@ function buildEmployeeDashboard(employee, session = null) {
     leave,
     overtime,
     supervisorReview: { count: reviewCount, leaveCount: leave.supervisorQueueCount, overtimeCount: overtime.supervisorQueueCount,
-      canUse: reviewCount > 0 || dbModule.getReviewSupervisors().rows().some((row) => row.supervisor_id === employee.id) || dbModule.getConditionalOvertimeReview().state().reviewerIds.includes(employee.id) },
+      canUse: reviewCount > 0 || overtime.additionalWaitingCount > 0 || dbModule.getReviewSupervisors().rows().some((row) => row.supervisor_id === employee.id) || dbModule.getConditionalOvertimeReview().state().reviewerIds.includes(employee.id) },
     meals: dbModule.getMeals().calendar({ employeeId: employee.id }),
     supervisorProxy: { count: dbModule.getSupervisors().assignedEmployees(employee.id).length,
       canView: dbModule.getSupervisors().assignedEmployees(employee.id).length > 0 && (isSupervisorSimulation(session) ||
@@ -5626,7 +5628,7 @@ function attachBrowserRoutes(server) {
       if (request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能送出請假申請。', 403);
       const employee = getEmployeeById(request.browserSession.employeeId);
       if (!employee) throw createHttpError('登入帳號對應的員工資料已不存在，請重新登入。', 401);
-      if (typeof request.body?.reason !== 'string' || !request.body.reason.trim()) throw createHttpError('請填寫請假事由。', 400);
+      const reason = normalizeRequestReason('leave', request.body?.reason);
 
       const leaveTypes = dbModule.loadLeaveTypes();
       const leaveTypeId = String(request.body?.leaveTypeId || request.body?.leave_type_id || '').trim();
@@ -5657,7 +5659,7 @@ function attachBrowserRoutes(server) {
         start_at: startAt,
         end_at: endAt,
         ...selection,
-        reason: String(request.body?.reason || '').trim(),
+        reason,
         status: 'pending_supervisor',
         supervisor_id: supervisorId,
         review_policy: dbModule.getReviewSupervisors().policy(employee.id),
@@ -5780,6 +5782,7 @@ function attachBrowserRoutes(server) {
       }
       if (request.body?.employeeIds !== undefined) throw createHttpError('本人申請不能批量送件；請使用「主管代辦」。', 403);
       if (request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能送出加班申請。', 403);
+      const reason = normalizeRequestReason('overtime', request.body?.reason);
       const targetEmployee = applicant;
       const employees = dbModule.loadEmployees();
       const supervisorId = getLeaveSupervisorForEmployee(targetEmployee);
@@ -5812,7 +5815,7 @@ function attachBrowserRoutes(server) {
         break_minutes: breakMinutes,
         break_source: breakSource,
         conditional_review_fingerprint: request.body?.conditionalReviewFingerprints?.[applicant.id],
-        reason: String(request.body?.reason || '').trim(),
+        reason,
         status: 'pending_supervisor',
         supervisor_id: supervisorId,
         review_policy: dbModule.getReviewSupervisors().policy(applicant.id),

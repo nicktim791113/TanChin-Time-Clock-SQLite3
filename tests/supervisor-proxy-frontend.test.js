@@ -6,6 +6,8 @@ function client() {
     const context = { auditActionLabels: {}, auditTargetTypeLabels: {}, state: { dashboard: { supervisorProxy: { canView: true, canUse: false } } }, document: { addEventListener() {} }, escapeHtml: (x) => String(x), renderAdminPaperEmployeePicker: (_, __, ___, options) => JSON.stringify(options), renderLeaveDaysAddTools: () => 'TOOLS', renderLeaveDaysEditor: () => 'EDITOR' };
     for (const name of ['handleLogout', 'renderDashboard', 'renderEmployeeWorkspaceItems', 'renderAdminPermissionAwareContent', 'renderSystemAdminDashboard', 'postRenderSetup', 'handleDashboardClick', 'handleDashboardChange', 'handleDashboardSubmit', 'handleRealtimeSyncMessage']) context[name] = () => {};
     vm.createContext(context);
+    const app = fs.readFileSync(require.resolve('../browser-client/app.js'), 'utf8');
+    vm.runInContext(app.slice(app.indexOf('function validateOnlineRequestReason('), app.indexOf('function renderEmployeeOvertimeApplicationPanel(')), context);
     for (const file of ['overtime-defaults.js', 'supervisor.js']) vm.runInContext(fs.readFileSync(require.resolve('../browser-client/' + file), 'utf8'), context);
     return { run: (source) => vm.runInContext(source, context), context };
 }
@@ -44,14 +46,23 @@ test('proxy overtime preserves manual minutes through time changes and supports 
     assert.equal(freshFields.durationHours.value, '9');
     const submissions = [];
     context.submitEvent = { target: { closest: () => freshForm }, preventDefault() {} };
+    let reason = '甲 乙 😀 丁';
     context.FormData = class extends Map {
-        constructor() { super([['employeeIds', 'E001'], ['confirmApproval', 'on']]); }
+        constructor() { super([['employeeIds', 'E001'], ['confirmApproval', 'on'], ['reason', reason], ['proxyReason', '代理獨立原因']]); }
         getAll(key) { return this.has(key) ? [this.get(key)] : []; }
     };
     context.captureSubmit = (operation, body) => submissions.push({ operation, body });
+    const messages = [];
+    context.captureMessage = message => messages.push(message);
+    await run("state.dashboard.supervisorProxy.canUse=true; spSave=captureSubmit; spMessage=captureMessage; handleDashboardSubmit(submitEvent)");
+    assert.match(messages[0], /加班事由至少需要 5/);
+    assert.equal(submissions.length, 0);
+    reason = '　完成設備維護　';
     await run("state.dashboard.supervisorProxy.canUse=true; spSave=captureSubmit; handleDashboardSubmit(submitEvent)");
     assert.equal(submissions[0].operation, 'overtime');
     assert.equal(submissions[0].body.breakSource, 'automatic_lunch');
+    assert.equal(submissions[0].body.reason, '完成設備維護');
+    assert.equal(submissions[0].body.proxyReason, '代理獨立原因');
     await run("spSyncOvertime(form, form.elements.breakMinutes); handleDashboardSubmit(submitEvent)");
     assert.equal(submissions[1].body.breakMinutes, '40');
     assert.equal(submissions[1].body.breakSource, 'manual');

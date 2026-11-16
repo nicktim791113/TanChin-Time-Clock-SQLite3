@@ -11028,7 +11028,7 @@ function renderOvertimeRequestRows(requests = [], { showEmployee = false, showAp
                             <td>${escapeHtml(request.endText || "-")}</td>
                             <td>${escapeHtml(request.duration_hours ?? "-")}</td>
                             <td>${getOvertimeStatusBadge(request)}</td>
-                            <td>${escapeHtml(request.approvalModeText || "-")}${typeof renderRequestReviewProgress === 'function' ? renderRequestReviewProgress(request) : ''}</td>
+                            <td>${escapeHtml(request.approvalModeText || "-")}${typeof renderRequestReviewProgress === 'function' ? renderRequestReviewProgress(request, { firstStage: reviewMode === "supervisor" }) : ''}</td>
                             <td class="multiline-cell">${escapeHtml(request.reason || "-")}</td>
                             <td class="actions ${reviewMode ? "has-review-comment" : ""}">
                                 <div class="${reviewMode ? "review-action-stack" : "table-actions"}">
@@ -11060,6 +11060,14 @@ function renderOvertimeRequestRows(requests = [], { showEmployee = false, showAp
             </table>
         </div>
     `;
+}
+
+function validateOnlineRequestReason(kind, value, maxLength = Infinity) {
+    const reason = String(value ?? "").trim().slice(0, maxLength);
+    const label = kind === "leave" ? "請假事由" : "加班事由";
+    if (!reason) throw new Error(`請填寫${label}（至少 5 個非空白字元）。`);
+    if ([...reason.replace(/\s/gu, "")].length < 5) throw new Error(`${label}至少需要 5 個非空白字元。`);
+    return reason;
 }
 
 function renderEmployeeOvertimeApplicationPanel(dashboard) {

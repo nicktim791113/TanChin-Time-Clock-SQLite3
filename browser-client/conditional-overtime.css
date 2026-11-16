@@ -38,6 +38,8 @@
 .cot-warning { color: #854508; font-weight: 650; }
 .cot-progress > summary { cursor: pointer; color: #274c67; font-weight: 650; }
 .cot-progress > .cot-notice { margin-top: .35rem; }
+.cot-first-stage { margin: .25rem 0; max-width: 30ch; white-space: normal; }
+.cot-first-stage small { display: block; }
 .rc-status-pending_additional { color: #895105; }
 .er-workspace .er-status-pending_additional { background: #fff5de; color: #8b6114; }
 @media (max-width: 540px) {

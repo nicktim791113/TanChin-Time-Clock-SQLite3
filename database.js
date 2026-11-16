@@ -1586,9 +1586,12 @@ const buildOvertimeRequestWhere = (filters = {}) => {
     }
     if (filters.additionalReviewerId) {
         const actor = String(filters.additionalReviewerId);
-        clauses.push(`status='pending_additional' AND ? = (
+        const stages = filters.includeWaitingSupervisor ?
+          "(overtime_requests.status='pending_additional' AND json_extract(r.data_json,'$.status')='pending' OR overtime_requests.status='pending_supervisor' AND json_extract(r.data_json,'$.status')='waiting_supervisor')" :
+          "(overtime_requests.status='pending_additional' AND json_extract(r.data_json,'$.status')='pending')";
+        clauses.push(`? = (
           SELECT reviewers.value FROM overtime_additional_reviews r, json_each(r.data_json,'$.reviewerIds') reviewers
-          WHERE r.request_id=overtime_requests.id AND json_extract(r.data_json,'$.status')='pending'
+          WHERE r.request_id=overtime_requests.id AND ${stages}
             AND reviewers.value<>overtime_requests.employee_id AND reviewers.value<>COALESCE(overtime_requests.applicant_id,'')
             AND COALESCE((SELECT after_at FROM request_review_epochs WHERE employee_id=reviewers.value),-1)<json_extract(r.data_json,'$.assignedAt')
             AND EXISTS (SELECT 1 FROM employees WHERE id=reviewers.value)
