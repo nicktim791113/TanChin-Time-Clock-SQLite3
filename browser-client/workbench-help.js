@@ -57,7 +57,9 @@ const workbenchHelpTopics = {
 };
 
 Object.assign(workbenchHelpTopics, {
-    'supervisors.conditional': ['條件複核', '集中設定週六加班何時需要額外複核，以及可獨立辦理複核的人。', ['功能初始停用。選生效日期、適用假別、主複核人及備援複核人，填原因並確認儲存。', '按台北時間，以每個週六回看當週週一至週五的工作日。符合假別的已核准或待審請假，須與日班時段重疊才列入；午休不列入。', '待額外複核清單可開啟原單的複核歷程。有設定權限者可為未完成的案件改派，填原因並確認。'], ['本人、代辦人與本案第一階段實際核准者不能兼任複核。主複核人不適用時由備援接續，沒有適任者時等待改派。', '符合條件的已核准案件可能改列補複核。原核准、操作者與歷程會保留；已處理的出勤或結算須另行核對。']],
+    approvedChanges: ['更正／作廢需求', '主管提出需求後，由具原作廢或更正權限的管理者統一處理。', ['填寫原因，更正時另填擬修改內容。送出需求後原單仍維持原狀。', '管理者核對原單、需求與影響，依既有權限執行更正或作廢。實際完成異動後，相關需求才列為完成。', '若需求須退回或另行結案，填寫說明後再確認。'], ['原單更正與作廢沿用其各自權限和稽核。需求的提出或退回本身不改動原單。']],
+    'overtime.conditional': ['條件複核', '在加班管理統一查看週六加班待額外複核案件。摘要件數涵蓋全部日期，加班月份件數另依顯示月份。', ['查看員工、加班事由、起訖、觸發日期與目前複核人。可翻頁或展開歷程。', '需改派時，具條件複核設定權限的管理者可選主複核人及備援，填寫原因後確認。'], ['原主管完成後，由目前合格且順位最前的複核人辦理。申請所屬員工、代辦申請人及第一關實際核准者須迴避；停用或授權撤銷的人不具資格。主複核人須迴避或不再合格時，合格備援才接手，沒有逾時自動接管。']],
+    'supervisors.conditional': ['條件複核', '集中設定週六加班何時需要額外複核，以及可獨立辦理複核的人。', ['功能初始停用。選生效日期、適用假別、主複核人及備援複核人，填原因並確認儲存。', '按台北時間，以每個週六回看當週週一至週五的工作日。符合假別的已核准或待審請假，須與日班時段重疊才列入；午休不列入。', '待複核清單位於加班管理的「條件複核」。有設定權限者可從清單開啟案件並改派。'], ['本人、代辦人與本案第一階段實際核准者不能兼任複核。主複核人須迴避或不符原指派資格時，合格備援才接手。沒有逾時自動接管。無適任者時等待管理者改派。', '符合條件的已核准案件可能改列補複核。原核准、操作者與歷程會保留；已處理的出勤或結算須另行核對。']],
     'employee.supervisorReview': ['主管審核', '工作台分列待主管請假、待主管加班、週六待我複核、待原主管審核（僅查看）及備援複核（尚未輪到）。待我審核只計目前可辦理案件，同一案件計一次。', ['依請假或加班分頁查看原主管待審。加班頁另列週六加班條件複核，可區分待主管及待額外複核。原主管請核對同週平日請假及加班工作內容。', '展開案件可看觸發週六、請假日期、原審核進度及歷程。輪到額外複核後，按辦理複核，填意見並確認通過或駁回。'], ['已指派且合格的複核人可先唯讀查看，備援待命也可查看。待原主管完成後，由當前順位且合格的人送出額外複核。本案申請員工、代辦人及第一階段核准者不能辦理第二階段。', '畫面提供判定日期，請假事由不會顯示在複核依據。']],
     'conditionalOvertime.detail': ['加班條件複核與歷程', '核對單號、觸發日期、實際複核人、改派及操作歷程。', ['具有本案複核資格時，選通過或駁回，填必填意見，勾確認後送出。', '具有條件複核設定權限時，可為尚未完成的案件選主複核人或備援複核人，填原因並確認改派。'], ['沒有可用複核人的案件維持待審，由管理者改派。歷程保留原主管與複核操作的依據。', '身份模擬僅能讀取授權資料，不能送出複核或改派。'] ],
     'approvedCorrection.detail': ['已核准申請更正與歷程', '查看線上已核准原單及前後歷程；有獨立權限才能更正。', ['先核對員工、申請人、原核准紀錄及歷程。', '修改內容並另填本次更正原因（最多500字）；加班按完整起訖扣整張休息分鐘，舊NULL休息須明填並確認。', '按預覽更正前後內容不會寫入；確認前後差異後再儲存，資料已變更須重新讀取核對。'], ['儲存後直接維持已核准，不重新送審；原單號、申請人、核准紀錄保留，另記操作者、時間與前後內容。', '查看權可以唯讀歷程；儲存須另有對應請假／加班更正權。一般管理者既有模板不含新權，完整管理者模板仍包含全部管理功能；身份模擬不能寫入。', '不得變動已結算來源扣抵；紙本沿用原修正流程，待審等其他狀態不適用。']],
@@ -128,6 +130,8 @@ Object.assign(workbenchHelpTopics, {
 });
 
 function workbenchHelpContext(includeModal = true) {
+    const changeDialog = includeModal && document.querySelector('dialog[open][data-help-key="approvedChanges"]');
+    if (changeDialog) return { role: state.dashboard?.role, section: 'approvedChanges', sub: 'detail', root: 'dialog[open][data-help-key="approvedChanges"]', topic: workbenchHelpTopics.approvedChanges };
     const voidDialog = includeModal && document.querySelector('#approved-void-dialog[open]');
     if (voidDialog) {
         const leave = voidDialog.dataset.kind === 'leave', label = leave ? '請假' : '加班';
@@ -174,7 +178,7 @@ function workbenchHelpContext(includeModal = true) {
         const topicKey = { review: 'reviewDialog', cancel: 'cancelDialog', withdraw: 'withdrawDialog', 'paper-confirm': 'paperDialog' }[stage];
         if (topicKey) return { role, section, sub, stage, topic: workbenchHelpTopics[`salaryAdvances.${topicKey}`], root: '#salary-advance-workspace .sa-dialog[open]' };
     }
-    const topic = (role === 'admin' && workbenchHelpTopics[`${section}.${sub}`]) || workbenchHelpTopics[`${role}.${section}`] || workbenchHelpTopics[`${section}.${sub}`] || workbenchHelpTopics[section] || workbenchHelpTopics[role] || workbenchHelpTopics.employee;
+    const topic = (role === 'admin' && sub === 'changes' && ['leave', 'overtime'].includes(section) && workbenchHelpTopics.approvedChanges) || (role === 'admin' && workbenchHelpTopics[`${section}.${sub}`]) || workbenchHelpTopics[`${role}.${section}`] || workbenchHelpTopics[`${section}.${sub}`] || workbenchHelpTopics[section] || workbenchHelpTopics[role] || workbenchHelpTopics.employee;
     return { role, section, sub, topic, ...(section === 'salaryAdvances' && salaryVisible ? { root: '#salary-advance-workspace' } : {}) };
 }
 function workbenchControlLabel(node) {
@@ -209,6 +213,7 @@ function workbenchControlLabel(node) {
 }
 function workbenchControlDescription(node, context) {
     const name = node.name, label = workbenchControlLabel(node), action = node.dataset.action || '', form = node.form || node.closest('form');
+    if (node.matches('[data-cot-inbox-refresh]')) return '重新取得目前範圍內的複核案件與狀態，不會修改規則或案件。';
     if (node.dataset.cotOpen) return '開啟此單的條件複核與歷程；依目前資格提供複核決定或改派。';
     if (node.matches('[data-cot-ack]')) return '核對本次對象與時段的複核預覽後勾選；更換對象或日期時間須重新確認。';
     if (form?.hasAttribute?.('data-cot-settings-form')) {

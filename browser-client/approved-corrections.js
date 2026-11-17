@@ -93,11 +93,11 @@ function acClose(force=false) {
     if(!force&&s.dirty&&!window.confirm('尚有未保存的更正內容，確定捨棄並關閉？'))return false;
     s.dialog?.remove();Object.assign(s,{dialog:null,data:null,dirty:false,busy:false,pending:null,sequence:s.sequence+1});return true;
 }
-async function openApprovedCorrection(kind,id) {
+async function openApprovedCorrection(kind,id,changeRequest=null) {
     if(state.dashboard?.role!=='admin'||!['leave','overtime'].includes(kind))return;
     if(!acClose())return;
     const s=approvedCorrectionState,sequence=++s.sequence,dialog=document.createElement('dialog');
-    Object.assign(s,{dialog,identity:acIdentity(),kind,requestId:id,dirty:false,busy:false,pending:null});
+    Object.assign(s,{dialog,identity:acIdentity(),kind,requestId:id,dirty:false,busy:false,pending:null,changeRequest});
     dialog.id='approved-correction-dialog';dialog.className='ac-dialog';dialog.setAttribute('aria-labelledby','ac-title');dialog.innerHTML='<header><h3 id="ac-title">已核准申請更正／歷程</h3><div class="ac-header-actions"><button type="button" class="outline-btn" data-action="wb-help">操作說明</button><button type="button" class="outline-btn" data-ac-action="close">關閉</button></div></header><div class="ac-message" role="status" aria-live="polite"></div><div class="ac-content">讀取中…</div>';
     dialog.addEventListener('cancel',event=>{event.preventDefault();acClose();});document.body.append(dialog);dialog.showModal();
     try {
@@ -106,13 +106,19 @@ async function openApprovedCorrection(kind,id) {
         const record=data.record;
         dialog.querySelector('.ac-content').innerHTML=`<section class="ac-original"><h4>原申請與原核准</h4><p>核准狀態：${acEscape(record.statusText || '已核准')}（保留原紀錄）</p><p>員工：${acEscape(record.employeeId || record.employee_id)} ${acEscape(record.employeeName || '')} · 申請人：${acEscape(record.applicantId || record.applicant_id || '未記錄')} ${acEscape(record.applicantName || '')}</p>${acSnapshot(record)}${typeof renderRequestReviewProgress==='function'?renderRequestReviewProgress(record):''}</section>${data.canCorrect?acForm(kind,record):'<p>唯讀更正歷程；目前沒有更正權限或為身份模擬。</p>'}${acHistory(data.history||[])}`;
         const form=dialog.querySelector('[data-ac-form]');if(form&&kind==='leave'&&form.dataset.acMode!=='legacy_range')syncLeaveDaysEditor(form,{request:record});
+        if (changeRequest) {
+            const notice = document.createElement('section'); notice.className = 'acr-notice';
+            notice.innerHTML = `<strong>依主管需求辦理更正</strong><p>提出原因：${acEscape(changeRequest.reason)}</p><p>希望更正內容：${acEscape(changeRequest.proposal || '')}</p><p>請逐欄核對；保存成功後，同時完成這筆需求。</p>`;
+            dialog.querySelector('.ac-content').prepend(notice);
+            if (form) form.elements.correctionReason.value = String(changeRequest.reason || '').slice(0,500);
+        }
     }catch(error){if(acLive(sequence,dialog))dialog.querySelector('.ac-message').textContent=error.message;}
 }
 async function acSave() {
     const s=approvedCorrectionState,dialog=s.dialog,sequence=s.sequence;
     if(!dialog||!s.pending||s.busy||!s.data?.canCorrect||s.identity!==acIdentity())return;
     s.busy=true;dialog.querySelectorAll('button,input,select,textarea').forEach(control=>{control.dataset.acWasDisabled=String(control.disabled);control.disabled=true;});
-    try {const result=await requestJson(`/api/browser/admin/${s.kind}/approved-correction`,{auth:true,method:'POST',body:{...s.pending,confirm:true}});if(!acLive(sequence,dialog))return;s.busy=false;s.dirty=false;acClose(true);await reloadDashboard(result.message||'已核准申請已更正，原審核紀錄保留。');}
+    try {const result=await requestJson(`/api/browser/admin/${s.kind}/approved-correction`,{auth:true,method:'POST',body:{...s.pending,confirm:true,...(s.changeRequest ? {changeRequestId:s.changeRequest.changeRequestId} : {})}});if(!acLive(sequence,dialog))return;s.busy=false;s.dirty=false;acClose(true);if(typeof acrInvalidate==='function')acrInvalidate();await reloadDashboard(result.changeRequest ? '原申請已更正，主管提出的需求已完成。' : result.message||'已核准申請已更正，原審核紀錄保留。');}
     catch(error){if(acLive(sequence,dialog))dialog.querySelector('.ac-message').textContent=error.message;}
     finally{if(acLive(sequence,dialog)){s.busy=false;dialog.querySelectorAll('button,input,select,textarea').forEach(control=>{control.disabled=control.dataset.acWasDisabled==='true';});}}
 }

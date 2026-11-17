@@ -88,6 +88,11 @@ document.addEventListener('change', cotOnFormInput);
 const cotLabels = { waiting_supervisor: '原主管審核中', pending: '待額外複核', approved: '複核通過', rejected: '已駁回', withdrawn: '已撤回', cancelled: '已作廢' };
 const cotWaitingLabel = '待原主管審核（僅查看）';
 const cotBackupLabel = '備援複核（尚未輪到）';
+const cotBackupHelp = '原主管完成後，主複核人若是本人、代辦人、第一關實際核准者，或已不符合原指派資格，才由合格備援接手。主複核人仍合格時，備援只可查看。沒有逾時自動接管。';
+function cotBackupHint(location) {
+    const id = `cot-backup-description-${location}`;
+    return `<span class="cot-backup-hint"><button type="button" class="outline-btn" aria-label="備援複核說明" aria-describedby="${id}" title="${cotEscape(cotBackupHelp)}">說明</button><span id="${id}" role="tooltip">${cotEscape(cotBackupHelp)}</span></span>`;
+}
 function cotReviewProgress(row, options = {}) {
     const review = row?.additionalReview;
     if (!review?.required) return '';
@@ -131,13 +136,13 @@ function cotRenderSettings() {
             <label class="cot-check"><input type="checkbox" name="enabled" ${draft.enabled ? 'checked' : ''}>啟用條件複核</label>
             <div class="cot-settings-grid"><label class="field"><span>生效日期</span><input type="date" name="effectiveDate" value="${cotEscape(draft.effectiveDate)}" ${draft.enabled ? 'required' : ''}></label>
             <div class="cot-reviewer-pair"><label class="field"><span>主複核人</span><select name="primaryReviewer" ${draft.enabled ? 'required' : ''}>${options(draft.reviewerIds[0], draft.reviewerIds[1])}</select></label>
-            <label class="field"><span>備援複核人</span><select name="backupReviewer">${options(draft.reviewerIds[1], draft.reviewerIds[0])}</select></label></div></div>
+            <div><label class="field"><span>備援複核人</span><select name="backupReviewer" title="${cotEscape(cotBackupHelp)}">${options(draft.reviewerIds[1], draft.reviewerIds[0])}</select></label>${cotBackupHint('settings')}</div></div></div>
             <div><h4>適用假別</h4><div class="cot-type-list">${data.leaveTypes.map(type => `<label class="cot-check"><input type="checkbox" name="leaveTypeIds" value="${cotEscape(type.id)}" ${draft.leaveTypeIds.includes(type.id) ? 'checked' : ''}>${cotEscape(type.name)}</label>`).join('') || '<p>目前沒有可選假別。</p>'}</div></div>
             <label class="field"><span>設定原因</span><textarea name="reason" maxlength="500" required>${cotEscape(draft.reason)}</textarea></label>
             <label class="cot-check"><input type="checkbox" name="confirm" ${draft.confirm ? 'checked' : ''} required>已核對規則、適用假別與複核人</label>
             </fieldset><div class="cot-settings-actions"><button type="submit" class="primary-btn" ${editable ? '' : 'disabled'}>${saving ? '儲存中…' : '儲存條件複核設定'}</button><button type="button" class="outline-btn" data-cot-settings-refresh ${loading || saving ? 'disabled' : ''}>重新載入設定</button></div></form>${data.canEdit ? '' : '<p>目前為唯讀。</p>'}`
             : loading ? '<p role="status">讀取設定中…</p>' : '<div class="cot-settings-actions"><button type="button" class="outline-btn" data-cot-settings-refresh>重新載入設定</button></div>'}
-        ${data ? cotRenderInbox() : ''}</section>`;
+        ${data && !(state.dashboard?.role === 'admin' && state.dashboard.permissions?.admin?.includes('admin.overtime.view')) ? cotRenderInbox() : ''}</section>`;
 }
 function cotPaintSettings() {
     const host = document.getElementById('conditional-overtime-settings');
@@ -208,7 +213,7 @@ function cotRenderInbox() {
     return `<section id="conditional-overtime-inbox" class="cot-inbox"><h3>週六加班待額外複核</h3>${error ? `<p role="alert">${cotEscape(error)}</p>` : ''}
         ${groups ? cotInboxTable(groups.active) : loading ? '<p role="status">讀取複核案件…</p>' : ''}
         ${groups?.waiting.length ? `<h4>${cotWaitingLabel}</h4>${cotInboxTable(groups.waiting, true)}` : ''}
-        ${groups?.backup.length ? `<h4>${cotBackupLabel}</h4>${cotInboxTable(groups.backup, false, true)}` : ''}
+        ${groups?.backup.length ? `<h4>${cotBackupLabel}</h4>${cotBackupHint('inbox')}${cotInboxTable(groups.backup, false, true)}` : ''}
         <button type="button" class="outline-btn" data-cot-inbox-refresh ${loading ? 'disabled' : ''}>重新載入複核案件</button></section>`;
 }
 function cotInboxGroups(records) {
@@ -223,6 +228,7 @@ function cotInboxTable(rows, waiting = false, backup = false) {
     const group = backup ? 'backup' : waiting ? 'waiting' : 'active';
     const page = Math.min((backup ? cotInbox.backupPage : waiting ? cotInbox.waitingPage : cotInbox.page) || 1, pages);
     const label = backup ? cotBackupLabel : waiting ? cotWaitingLabel : '待額外複核';
+    const admin = state.dashboard?.role === 'admin';
     const offset = (page - 1) * cotPageSize;
     const items = rows.slice(offset, offset + cotPageSize).map(row => {
         const review = row.additionalReview || {};
@@ -231,13 +237,14 @@ function cotInboxTable(rows, waiting = false, backup = false) {
         const people = current.map(id => review.reviewers?.find(person => person.id === id) || id);
         return `<tr><td><strong>${cotEscape(row.employeeName || '姓名未記錄')}</strong><small>${cotEscape(row.employeeId)}</small></td>
             <td>${cotEscape(row.startText)}<small>至 ${cotEscape(row.endText)} · ${cotEscape(row.duration_hours)} 小時</small></td>
+            ${admin ? `<td class="cot-reason">${cotEscape(row.reason || '—')}</td>` : ''}
             <td>${cotEscape(saturdays.join('、') || '—')}</td>
             <td>${cotEscape(cotPeople(people) || '待管理者指派')}</td>
             <td>${cotEscape(backup || waiting ? label : cotLabels[review.status] || row.statusText || '待額外複核')}${review.reconciliationRequired ? '<small class="cot-warning">原已核准，待補複核</small>' : ''}</td>
             <td><button type="button" class="outline-btn" data-cot-open="${cotEscape(row.id)}">${waiting ? '查看詳情' : review.canReview ? '辦理複核' : '查看複核'}</button></td></tr>`;
     }).join('');
     return `<div class="cot-table-scroll" role="region" aria-label="${label}清單" tabindex="0"><table class="cot-table">
-        <thead><tr><th scope="col">員工</th><th scope="col">起訖／時數</th><th scope="col">觸發週六</th><th scope="col">目前複核人</th><th scope="col">狀態</th><th scope="col">操作</th></tr></thead>
+        <thead><tr><th scope="col">員工</th><th scope="col">起訖／時數</th>${admin ? '<th scope="col">加班事由</th>' : ''}<th scope="col">觸發週六</th><th scope="col">目前複核人</th><th scope="col">狀態</th><th scope="col">操作</th></tr></thead>
         <tbody>${items}</tbody></table></div>
         <nav class="cot-pagination" aria-label="${label}分頁"><button type="button" class="outline-btn" data-cot-page="${page - 1}" data-cot-queue="${group}" ${page <= 1 ? 'disabled' : ''}>上一頁</button>
             <span>第 ${page}／${pages} 頁 · 共 ${rows.length} 筆</span><button type="button" class="outline-btn" data-cot-page="${page + 1}" data-cot-queue="${group}" ${page >= pages ? 'disabled' : ''}>下一頁</button></nav>`;
@@ -309,7 +316,7 @@ async function cotOpenReview(requestId) {
             ${row.reviewPolicy ? `<h4>原主管審核</h4>${cotPreviousProgress(row)}` : row.supervisorDecisionText ? `<p>原主管審核：${cotEscape(row.supervisorDecisionText)} ${cotEscape(row.supervisorName)}</p>` : ''}
             <p>${cotEscape(review.status === 'waiting_supervisor' ? cotWaitingLabel : cotLabels[review.status] || '')}</p>${cotEvidence(review.evidence)}<h4>複核歷程</h4>${cotHistory(result.history)}
             ${canReview ? `<form data-cot-decision class="stack-form"><h4>送出複核決定</h4><label class="field"><span>決定</span><select name="decision" required><option value="">請選擇</option><option value="approved">通過</option><option value="rejected">駁回</option></select></label>${common('複核意見（必填）', true)}<button type="submit" class="primary-btn">送出複核決定</button></form>` : ''}
-            ${canReassign ? `<form data-cot-reassign class="stack-form"><h4>改派複核人</h4><div class="cot-reviewer-pair">${picker('primary', '主複核人', review.reviewerIds?.[0])}${picker('backup', '備援複核人', review.reviewerIds?.[1])}</div>${common('改派原因', true)}<button type="submit" class="primary-btn">確認改派</button></form>` : ''}`;
+            ${canReassign ? `<form data-cot-reassign class="stack-form"><h4>改派複核人</h4><div class="cot-reviewer-pair">${picker('primary', '主複核人', review.reviewerIds?.[0])}<div>${picker('backup', '備援複核人', review.reviewerIds?.[1])}${cotBackupHint('reassign')}</div></div>${common('改派原因', true)}<button type="submit" class="primary-btn">確認改派</button></form>` : ''}`;
         dialog.addEventListener('submit', async event => {
             event.preventDefault();
             if (busy || !live() || !event.target.reportValidity()) return;

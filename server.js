@@ -12,7 +12,7 @@ const { createBrowserAccounts, RESET_PERMISSION, REVEAL_PERMISSION } = require('
 const { attachMealRoutes } = require('./meal-routes');
 const { attachRequestCalendarRoutes, monthRange: leaveAuditMonthRange } = require('./request-calendar');
 const { attachSupervisorRoutes } = require('./supervisor-routes');
-const { isSupervisorSimulation } = require('./supervisor-management');
+const { isSupervisorSimulation, requirePersonalSupervisor } = require('./supervisor-management');
 const { punchHistoryWindow } = require('./employee-browser-settings');
 const { attachEmployeeAttendanceRoutes } = require('./employee-attendance');
 const { classifyAttendanceReport, DETAIL_CATEGORIES, DAY_MS: REPORT_DAY_MS } = require('./attendance-report');
@@ -2374,6 +2374,8 @@ function getAdminLeaveState(employees = dbModule.loadEmployees(), options = {}) 
     requestsPage,
     pendingAdmin,
     pendingAdminTotalCount,
+    pendingChangeTotalCount: canReview ? dbModule.getApprovedChanges().pendingCount('leave') : 0,
+    approvedTotalCount: canReview ? dbModule.countLeaveRequests({ status:'approved' }) : 0,
     alerts: audit?.records || [],
     audit
   };
@@ -2937,6 +2939,8 @@ function getAdminOvertimeState(employees = dbModule.loadEmployees(), options = {
     monthTotalCount,
     pendingSupervisor,
     pendingSupervisorTotalCount,
+    pendingChangeTotalCount: canView ? dbModule.getApprovedChanges().pendingCount('overtime') : 0,
+    approvedTotalCount: canView ? dbModule.countOvertimeRequests({ status:'approved' }) : 0,
     pendingAdditionalTotalCount: canView ? dbModule.countOvertimeRequests({ status: 'pending_additional' }) : 0,
     pendingAdditionalRequests: canView ? dbModule.queryOvertimeRequests({ status: 'pending_additional', limit: 50 }).map(row => formatOvertimeRequestForDashboard(row, lookup)) : []
   };
@@ -3420,7 +3424,10 @@ function buildEmployeeDashboard(employee, session = null) {
     leave,
     overtime,
     supervisorReview: { count: reviewCount, leaveCount: leave.supervisorQueueCount, overtimeCount: overtime.supervisorQueueCount,
-      canUse: reviewCount > 0 || overtime.additionalWaitingCount > 0 || overtime.additionalBackupCount > 0 || dbModule.getReviewSupervisors().rows().some((row) => row.supervisor_id === employee.id) || dbModule.getConditionalOvertimeReview().state().reviewerIds.includes(employee.id) },
+      canUse: reviewCount > 0 || overtime.additionalWaitingCount > 0 || overtime.additionalBackupCount > 0 ||
+        dbModule.getReviewSupervisors().rows().some((row) => row.supervisor_id === employee.id) ||
+        dbModule.getConditionalOvertimeReview().state().reviewerIds.includes(employee.id) ||
+        dbModule.getApprovedChanges().canEnterReview(employee.id) },
     meals: dbModule.getMeals().calendar({ employeeId: employee.id }),
     supervisorProxy: { count: dbModule.getSupervisors().assignedEmployees(employee.id).length,
       canView: dbModule.getSupervisors().assignedEmployees(employee.id).length > 0 && (isSupervisorSimulation(session) ||
@@ -8154,6 +8161,72 @@ function createServerApp() {
     notify: (request) => { notifyDesktop('dashboardMetrics', getBrowserSyncMeta(request)); notifyDesktop('auditLogs', getBrowserSyncMeta(request)); },
     formatRecord: (kind, row) => kind === 'leave' ? formatLeaveRequestForDashboard(row) : formatOvertimeRequestForDashboard(row)
   });
+  const changeStore = () => dbModule.getApprovedChanges();
+  const employeeChangesPath = '/api/browser/employee/supervisor/approved-changes';
+  const adminChangesPath = '/api/browser/admin/approved-changes';
+  const changeView = (session, kind) => ['leave','overtime'].includes(kind) &&
+    hasAdminPermission(session, kind === 'leave' ? 'admin.leave.review' : 'admin.overtime.view');
+  const changeManage = (session, kind, action) => !session.impersonation?.active && changeView(session,kind) &&
+    hasAdminPermission(session,`admin.${kind}.${action === 'correction' ? 'approvedCorrect' : 'approvedVoid'}`);
+  const changeFilters = ({ kind, status, query, page }) => ({ kind, status, query, page:Number(page || 1) });
+  const changeFormat = (kind, record) => kind === 'leave' ? formatLeaveRequestForDashboard(record) : formatOvertimeRequestForDashboard(record);
+  const changeAudit = request => entry => buildBrowserAuditLogEntry(request, entry);
+  const notifyChanges = request => {
+    notifyDesktop('approvedChangeRequests', getBrowserSyncMeta(request));
+    notifyDesktop('auditLogs', getBrowserSyncMeta(request));
+  };
+  const changeHandler = handler => (request,response) => {
+    try { response.json({ success:true, ...handler(request) }); }
+    catch (error) {
+      const status = error.statusCode || error.status;
+      response.status(status || 500).json({ success:false, error:status ? error.message : '無法處理已核准申請的異動需求。' });
+    }
+  };
+  const changeBody = (body, keys) => {
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !keys.includes(key))) {
+      throw createHttpError('異動需求資料格式不正確。',400);
+    }
+    return body;
+  };
+  server.get(employeeChangesPath, requireBrowserSession, requireBrowserRole('employee'), changeHandler(request => {
+    const session = request.browserSession;
+    if (!isSupervisorSimulation(session)) {
+      requirePersonalSupervisor(session);
+      validateBoundEmployeeDevice(session);
+    }
+    const { kind, requestId, id } = request.query;
+    if (id !== undefined) return { changeRequest:changeStore().ownDetail(id,session.employeeId,kind) };
+    if (requestId !== undefined) {
+      const value = changeStore().preview(kind,requestId,session.employeeId);
+      return { changeRequest:{ ...value, record:changeFormat(kind,value.record), canRequest:value.canRequest && !session.impersonation?.active } };
+    }
+    return changeStore().listOwn(session.employeeId,changeFilters(request.query));
+  }));
+  server.post(employeeChangesPath, requireBrowserSession, requireBrowserRole('employee'), changeHandler(request => {
+    const session = request.browserSession;
+    requirePersonalSupervisor(session);
+    validateBoundEmployeeDevice(session);
+    const body = changeBody(request.body,['kind','requestId','action','revision','reason','proposal','confirm']);
+    const value = changeStore().submit(body,session.employeeId,changeAudit(request));
+    notifyChanges(request);
+    return { changeRequest:value };
+  }));
+  server.get(adminChangesPath, requireBrowserSession, requireBrowserRole('admin'), changeHandler(request => {
+    const session = request.browserSession;
+    const { kind, id } = request.query;
+    const canManage = (itemKind,action) => changeManage(session,itemKind,action);
+    if (id !== undefined) return { changeRequest:changeStore().adminDetail(id,itemKind => changeView(session,itemKind),canManage) };
+    if (!changeView(session,kind)) throw createHttpError('沒有查看這類異動需求的權限。',403);
+    return changeStore().listAdmin(kind,changeFilters(request.query),canManage);
+  }));
+  server.post(adminChangesPath + '/resolve', requireBrowserSession, requireBrowserRole('admin'), changeHandler(request => {
+    const session = request.browserSession;
+    if (session.impersonation?.active) throw createHttpError('身份模擬不能處理異動需求。',403);
+    const body = changeBody(request.body,['id','revision','decision','reason','confirm']);
+    const value = changeStore().resolve(body,session.employeeId,(kind,action) => changeManage(session,kind,action),changeAudit(request));
+    notifyChanges(request);
+    return { changeRequest:value };
+  }));
   for (const kind of ['leave', 'overtime']) {
     const permission = requireAdminPermission(`admin.${kind}.approvedCorrect`);
     const view = requireAdminPermission(kind === 'leave' ? 'admin.leave.review' : 'admin.overtime.view');
@@ -8168,11 +8241,12 @@ function createServerApp() {
       try {
         if (request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能修正已核准申請。', 403);
         const body = request.body || {};
-        const common = ['requestId','revision','correctionReason','confirm','startDate','startTime','endDate','endTime','reason','durationHours'];
+        const common = ['requestId','revision','correctionReason','confirm','startDate','startTime','endDate','endTime','reason','durationHours','changeRequestId'];
         const allowed = new Set([...common, ...(kind === 'leave' ? ['leaveTypeId','dateSelectionMode','dailyHours','leaveSegments'] : ['breakMinutes','confirmLegacyBreak'])]);
         if (Object.keys(body).some(key => !allowed.has(key))) throw createHttpError('包含不可修正的申請欄位。', 400);
         // Validation and mutation share the transaction so overlap and CAS cannot race.
-        const value = dbModule.getSupervisors().transaction(() => {
+        const value = changeStore().complete(body.changeRequestId,kind,body.requestId,'correction',request.browserSession.employeeId,
+          body.correctionReason,changeAudit(request),() => {
           const original = dbModule.getApprovedCorrections().state(kind, body.requestId).record;
           let updates;
           if (body.reason != null && (typeof body.reason !== 'string' || body.reason.length > 5000)) throw createHttpError('申請事由格式不正確。', 400);
@@ -8197,7 +8271,9 @@ function createServerApp() {
         });
         notifyDesktop(kind === 'leave' ? 'leaveRequests' : 'overtimeRequests', getBrowserSyncMeta(request));
         notifyDesktop('auditLogs', getBrowserSyncMeta(request));
-        response.json({success:true,correction:correctionResult(value, request.browserSession)});
+        const { completedChange, ...correction } = value;
+        if (completedChange) notifyDesktop('approvedChangeRequests',getBrowserSyncMeta(request));
+        response.json({success:true,correction:correctionResult(correction, request.browserSession), ...(completedChange ? { changeRequest:completedChange } : {})});
       } catch (error) { response.status(error.statusCode || error.status || 500).json({success:false,error:error.message}); }
     });
   }
@@ -8225,14 +8301,15 @@ function createServerApp() {
       try {
         if (request.browserSession.impersonation?.active) throw createHttpError('身份模擬不能作廢已核准線上' + label + '。', 403);
         const body = request.body;
-        if (!body || Array.isArray(body) || typeof body !== 'object' || Object.keys(body).some(key => !['requestId','revision','reason','confirm'].includes(key))) {
+        if (!body || Array.isArray(body) || typeof body !== 'object' || Object.keys(body).some(key => !['requestId','revision','reason','confirm','changeRequestId'].includes(key))) {
           throw createHttpError('作廢資料格式不正確。', 400);
         }
-        const value = dbModule.getApprovedRequestVoids().voidRequest(kind, body, request.browserSession.employeeId,
-          entry => buildBrowserAuditLogEntry(request, entry));
+        const value = changeStore().complete(body.changeRequestId,kind,body.requestId,'void',request.browserSession.employeeId,body.reason,
+          changeAudit(request),() => dbModule.getApprovedRequestVoids().voidRequest(kind, body, request.browserSession.employeeId,changeAudit(request)));
         notifyDesktop(kind === 'leave' ? 'leaveRequests' : 'overtimeRequests', getBrowserSyncMeta(request));
         notifyDesktop('auditLogs', getBrowserSyncMeta(request));
-        response.json({ success: true, voiding: voidResult(value, request.browserSession) });
+        if (value.completedChange) notifyDesktop('approvedChangeRequests',getBrowserSyncMeta(request));
+        response.json({ success: true, voiding: voidResult(value, request.browserSession), ...(value.completedChange ? { changeRequest:value.completedChange } : {}) });
       } catch (error) {
         response.status(error.statusCode || 500).json({ success: false, error: error.statusCode ? error.message : '無法完成' + label + '作廢。' });
       }

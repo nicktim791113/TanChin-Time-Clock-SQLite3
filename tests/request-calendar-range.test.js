@@ -8,7 +8,9 @@ const row=(id,start,end)=>({id,employee_id:'E1',applicant_id:'E1',leave_type_id:
 test('date range validates partial, invalid, reversed and role-bypassing bounds; blanks resolve exact Taipei month',()=>{
  const month=monthRange('2026-11'),range=requestDateRange({},month,'admin');assert.equal(range.start,at('2026-11-01T00:00:00'));assert.equal(range.end,at('2026-12-01T00:00:00'));
  for(const values of [{startDate:'2026-11-01'},{endDate:'2026-11-01'},{startDate:'2026-02-30',endDate:'2026-03-01'},{startDate:'2026-11-02',endDate:'2026-11-01'},{startDate:['2026-11-01'],endDate:'2026-11-02'}])assert.throws(()=>requestDateRange(values,month,'admin'));
- assert.throws(()=>requestDateRange({startDate:'2020-01-01',endDate:'2026-11-01'},month,'employee'),/管理者/);
+ const bounds={startDate:'2020-01-01',endDate:'2026-11-01'};
+ assert.throws(()=>requestDateRange(bounds,month,'employee'),/本人紀錄不支援自訂日期區間/);
+ assert.equal(requestDateRange(bounds,month,'employee','review').custom,true);
  const same=requestDateRange({startDate:'2026-11-01',endDate:'2026-11-01'},month,'admin');assert.equal(same.end-same.start,86400000);
 });
 test('list covers the full chosen range, calendar intersects its month, counts remain independent of filters',()=>{

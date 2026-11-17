@@ -142,6 +142,7 @@ $projectFiles = @(
     "leave-usage.js",
     "approved-request-corrections.js",
     "approved-request-voids.js",
+    "approved-change-requests.js",
     "employee-attendance.js",
     "report-summary-order.js",
     "request-reason.js",

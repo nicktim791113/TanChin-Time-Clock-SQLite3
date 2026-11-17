@@ -10138,6 +10138,25 @@ function renderAdminRequestPagination(kind, pageState) {
 }
 // ★ [3] 結束。
 
+function renderAdminRequestSummary(kind, datasets) {
+    const leave = kind === "leave";
+    const data = datasets[kind] || {};
+    const metrics = state.dashboard?.dashboardMetrics?.catalog || [];
+    const metric = key => metrics.find(item => item.key === key && item.available)?.value;
+    const cards = [
+        ["待主管審核", data.pendingSupervisorTotalCount ?? metric(leave ? "leavePendingSupervisor" : "overtimePendingSupervisor"), "全部日期", "records"],
+        leave ? ["待管理部複核", data.pendingAdminTotalCount, "全部日期", "pending"] :
+            ["待額外複核", data.pendingAdditionalTotalCount, "全部日期", "conditional"],
+        ["已核准", data.approvedTotalCount, "全部日期", "records"]
+    ];
+    if (typeof renderApprovedChangeInbox === "function") {
+        cards.push(["待異動處理", data.pendingChangeTotalCount, "全部日期", "changes"]);
+    }
+    return `<div class="admin-request-summary" aria-label="${leave ? "請假" : "加班"}工作摘要">${cards.map(([label, count, scope, target]) =>
+        `<button type="button" class="outline-btn admin-request-summary-card" data-action="switch-workspace-subsection" data-role="admin" data-section="${kind}" data-subsection="${target}"><span>${label}</span>${Number.isSafeInteger(count) ? `<strong>${count} 筆</strong><small>${scope}</small>` : ""}${target === "records" ? '<small>開啟紀錄查詢</small>' : ""}</button>`
+    ).join("")}</div>`;
+}
+
 function renderAdminLeaveSection(datasets) {
     const leave = datasets.leave || {};
     const pageState = getAdminRequestPageState("leave", datasets);
@@ -10150,12 +10169,9 @@ function renderAdminLeaveSection(datasets) {
                         <p class="sub-kicker">管理者工作台</p>
                         <h3>請假管理</h3>
                     </div>
-                    <div class="badge-row">
-                        ${canReview ? renderBadge(`管理部待審 ${leave.pendingAdminTotalCount || 0} 筆`, leave.pendingAdminTotalCount ? "warning" : "success") : ""}
-                        ${canReview ? renderBadge(`查核警示 ${leave.alerts?.length || 0} 筆`, leave.alerts?.length ? "warning" : "success") : ""}
-                        ${canReview ? renderBadge(`全部請假 ${pageState.totalCount} 筆`) : ""}
-                    </div>
+                    <div class="badge-row"></div>
                 </div>
+                ${canReview ? renderAdminRequestSummary("leave", datasets) : ""}
                 <p class="helper-text">請假流程採「員工送出 → 指定主管審核 → 管理部終審」；只有終審核准後才視為生效。</p>
             </article>
 
@@ -11414,15 +11430,11 @@ function renderAdminOvertimeSection(datasets) {
                         <p class="sub-kicker">管理者工作台</p>
                         <h3>加班管理</h3>
                     </div>
-                    <div class="badge-row">
-                        ${canView ? renderBadge(`待主管審核 ${overtime.pendingSupervisorTotalCount || 0} 筆`, overtime.pendingSupervisorTotalCount ? "warning" : "success") : ""}
-                        ${canView ? renderBadge(`待額外複核 ${overtime.pendingAdditionalTotalCount || 0} 筆`, overtime.pendingAdditionalTotalCount ? "warning" : "success") : ""}
-                        ${canView ? renderBadge(`查核警示 ${alerts.length} 筆`, alerts.length ? "warning" : "success") : ""}
-                        ${canView ? `<span class="badge" data-overtime-month-summary>${escapeHtml(adminOvertimeMonthSummary(datasets).label)}</span>` : ""}
-                    </div>
+                    <div class="badge-row"></div>
                 </div>
+                ${canView ? renderAdminRequestSummary("overtime", datasets) : ""}
+                ${canView ? `<span class="badge" data-overtime-month-summary>${escapeHtml(adminOvertimeMonthSummary(datasets).label)}</span>` : ""}
                 <p class="helper-text">加班申請與請假分開保存；查核只做比對與警示，不會直接改動出勤打卡時間。</p>
-                ${canView && overtime.pendingAdditionalTotalCount && typeof cotRenderInbox === 'function' ? cotRenderInbox() : ''}
             </article>
 
             ${renderAdminPaperOvertimeForm(datasets)}
@@ -13030,7 +13042,8 @@ const workspaceSubnavConfigs = {
                             // ★ [5] 子導覽徽章同步顯示全部筆數，不再只顯示目前 50 筆頁面。
                             badge: (datasets) => String(datasets.leave?.requestsPage?.totalCount || 0)
                         },
-                        { id: "usage", label: "請假使用總覽", panelIndex: 7, visible: () => hasCurrentAdminPermission("admin.leave.review") }
+                        { id: "usage", label: "請假使用總覽", panelIndex: 7, visible: () => hasCurrentAdminPermission("admin.leave.review") },
+                        { id: "changes", label: "更正／作廢需求", visible: () => hasCurrentAdminPermission("admin.leave.review") && typeof renderApprovedChangeInbox === "function", render: () => renderApprovedChangeInbox("leave") }
                     ]
                 },
                 {
@@ -13067,7 +13080,9 @@ const workspaceSubnavConfigs = {
                             panelIndex: 3,
                             visible: () => hasCurrentAdminPermission("admin.overtime.view"),
                             badge: (datasets) => String(adminOvertimeMonthSummary(datasets).count)
-                        }
+                        },
+                        { id: "conditional", label: "條件複核", visible: () => hasCurrentAdminPermission("admin.overtime.view") && typeof cotRenderInbox === "function", render: () => cotRenderInbox() },
+                        { id: "changes", label: "更正／作廢需求", visible: () => hasCurrentAdminPermission("admin.overtime.view") && typeof renderApprovedChangeInbox === "function", render: () => renderApprovedChangeInbox("overtime") }
                     ]
                 }
             ]
@@ -13303,7 +13318,7 @@ function prepareWorkspaceSubnavGroups(config, panels, datasets) {
         const items = (group.items || []).filter((item) => (
             typeof item.visible !== "function" || item.visible(datasets || {})
         )).map((item) => {
-            const html = getWorkspaceSubnavItemPanelHtml(panels, item);
+            const html = typeof item.render === "function" ? item.render(datasets || {}) : getWorkspaceSubnavItemPanelHtml(panels, item);
             const preparedItem = {
                 ...item,
                 badgeText: typeof item.badge === "function" ? item.badge(datasets || {}) : item.badge,

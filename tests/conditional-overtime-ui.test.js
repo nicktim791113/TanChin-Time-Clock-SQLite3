@@ -32,6 +32,18 @@ const previewRow = { employeeId: 'E001', required: true, fingerprint: 'observed-
     evidence: [{ weekSaturday: '2026-11-14', leaveDate: '2026-11-11', leaveReason: 'private medical note' }],
     reviewers: [{ id: 'R01', name: '<Review>' }] };
 
+test('management queue displays escaped overtime reason while the employee queue keeps its existing table', () => {
+    const ui = loadUi();
+    ui.context.rows = [{ id: 'OT-1', reason: '<overtime work>', additionalReview: {} }];
+    assert.doesNotMatch(ui.run('cotInboxTable(rows)'), /加班事由|overtime work/);
+    ui.state.dashboard.role = 'admin';
+    const html = ui.run('cotInboxTable(rows)');
+    assert.match(html, /加班事由/);
+    assert.match(html, /&lt;overtime work&gt;/);
+    assert.doesNotMatch(html, /<overtime work>/);
+    assert.match(ui.run("cotBackupHint('settings')"), /沒有逾時自動接管/);
+});
+
 test('proxy and paper form gate require a displayed and acknowledged server preview for the current period and employee set', async () => {
     const ui = loadUi();
     const fixture = formFixture();

@@ -14,6 +14,7 @@ const { createLeaveEntitlementStore } = require('./leave-entitlements');
 const { createAnnualLeaveStore } = require('./annual-leave-store');
 const { createApprovedCorrectionStore } = require('./approved-request-corrections');
 const { createApprovedRequestVoidStore } = require('./approved-request-voids');
+const { createApprovedChangeStore } = require('./approved-change-requests');
 const { createAttendanceCalendarStore } = require('./employee-attendance');
 const { createConditionalOvertimeStore } = require('./overtime-conditional-review');
 const { createReviewWorkflow } = require('./review-workflow');
@@ -34,6 +35,7 @@ let leaveEntitlements = null;
 let annualLeave = null;
 let approvedCorrections = null;
 let approvedRequestVoids = null;
+let approvedChanges = null;
 let attendanceCalendar = null;
 let conditionalOvertimeReview = null;
 let reviewWorkflow = null;
@@ -570,6 +572,11 @@ function init(dbFilePath) {
     corrections: () => approvedCorrections, conditional: () => conditionalOvertimeReview,
     entitlements: () => leaveEntitlements, annual: () => annualLeave, addAuditLog
   });
+  approvedChanges = createApprovedChangeStore(db, {
+    getRecord: (kind, id) => kind === 'leave' ? getLeaveRequestById(id) : getOvertimeRequestById(id),
+    corrections: () => approvedCorrections, voids: () => approvedRequestVoids,
+    supervisors: () => supervisors, reviewSupervisors: () => reviewSupervisors, addAuditLog
+  });
   dashboardMetrics = createDashboardMetricStore(db, (entry) => addAuditLog(entry));
   salaryAdvances = createSalaryAdvanceStore(db, (entry) => addAuditLog(entry));
   deviceRecovery = createDeviceRecoveryStore(db, (entry) => addAuditLog(entry));
@@ -589,6 +596,7 @@ function close() {
   annualLeave = null;
   approvedCorrections = null;
   approvedRequestVoids = null;
+  approvedChanges = null;
   attendanceCalendar = null;
   conditionalOvertimeReview = null;
   reviewWorkflow = null;
@@ -2505,6 +2513,7 @@ module.exports = {
   getAnnualLeave: () => annualLeave,
   getApprovedCorrections: () => approvedCorrections,
   getApprovedRequestVoids: () => approvedRequestVoids,
+  getApprovedChanges: () => approvedChanges,
   getAttendanceCalendar: () => attendanceCalendar,
   getConditionalOvertimeReview: () => conditionalOvertimeReview,
   queryEmployeeAttendancePunches: (employeeId, startAt, endAt) => all(

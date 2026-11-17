@@ -99,7 +99,7 @@ test('calendar browser endpoints retain complete history, permission scopes, fil
             applicant_id: i === 619 ? 'E001' : 'A001', applicant_role: 'employee', supervisor_id: 'A001',
             start_at: at('2026-10-01T08:00:00'), end_at: at('2026-10-01T17:00:00'), duration_hours: 7.5,
             status: i < 600 ? 'approved' : 'pending_supervisor', reason: `reason ${i}`,
-            approval_mode: 'online', created_at: i + 1, updated_at: i + 1
+            approval_mode: i === 0 ? (kind === 'leave' ? 'employee_request' : 'self_request') : 'online', created_at: i + 1, updated_at: i + 1
         });
         create({ id: `${kind}-cross`, employee_id: 'E001', leave_type_id: 'annual', applicant_id: 'E001', supervisor_id: 'A001',
             start_at: at('2026-09-30T22:00:00'), end_at: at('2026-10-02T00:00:00'), duration_hours: 8, status: 'approved', created_at: 0 });
@@ -119,6 +119,7 @@ test('calendar browser endpoints retain complete history, permission scopes, fil
     const delegated = await request('/workspace', delegatedAccount.token, { role: 'admin' });
     const supervisor = await request('/login', null, { employeeId: 'A001', secret: 'manager-card', role: 'account', deviceInfo: { deviceId: 'supervisor-calendar' } });
     const snapshot = () => crypto.createHash('sha256').update(JSON.stringify(['leave_requests', 'overtime_requests', 'leave_approval_steps', 'overtime_approval_steps', 'audit_logs'].map((table) => inspection.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()))).digest('hex');
+    inspection.prepare('INSERT INTO supervisor_assignments (employee_id, supervisor_id, updated_at, updated_by) VALUES (?, ?, ?, ?)').run('E001', 'A001', 1, 'A001');
     const before = snapshot();
     await t.test('summary includes over 500 records; detail pagination covers each id exactly once', async () => {
         for (const kind of ['leave', 'overtime']) {
@@ -182,7 +183,8 @@ test('calendar browser endpoints retain complete history, permission scopes, fil
         for (const unchanged of ['/admin/overtime/calendar?month=2026-10&date=2026-10-01', '/admin/leave/calendar?month=2026-10']) {
             assert.equal((await request(unchanged, manager.token)).calendar.detail.pageSize, 15);
         }
-        for (const suffix of ['', '&scope=review']) assert.equal((await request('/employee/overtime/calendar?month=2026-10' + suffix, employee.token)).calendar.detail.pageSize, 50);
+        assert.equal((await request('/employee/overtime/calendar?month=2026-10', employee.token)).calendar.detail.pageSize, 50);
+        assert.equal((await request('/employee/overtime/calendar?month=2026-10&scope=review', supervisor.token)).calendar.detail.pageSize, 15);
     });
     await t.test('custom admin range includes next month, retains unfiltered month badge and rejects incomplete bounds over HTTP', async () => {
         for (const kind of ['leave','overtime']) {
@@ -231,6 +233,18 @@ test('calendar browser endpoints retain complete history, permission scopes, fil
             assert.ok(review.calendar.events.every((row) => row.status === 'pending_supervisor' && row.calendarActions.review === 'supervisor'));
             assert.equal((await request(`/employee/${kind}/calendar?month=2026-10&scope=review&requestId=${kind}-0000`, supervisor.token)).status, 404);
             assert.equal((await request(`/employee/${kind}/calendar?month=2026-10&scope=review&requestId=${kind}-0600`, supervisor.token)).calendar.request.calendarActions.review, 'supervisor');
+            const route = `/employee/${kind}/calendar?month=2026-10`;
+            const all = (await request(route + '&scope=review&allDates=1&page=2', supervisor.token)).calendar;
+            assert.deepEqual(all.range, { allDates: true });
+            assert.equal(all.detail.totalCount, 19);
+            assert.equal(all.detail.pageSize, 15);
+            assert.equal(all.detail.records.length, 4);
+            assert.equal(all.events.length, 0);
+            assert.equal((await request(route + '&allDates=1', employee.token)).status, 400);
+            assert.equal((await request(route + '&scope=review&allDates=1&date=2026-10-01', supervisor.token)).status, 400);
+            const approved = (await request(route + `&scope=review&status=approved&startDate=2026-09-30&endDate=2026-10-05&requestId=${kind}-0000`, supervisor.token)).calendar.request;
+            assert.deepEqual(approved.calendarActions, { review: '', withdraw: false, changeRequest: true });
+            assert.equal((await request(route + `&scope=review&status=approved&requestId=${kind}-0000`, employee.token)).status, 404);
         }
     });
     await t.test('role and fine-grained permissions are enforced on every read', async () => {
@@ -353,8 +367,9 @@ test('month events retain exact leave segments and overnight overtime; full deta
 test('calendar action rendering retains paper permissions, escapes text and rejects stale asynchronous results', async () => {
     const state = { dashboard: { role: 'admin' } };
     let permitted = false;
+    const listeners = {};
     const context = vm.createContext({ state, Date, Map, URLSearchParams, escapeHtml: (text) => String(text).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
-        hasCurrentAdminPermission: () => permitted, document: { addEventListener() {} }, renderDashboard() {},
+        hasCurrentAdminPermission: () => permitted, document: { addEventListener(type, listener) { listeners[type] = listener; } }, renderDashboard() {},
         renderEmployeeLeaveRecordsPanel() {}, renderEmployeeOvertimeRecordsPanel() {}, renderEmployeeWorkspaceItems() { return []; }, getWorkspaceSubnavItemPanelHtml() {}, getAdminPaperRequest() {},
         postRenderSetup() {}, handleDashboardClick() {}, handleRealtimeSyncMessage() {}, handleLogout() {},
         workspaceSubnavConfigs: { admin: { leave: { groups: [{ items: [{ id: 'records' }] }] }, overtime: { groups: [{ items: [{ id: 'records' }] }] } } }
@@ -392,6 +407,72 @@ test('calendar action rendering retains paper permissions, escapes text and reje
     state.dashboard.role = 'employee'; row.calendarActions = { withdraw: true };
     assert.match(vm.runInContext("rcActions('leave', row)", context), /leave-withdraw/);
     context.document.getElementById = () => null;
+    state.employeeWorkspacePanel = 'supervisor-review';
+    context.renderApprovedChangeRequestAction = () => '<button type="button">提出異動需求</button>';
+    context.approved = { ...row, id:'approved-online', status:'approved', calendarActions:{ changeRequest:true } };
+    Object.assign(row, { status:'pending_supervisor', calendarActions:{ review:'supervisor' } });
+    const compact = vm.runInContext("rcEntries('leave', { records: [row, approved] })", context);
+    assert.equal((compact.match(/class="rc-request-row rc-review-row"/g) || []).length, 2);
+    assert.equal((compact.match(/class="review-comment-input"/g) || []).length, 1);
+    assert.equal((compact.match(/data-action="leave-supervisor-decision"/g) || []).length, 2);
+    assert.equal((compact.match(/提出異動需求/g) || []).length, 1);
+    assert.match(compact, /<th scope="col">請假事由<\/th>/);
+    assert.match(compact, /class="rc-review-reason">&lt;script&gt;bad&lt;\/script&gt;/);
+    assert.match(compact, /class="rc-reason">&lt;script&gt;bad&lt;\/script&gt;/);
+    assert.match(compact, /review-action-stack"><input[^>]+aria-label="審核備註"/);
+    const overtimeCompact = vm.runInContext("rcEntries('overtime', { records: [row] })", context);
+    assert.match(overtimeCompact, /<th scope="col">加班事由<\/th>/);
+    assert.doesNotMatch(overtimeCompact, /<th scope="col">類別<\/th>/);
+    assert.match(compact, /aria-controls="rc-leave-expanded-0" aria-expanded="false"/);
+    assert.match(compact, /id="rc-leave-expanded-0" class="rc-expanded-row" hidden/);
+    assert.ok(!vm.runInContext("rcRender('leave')", context).includes('待我審核（全部日期）'));
+    let expansions = 0;
+    const reviewRow = { querySelector: () => ({ click() { expansions += 1; } }) };
+    const rowClick = interactive => ({ target: { closest(selector) { return selector === '.rc-review-row' ? reviewRow : selector.startsWith('button,') && interactive ? {} : null; } } });
+    context.event = rowClick(true);
+    await vm.runInContext('handleDashboardClick(event)', context);
+    assert.equal(expansions, 0);
+    context.event = rowClick(false);
+    await vm.runInContext('handleDashboardClick(event)', context);
+    assert.equal(expansions, 1);
+    const loadedKinds = [];
+    context.renderApprovedChangeInbox = kind => `inbox-${kind}`;
+    context.acrLoad = kind => loadedKinds.push(kind);
+    const reviewWorkspace = vm.runInContext("renderEmployeeWorkspaceItems({supervisorReview:{canUse:true}})[0].html", context);
+    assert.match(reviewWorkspace, /<details[^>]*data-rc-change-requests="leave"><summary>我提出的更正／作廢需求/);
+    assert.doesNotMatch(reviewWorkspace, /inbox-leave/);
+    const host = { innerHTML:'', replaceChildren() { this.innerHTML = ''; } };
+    const section = { dataset:{rcChangeRequests:'leave'}, isConnected:true, open:true, querySelector:() => host };
+    listeners.toggle({ target:section });
+    assert.equal(host.innerHTML, 'inbox-leave');
+    assert.deepEqual(loadedKinds, ['leave']);
+    section.open = false; listeners.toggle({ target:section });
+    assert.equal(host.innerHTML, '');
+    const rangeQuery = [];
+    context.requestJson = async route => {
+        rangeQuery.push(new URL(route, 'http://calendar.test').searchParams);
+        return { calendar:{ detail:{ page:1, records:[] } } };
+    };
+    const editRange = (field, value) => listeners.input({ target: {
+        matches: selector => selector === '[data-rc-range]', dataset:{ kind:'leave', rcRange:field }, value
+    } });
+    const applyRange = async () => {
+        context.event = { preventDefault() {}, target: { closest: selector => selector === '[data-action]' ?
+            { dataset:{ action:'rc-apply-range', kind:'leave' } } : null } };
+        await vm.runInContext('handleDashboardClick(event)', context);
+    };
+    editRange('startDate', '2026-10-01');
+    editRange('endDate', '2026-11-15');
+    await applyRange();
+    assert.equal(rangeQuery.length, 1);
+    assert.equal(rangeQuery[0].get('scope'), 'review');
+    assert.equal(rangeQuery[0].get('startDate'), '2026-10-01');
+    assert.equal(rangeQuery[0].get('endDate'), '2026-11-15');
+    state.employeeWorkspacePanel = 'leave-history';
+    editRange('startDate', '2020-01-01');
+    await applyRange();
+    assert.equal(rangeQuery.length, 1);
+    assert.equal(vm.runInContext("rcState('leave').rangeDraft", context), undefined);
     const pending = [];
     context.requestJson = () => new Promise((resolve) => pending.push(resolve));
     state.token = 'initial-token';

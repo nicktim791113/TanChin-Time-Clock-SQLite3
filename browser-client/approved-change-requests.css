@@ -1,0 +1,18 @@
+.acr-inbox { min-width: 0; }
+.acr-heading, .acr-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; justify-content: space-between; }
+.acr-heading h3 { margin: 0; }
+.acr-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin: 14px 0; }
+.acr-filters .field { flex: 1 1 180px; }
+.acr-table-wrap { overflow: auto; }
+.acr-table-wrap table { min-width: 760px; width: 100%; }
+.acr-table-wrap th, .acr-table-wrap td { padding: 10px; text-align: left; vertical-align: top; }
+.acr-reason { white-space: pre-wrap; overflow-wrap: anywhere; }
+.acr-reason small { display: block; margin-top: 5px; }
+.acr-pagination { justify-content: flex-end; margin-top: 12px; }
+.acr-notice { padding: 10px 12px; border-left: 3px solid #a56219; background: #fff8eb; }
+.acr-resolution { border-top: 1px solid #d6e0e8; margin-top: 16px; padding-top: 12px; }
+.acr-resolution form { margin-top: 14px; }
+.acr-dialog details { margin: 12px 0; }
+.acr-dialog summary { cursor: pointer; color: #185a85; }
+.acr-dialog textarea { width: 100%; box-sizing: border-box; }
+@media(max-width:600px) { .acr-filters { display: grid; grid-template-columns: 1fr; } .acr-heading { align-items: start; } .acr-pagination { justify-content: center; } }

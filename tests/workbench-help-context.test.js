@@ -30,12 +30,12 @@ function loadHelp({ role = 'admin', section = 'salaryAdvances', salaryVisible = 
         toolbar: () => toolbar,
         paints: () => paints,
         setDialog: (stage) => { activeStage = stage; },
-        describe({ label, name = '', action, form, linkedForm, submit = false, paperTarget = false, modal = false }) {
+        describe({ label, name = '', action, form, linkedForm, submit = false, paperTarget = false, conditionalRefresh = false, modal = false }) {
             context.helpControl = {
                 name, dataset: action ? { saAction: action } : {},
                 form: linkedForm ? { dataset: { saForm: linkedForm }, querySelector: () => null } : null,
                 getAttribute: (attribute) => attribute === 'aria-label' ? label : null,
-                matches: (selector) => (selector === 'button[type="submit"]' && submit) || (selector === '[data-sa-paper-target]' && paperTarget),
+                matches: (selector) => (selector === 'button[type="submit"]' && submit) || (selector === '[data-sa-paper-target]' && paperTarget) || (selector === '[data-cot-inbox-refresh]' && conditionalRefresh),
                 closest: (selector) => selector === 'form' && form ? { dataset: { saForm: form }, querySelector: () => null } : null,
                 // Help must never inspect the actual request, amount, note or employee identity.
                 get value() { throw new Error('Private form values must not be read'); }
@@ -44,6 +44,16 @@ function loadHelp({ role = 'admin', section = 'salaryAdvances', salaryVisible = 
         }
     };
 }
+
+test('conditional review help explains refresh and when backup reviewers can act', () => {
+    const ui = loadHelp({ section: 'overtime', salaryVisible: false });
+    assert.equal(ui.describe({ label: '重新載入複核案件', conditionalRefresh: true }),
+        '重新取得目前範圍內的複核案件與狀態，不會修改規則或案件。');
+    const rules = ui.run("workbenchHelpTopics['overtime.conditional'][3].join(' ')");
+    assert.match(rules, /申請所屬員工、代辦申請人及第一關實際核准者須迴避/);
+    assert.match(rules, /停用或授權撤銷的人不具資格/);
+    assert.match(rules, /合格備援才接手，沒有逾時自動接管/);
+});
 
 test('salary-only admin page labels its own management context instead of falling back to employee help', () => {
     const ui = loadHelp();

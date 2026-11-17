@@ -44,6 +44,14 @@
 .cot-progress > .cot-notice { margin-top: .35rem; }
 .cot-first-stage { margin: .25rem 0; max-width: 30ch; white-space: normal; }
 .cot-first-stage small { display: block; }
+.admin-request-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); gap: .4rem; margin-block: .35rem; }
+.admin-request-summary-card { display: grid; gap: .1rem; justify-items: start; text-align: start; padding: .4rem .55rem; white-space: normal; }
+.admin-request-summary-card strong { font-variant-numeric: tabular-nums; }
+.admin-request-summary-card small { color: #445c70; }
+.cot-reason { min-width: 9rem; max-width: 22rem; white-space: normal; overflow-wrap: anywhere; }
+.cot-backup-hint { display: inline-block; max-width: 100%; }
+.cot-backup-hint [role="tooltip"] { display: none; max-width: 36ch; padding: .45rem; color: #20384a; background: #f0f6fb; }
+.cot-backup-hint:hover [role="tooltip"], .cot-backup-hint:focus-within [role="tooltip"] { display: block; }
 .rc-status-pending_additional { color: #895105; }
 .er-workspace .er-status-pending_additional { background: #fff5de; color: #8b6114; }
 @media (max-width: 540px) {

@@ -55,7 +55,7 @@ function avClose() {
     dialog.remove();
 }
 
-async function avOpen(kind, id) {
+async function avOpen(kind, id, changeRequest = null) {
     if (approvedVoidDialog || !avCanRead(kind) || !id) return;
     const { label } = approvedVoidKinds[kind];
     const path = `/api/browser/admin/${kind}/approved-void`;
@@ -83,6 +83,12 @@ async function avOpen(kind, id) {
             content.innerHTML = avRender(kind, current.data);
             const textarea = content.querySelector('textarea');
             if (textarea && reason) textarea.value = reason;
+            if (changeRequest) {
+                const notice = document.createElement('section'); notice.className = 'acr-notice';
+                notice.innerHTML = `<strong>依主管需求辦理作廢</strong><p>提出原因：${avEscape(changeRequest.reason)}</p><p>請核對原單及影響；作廢成功後，同時完成這筆需求。</p>`;
+                content.prepend(notice);
+                if (textarea && !reason) textarea.value = String(changeRequest.reason || '').slice(0,500);
+            }
         } catch (error) {
             if (live()) {
                 if (!current.data) content.textContent = '';
@@ -106,12 +112,14 @@ async function avOpen(kind, id) {
         submit.disabled = true;
         try {
             const result = await requestJson(path, { auth: true, method: 'POST', body: {
-                requestId: id, revision: current.data.revision, reason, confirm: true
+                requestId: id, revision: current.data.revision, reason, confirm: true,
+                ...(changeRequest ? { changeRequestId: changeRequest.changeRequestId } : {})
             } });
             if (!live()) return;
             current.data = result.voiding;
             content.innerHTML = avRender(kind, current.data);
             message.textContent = '已作廢，原紀錄保留。';
+            if (typeof acrInvalidate === 'function') acrInvalidate();
             await reloadDashboard(`已作廢線上${label}，原紀錄保留。`, 'success', { resetRequestKinds: [kind] });
         } catch (error) {
             if (live()) {

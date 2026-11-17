@@ -21,10 +21,10 @@ function monthRange(month = taipeiDate().slice(0, 7)) {
     return { month, start, end, dates: Array.from({ length: (end - start) / DAY_MS }, (_, i) => taipeiDate(start + i * DAY_MS)) };
 }
 
-function requestDateRange(input, month, role) {
+function requestDateRange(input, month, role, scope = 'mine') {
     const hasStart = input.startDate != null && input.startDate !== '', hasEnd = input.endDate != null && input.endDate !== '';
     if (!hasStart && !hasEnd) return { start: month.start, end: month.end, startDate: month.dates[0], endDate: month.dates.at(-1), custom: false };
-    if (role !== 'admin') throw invalid('自訂日期區間僅提供管理者查詢。');
+    if (role !== 'admin' && scope !== 'review') throw invalid('本人紀錄不支援自訂日期區間。');
     if (!hasStart || !hasEnd) throw invalid('自訂區間請同時填寫開始日期與結束日期；兩欄留空則查顯示月份。');
     const parse = (value) => {
         if (typeof value !== 'string' || !/^(20\d{2}|2100)-\d{2}-\d{2}$/.test(value)) throw invalid('請填寫有效日期（2000 至 2100 年）。');
@@ -90,12 +90,17 @@ function attachRequestCalendarRoutes(server, context) {
                     try {
                         const input = request.query;
                         const range = monthRange(input.month);
-                        const selectedRange = requestDateRange(input, range, role);
                         const scope = input.scope || 'mine';
                         if (!['mine', 'review'].includes(scope)) throw invalid('無效的紀錄範圍。');
+                        const supervisorReview = role === 'employee' && scope === 'review';
+                        const selectedRange = requestDateRange(input, range, role, scope);
+                        if (input.allDates != null && (!supervisorReview || input.allDates !== '1' || selectedRange.custom || input.date)) throw invalid('全部日期僅提供主管審核列表使用。');
+                        const allDates = input.allDates === '1';
+                        const effectiveRange = allDates ? { start: -Infinity, end: Infinity } : selectedRange;
                         const historyWindow = role === 'employee' && scope === 'mine' ? db.getRequestHistory().window(kind) : null;
                         if (historyWindow?.earliestMonth && range.month < historyWindow.earliestMonth) throw Object.assign(new Error(`本人${kind === 'leave' ? '請假' : '加班'}紀錄最早可查看 ${historyWindow.earliestMonth}；更早紀錄請洽有查詢權限的管理者。`), { status: 403 });
-                        if (input.status && (typeof input.status !== 'string' || !Object.hasOwn(STATUS_LABELS, input.status))) throw invalid('無效的申請狀態。');
+                        if (input.status && (typeof input.status !== 'string' || (!Object.hasOwn(STATUS_LABELS, input.status) && !(supervisorReview && input.status === 'all')))) throw invalid('無效的申請狀態。');
+                        const status = input.status === 'all' ? '' : input.status || (supervisorReview ? 'pending_supervisor' : '');
                         if (kind === 'overtime' && input.status === 'pending_admin') throw invalid('無效的加班狀態。');
                         if (kind === 'leave' && input.status === 'pending_additional') throw invalid('無效的請假狀態。');
                         const relation = input.relation || 'all';
@@ -104,43 +109,53 @@ function attachRequestCalendarRoutes(server, context) {
                         if (input.date && !range.dates.includes(input.date)) throw invalid('日期必須在選取月份內。');
                         const page = input.page == null ? 1 : Number(input.page);
                         if (!Number.isSafeInteger(page) || page < 1) throw invalid('無效的頁碼。');
-                        const filters = { overlapStartAt: selectedRange.start, overlapEndAt: selectedRange.end - 1, limit: null };
+                        const filters = allDates ? { limit: null } : { overlapStartAt: selectedRange.start, overlapEndAt: selectedRange.end - 1, limit: null };
                         const actorId = request.browserSession.employeeId;
-                        if (role === 'employee') {
-                            if (scope === 'review') {
-                                filters.supervisorId = actorId;
-                                filters.status = 'pending_supervisor';
-                            } else if (kind === 'leave') filters.employeeId = actorId;
+                        if (role === 'employee' && !supervisorReview) {
+                            if (kind === 'leave') filters.employeeId = actorId;
                             else filters.employeeOrApplicantId = actorId;
                         }
                         const lookup = buildLookup(kind);
                         const query = kind === 'leave' ? db.queryLeaveRequests : db.queryOvertimeRequests;
-                        const scopedRows = query(filters).filter((row) => leaveOverlapsRange(row, selectedRange.start, selectedRange.end));
+                        const changes = supervisorReview ? db.getApprovedChanges?.() : null;
+                        let authorized = query;
+                        if (supervisorReview) {
+                            authorized = (rangeFilters) => {
+                                if (status === 'pending_supervisor') return query({ ...rangeFilters, supervisorId: actorId, status });
+                                const pending = status ? null : new Set(query({ ...rangeFilters, supervisorId: actorId, status: 'pending_supervisor' }).map(row => row.id));
+                                return query({ ...rangeFilters, ...(status ? { status } : {}) }).filter(row => row.status === 'pending_supervisor'
+                                    ? pending?.has(row.id) : changes?.hasRelationship(kind, row, actorId));
+                            };
+                        }
+                        const scopedRows = authorized(filters).filter((row) => allDates || leaveOverlapsRange(row, effectiveRange.start, effectiveRange.end));
                         const employeeFor = (row) => lookup.employeeMap.get(row.employee_id) || {};
                         const rows = scopedRows.filter((row) => (
                             (!input.employeeId || row.employee_id === input.employeeId) &&
                             (!input.department || (employeeFor(row).department || '') === input.department) &&
-                            (!input.status || row.status === input.status) &&
+                            (!status || row.status === status) &&
                             (!input.leaveTypeId || (kind === 'leave' && row.leave_type_id === input.leaveTypeId)) &&
                             (relation === 'all' || (relation === 'self' ? row.employee_id === actorId : row.employee_id !== actorId && row.applicant_id === actorId))
                         ));
                         const actionsFor = (row) => ({
-                            review: role === 'employee' && scope === 'review' ? 'supervisor' : role === 'admin' && kind === 'leave' && row.status === 'pending_admin' ? 'admin' : '',
+                            review: supervisorReview && row.status === 'pending_supervisor' && !request.browserSession.impersonation?.active ? 'supervisor' : role === 'admin' && kind === 'leave' && row.status === 'pending_admin' ? 'admin' : '',
                             withdraw: role === 'employee' && scope === 'mine' && (row.employee_id === actorId || (kind === 'overtime' && row.applicant_id === actorId)) &&
                                 (row.status === 'pending_supervisor' || (kind === 'leave' ? row.status === 'pending_admin' : row.status === 'pending_additional'))
                         });
-                        const detailFor = (row) => ({
-                            ...formatRecord(kind, row, lookup), startText: timeText(row.start_at), endText: timeText(row.end_at), calendarActions: actionsFor(row)
-                        });
+                        const detailFor = (row) => {
+                            const actions = actionsFor(row);
+                            if (supervisorReview && row.status === 'approved' && !request.browserSession.impersonation?.active && changes?.canPropose(kind, row, actorId)) actions.changeRequest = true;
+                            return { ...formatRecord(kind, row, lookup), startText: timeText(row.start_at), endText: timeText(row.end_at), calendarActions: actions };
+                        };
                         // Resolve from the same authorized month and filters, never by an
                         // unrestricted ID lookup. The whole request can span other months.
                         const selected = input.requestId == null ? null : rows.find((row) => row.id === input.requestId);
                         if (input.requestId != null && !selected) throw Object.assign(new Error('找不到此範圍內的申請。'), { status: 404 });
-                        const visibleStart = Math.max(range.start, selectedRange.start), visibleEnd = Math.min(range.end, selectedRange.end);
-                        const monthRows = visibleEnd > visibleStart ? rows.filter((row) => leaveOverlapsRange(row, visibleStart, visibleEnd)) : [];
+                        const visibleStart = Math.max(range.start, effectiveRange.start), visibleEnd = Math.min(range.end, effectiveRange.end);
+                        const monthRows = !allDates && visibleEnd > visibleStart ? rows.filter((row) => leaveOverlapsRange(row, visibleStart, visibleEnd)) : [];
                         const calendar = buildCalendar(range.month, monthRows);
                         calendar.days = calendar.days.map((day) => { const at = Date.parse(day.date + 'T00:00:00+08:00'); return at < selectedRange.start || at >= selectedRange.end ? { ...day, totalCount: 0, approvedCount: 0, approvedPeople: 0, pendingCount: 0, otherCount: 0, outsideRange: true } : day; });
                         calendar.range = { startDate: selectedRange.startDate, endDate: selectedRange.endDate, custom: selectedRange.custom };
+                        if (allDates) calendar.range = { allDates: true };
                         calendar.rangeTotalCount = rows.length;
                         calendar.unfilteredMonthCount = role === 'admin' ? (selectedRange.custom ? query({ ...filters, overlapStartAt: range.start, overlapEndAt: range.end - 1, limit: null }).filter((row) => leaveOverlapsRange(row, range.start, range.end)).length : scopedRows.length) : calendar.totalCount;
                         calendar.historyWindow = historyWindow;
@@ -174,7 +189,7 @@ function attachRequestCalendarRoutes(server, context) {
                             const start = Date.parse(`${input.date}T00:00:00+08:00`);
                             detailRows = start < selectedRange.start || start >= selectedRange.end ? [] : rows.filter((row) => leaveOverlapsRange(row, start, start + DAY_MS));
                         }
-                        const pageSize = role === 'admin' ? 15 : PAGE_SIZE;
+                        const pageSize = role === 'admin' || supervisorReview ? 15 : PAGE_SIZE;
                         const totalPages = Math.max(1, Math.ceil(detailRows.length / pageSize));
                         const currentPage = Math.min(page, totalPages);
                         calendar.detail = {
